@@ -8,59 +8,485 @@
 // You should NOT make any changes in this file as it will be overwritten.
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
-import { Route as rootRouteImport } from "./routes/__root"
-import { Route as IndexRouteImport } from "./routes/index"
+import { Route as rootRouteImport } from './routes/__root'
+import { Route as SiteRouteImport } from './routes/_site'
+import { Route as AdminRouteImport } from './routes/_admin'
+import { Route as SiteIndexRouteImport } from './routes/_site/index'
+import { Route as AdminLoginRouteImport } from './routes/admin.login'
+import { Route as SiteSearchRouteImport } from './routes/_site/search'
+import { Route as SiteEventsRouteImport } from './routes/_site/events'
+import { Route as SiteAboutRouteImport } from './routes/_site/about'
+import { Route as AdminAdminIndexRouteImport } from './routes/_admin/admin.index'
+import { Route as SiteTagSlugRouteImport } from './routes/_site/tag.$slug'
+import { Route as SiteSectionSlugRouteImport } from './routes/_site/section.$slug'
+import { Route as SiteAuthorSlugRouteImport } from './routes/_site/author.$slug'
+import { Route as SiteArticleSlugRouteImport } from './routes/_site/article.$slug'
+import { Route as AdminAdminSourcesRouteImport } from './routes/_admin/admin.sources'
+import { Route as AdminAdminQueueRouteImport } from './routes/_admin/admin.queue'
+import { Route as AdminAdminPublishedRouteImport } from './routes/_admin/admin.published'
+import { Route as AdminAdminEventsRouteImport } from './routes/_admin/admin.events'
+import { Route as AdminAdminAgentsRouteImport } from './routes/_admin/admin.agents'
+import { Route as AdminAdminQueueIndexRouteImport } from './routes/_admin/admin.queue.index'
+import { Route as AdminAdminQueueIdRouteImport } from './routes/_admin/admin.queue.$id'
+import { Route as AdminAdminAgentsSlugRouteImport } from './routes/_admin/admin.agents.$slug'
 
-const IndexRoute = IndexRouteImport.update({
-  id: "/",
-  path: "/",
+const SiteRoute = SiteRouteImport.update({
+  id: '/_site',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AdminRoute = AdminRouteImport.update({
+  id: '/_admin',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SiteIndexRoute = SiteIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => SiteRoute,
+} as any)
+const AdminLoginRoute = AdminLoginRouteImport.update({
+  id: '/admin/login',
+  path: '/admin/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SiteSearchRoute = SiteSearchRouteImport.update({
+  id: '/search',
+  path: '/search',
+  getParentRoute: () => SiteRoute,
+} as any)
+const SiteEventsRoute = SiteEventsRouteImport.update({
+  id: '/events',
+  path: '/events',
+  getParentRoute: () => SiteRoute,
+} as any)
+const SiteAboutRoute = SiteAboutRouteImport.update({
+  id: '/about',
+  path: '/about',
+  getParentRoute: () => SiteRoute,
+} as any)
+const AdminAdminIndexRoute = AdminAdminIndexRouteImport.update({
+  id: '/admin/',
+  path: '/admin/',
+  getParentRoute: () => AdminRoute,
+} as any)
+const SiteTagSlugRoute = SiteTagSlugRouteImport.update({
+  id: '/tag/$slug',
+  path: '/tag/$slug',
+  getParentRoute: () => SiteRoute,
+} as any)
+const SiteSectionSlugRoute = SiteSectionSlugRouteImport.update({
+  id: '/section/$slug',
+  path: '/section/$slug',
+  getParentRoute: () => SiteRoute,
+} as any)
+const SiteAuthorSlugRoute = SiteAuthorSlugRouteImport.update({
+  id: '/author/$slug',
+  path: '/author/$slug',
+  getParentRoute: () => SiteRoute,
+} as any)
+const SiteArticleSlugRoute = SiteArticleSlugRouteImport.update({
+  id: '/article/$slug',
+  path: '/article/$slug',
+  getParentRoute: () => SiteRoute,
+} as any)
+const AdminAdminSourcesRoute = AdminAdminSourcesRouteImport.update({
+  id: '/admin/sources',
+  path: '/admin/sources',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminAdminQueueRoute = AdminAdminQueueRouteImport.update({
+  id: '/admin/queue',
+  path: '/admin/queue',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminAdminPublishedRoute = AdminAdminPublishedRouteImport.update({
+  id: '/admin/published',
+  path: '/admin/published',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminAdminEventsRoute = AdminAdminEventsRouteImport.update({
+  id: '/admin/events',
+  path: '/admin/events',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminAdminAgentsRoute = AdminAdminAgentsRouteImport.update({
+  id: '/admin/agents',
+  path: '/admin/agents',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminAdminQueueIndexRoute = AdminAdminQueueIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AdminAdminQueueRoute,
+} as any)
+const AdminAdminQueueIdRoute = AdminAdminQueueIdRouteImport.update({
+  id: '/$id',
+  path: '/$id',
+  getParentRoute: () => AdminAdminQueueRoute,
+} as any)
+const AdminAdminAgentsSlugRoute = AdminAdminAgentsSlugRouteImport.update({
+  id: '/$slug',
+  path: '/$slug',
+  getParentRoute: () => AdminAdminAgentsRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
-  "/": typeof IndexRoute
+  '/': typeof SiteIndexRoute
+  '/about': typeof SiteAboutRoute
+  '/events': typeof SiteEventsRoute
+  '/search': typeof SiteSearchRoute
+  '/admin/login': typeof AdminLoginRoute
+  '/admin/agents': typeof AdminAdminAgentsRouteWithChildren
+  '/admin/events': typeof AdminAdminEventsRoute
+  '/admin/published': typeof AdminAdminPublishedRoute
+  '/admin/queue': typeof AdminAdminQueueRouteWithChildren
+  '/admin/sources': typeof AdminAdminSourcesRoute
+  '/article/$slug': typeof SiteArticleSlugRoute
+  '/author/$slug': typeof SiteAuthorSlugRoute
+  '/section/$slug': typeof SiteSectionSlugRoute
+  '/tag/$slug': typeof SiteTagSlugRoute
+  '/admin/': typeof AdminAdminIndexRoute
+  '/admin/agents/$slug': typeof AdminAdminAgentsSlugRoute
+  '/admin/queue/$id': typeof AdminAdminQueueIdRoute
+  '/admin/queue/': typeof AdminAdminQueueIndexRoute
 }
 export interface FileRoutesByTo {
-  "/": typeof IndexRoute
+  '/': typeof SiteIndexRoute
+  '/about': typeof SiteAboutRoute
+  '/events': typeof SiteEventsRoute
+  '/search': typeof SiteSearchRoute
+  '/admin/login': typeof AdminLoginRoute
+  '/admin/agents': typeof AdminAdminAgentsRouteWithChildren
+  '/admin/events': typeof AdminAdminEventsRoute
+  '/admin/published': typeof AdminAdminPublishedRoute
+  '/admin/sources': typeof AdminAdminSourcesRoute
+  '/article/$slug': typeof SiteArticleSlugRoute
+  '/author/$slug': typeof SiteAuthorSlugRoute
+  '/section/$slug': typeof SiteSectionSlugRoute
+  '/tag/$slug': typeof SiteTagSlugRoute
+  '/admin': typeof AdminAdminIndexRoute
+  '/admin/agents/$slug': typeof AdminAdminAgentsSlugRoute
+  '/admin/queue/$id': typeof AdminAdminQueueIdRoute
+  '/admin/queue': typeof AdminAdminQueueIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
-  "/": typeof IndexRoute
+  '/_admin': typeof AdminRouteWithChildren
+  '/_site': typeof SiteRouteWithChildren
+  '/_site/about': typeof SiteAboutRoute
+  '/_site/events': typeof SiteEventsRoute
+  '/_site/search': typeof SiteSearchRoute
+  '/admin/login': typeof AdminLoginRoute
+  '/_site/': typeof SiteIndexRoute
+  '/_admin/admin/agents': typeof AdminAdminAgentsRouteWithChildren
+  '/_admin/admin/events': typeof AdminAdminEventsRoute
+  '/_admin/admin/published': typeof AdminAdminPublishedRoute
+  '/_admin/admin/queue': typeof AdminAdminQueueRouteWithChildren
+  '/_admin/admin/sources': typeof AdminAdminSourcesRoute
+  '/_site/article/$slug': typeof SiteArticleSlugRoute
+  '/_site/author/$slug': typeof SiteAuthorSlugRoute
+  '/_site/section/$slug': typeof SiteSectionSlugRoute
+  '/_site/tag/$slug': typeof SiteTagSlugRoute
+  '/_admin/admin/': typeof AdminAdminIndexRoute
+  '/_admin/admin/agents/$slug': typeof AdminAdminAgentsSlugRoute
+  '/_admin/admin/queue/$id': typeof AdminAdminQueueIdRoute
+  '/_admin/admin/queue/': typeof AdminAdminQueueIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: "/"
+  fullPaths:
+    | '/'
+    | '/about'
+    | '/events'
+    | '/search'
+    | '/admin/login'
+    | '/admin/agents'
+    | '/admin/events'
+    | '/admin/published'
+    | '/admin/queue'
+    | '/admin/sources'
+    | '/article/$slug'
+    | '/author/$slug'
+    | '/section/$slug'
+    | '/tag/$slug'
+    | '/admin/'
+    | '/admin/agents/$slug'
+    | '/admin/queue/$id'
+    | '/admin/queue/'
   fileRoutesByTo: FileRoutesByTo
-  to: "/"
-  id: "__root__" | "/"
+  to:
+    | '/'
+    | '/about'
+    | '/events'
+    | '/search'
+    | '/admin/login'
+    | '/admin/agents'
+    | '/admin/events'
+    | '/admin/published'
+    | '/admin/sources'
+    | '/article/$slug'
+    | '/author/$slug'
+    | '/section/$slug'
+    | '/tag/$slug'
+    | '/admin'
+    | '/admin/agents/$slug'
+    | '/admin/queue/$id'
+    | '/admin/queue'
+  id:
+    | '__root__'
+    | '/_admin'
+    | '/_site'
+    | '/_site/about'
+    | '/_site/events'
+    | '/_site/search'
+    | '/admin/login'
+    | '/_site/'
+    | '/_admin/admin/agents'
+    | '/_admin/admin/events'
+    | '/_admin/admin/published'
+    | '/_admin/admin/queue'
+    | '/_admin/admin/sources'
+    | '/_site/article/$slug'
+    | '/_site/author/$slug'
+    | '/_site/section/$slug'
+    | '/_site/tag/$slug'
+    | '/_admin/admin/'
+    | '/_admin/admin/agents/$slug'
+    | '/_admin/admin/queue/$id'
+    | '/_admin/admin/queue/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
-  IndexRoute: typeof IndexRoute
+  AdminRoute: typeof AdminRouteWithChildren
+  SiteRoute: typeof SiteRouteWithChildren
+  AdminLoginRoute: typeof AdminLoginRoute
 }
 
-declare module "@tanstack/react-router" {
+declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    "/": {
-      id: "/"
-      path: "/"
-      fullPath: "/"
-      preLoaderRoute: typeof IndexRouteImport
+    '/_site': {
+      id: '/_site'
+      path: ''
+      fullPath: '/'
+      preLoaderRoute: typeof SiteRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_admin': {
+      id: '/_admin'
+      path: ''
+      fullPath: '/'
+      preLoaderRoute: typeof AdminRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/_site/': {
+      id: '/_site/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof SiteIndexRouteImport
+      parentRoute: typeof SiteRoute
+    }
+    '/admin/login': {
+      id: '/admin/login'
+      path: '/admin/login'
+      fullPath: '/admin/login'
+      preLoaderRoute: typeof AdminLoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/_site/search': {
+      id: '/_site/search'
+      path: '/search'
+      fullPath: '/search'
+      preLoaderRoute: typeof SiteSearchRouteImport
+      parentRoute: typeof SiteRoute
+    }
+    '/_site/events': {
+      id: '/_site/events'
+      path: '/events'
+      fullPath: '/events'
+      preLoaderRoute: typeof SiteEventsRouteImport
+      parentRoute: typeof SiteRoute
+    }
+    '/_site/about': {
+      id: '/_site/about'
+      path: '/about'
+      fullPath: '/about'
+      preLoaderRoute: typeof SiteAboutRouteImport
+      parentRoute: typeof SiteRoute
+    }
+    '/_admin/admin/': {
+      id: '/_admin/admin/'
+      path: '/admin'
+      fullPath: '/admin/'
+      preLoaderRoute: typeof AdminAdminIndexRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/_site/tag/$slug': {
+      id: '/_site/tag/$slug'
+      path: '/tag/$slug'
+      fullPath: '/tag/$slug'
+      preLoaderRoute: typeof SiteTagSlugRouteImport
+      parentRoute: typeof SiteRoute
+    }
+    '/_site/section/$slug': {
+      id: '/_site/section/$slug'
+      path: '/section/$slug'
+      fullPath: '/section/$slug'
+      preLoaderRoute: typeof SiteSectionSlugRouteImport
+      parentRoute: typeof SiteRoute
+    }
+    '/_site/author/$slug': {
+      id: '/_site/author/$slug'
+      path: '/author/$slug'
+      fullPath: '/author/$slug'
+      preLoaderRoute: typeof SiteAuthorSlugRouteImport
+      parentRoute: typeof SiteRoute
+    }
+    '/_site/article/$slug': {
+      id: '/_site/article/$slug'
+      path: '/article/$slug'
+      fullPath: '/article/$slug'
+      preLoaderRoute: typeof SiteArticleSlugRouteImport
+      parentRoute: typeof SiteRoute
+    }
+    '/_admin/admin/sources': {
+      id: '/_admin/admin/sources'
+      path: '/admin/sources'
+      fullPath: '/admin/sources'
+      preLoaderRoute: typeof AdminAdminSourcesRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/_admin/admin/queue': {
+      id: '/_admin/admin/queue'
+      path: '/admin/queue'
+      fullPath: '/admin/queue'
+      preLoaderRoute: typeof AdminAdminQueueRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/_admin/admin/published': {
+      id: '/_admin/admin/published'
+      path: '/admin/published'
+      fullPath: '/admin/published'
+      preLoaderRoute: typeof AdminAdminPublishedRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/_admin/admin/events': {
+      id: '/_admin/admin/events'
+      path: '/admin/events'
+      fullPath: '/admin/events'
+      preLoaderRoute: typeof AdminAdminEventsRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/_admin/admin/agents': {
+      id: '/_admin/admin/agents'
+      path: '/admin/agents'
+      fullPath: '/admin/agents'
+      preLoaderRoute: typeof AdminAdminAgentsRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/_admin/admin/queue/': {
+      id: '/_admin/admin/queue/'
+      path: '/'
+      fullPath: '/admin/queue/'
+      preLoaderRoute: typeof AdminAdminQueueIndexRouteImport
+      parentRoute: typeof AdminAdminQueueRoute
+    }
+    '/_admin/admin/queue/$id': {
+      id: '/_admin/admin/queue/$id'
+      path: '/$id'
+      fullPath: '/admin/queue/$id'
+      preLoaderRoute: typeof AdminAdminQueueIdRouteImport
+      parentRoute: typeof AdminAdminQueueRoute
+    }
+    '/_admin/admin/agents/$slug': {
+      id: '/_admin/admin/agents/$slug'
+      path: '/$slug'
+      fullPath: '/admin/agents/$slug'
+      preLoaderRoute: typeof AdminAdminAgentsSlugRouteImport
+      parentRoute: typeof AdminAdminAgentsRoute
     }
   }
 }
 
+interface AdminAdminAgentsRouteChildren {
+  AdminAdminAgentsSlugRoute: typeof AdminAdminAgentsSlugRoute
+}
+
+const AdminAdminAgentsRouteChildren: AdminAdminAgentsRouteChildren = {
+  AdminAdminAgentsSlugRoute: AdminAdminAgentsSlugRoute,
+}
+
+const AdminAdminAgentsRouteWithChildren =
+  AdminAdminAgentsRoute._addFileChildren(AdminAdminAgentsRouteChildren)
+
+interface AdminAdminQueueRouteChildren {
+  AdminAdminQueueIdRoute: typeof AdminAdminQueueIdRoute
+  AdminAdminQueueIndexRoute: typeof AdminAdminQueueIndexRoute
+}
+
+const AdminAdminQueueRouteChildren: AdminAdminQueueRouteChildren = {
+  AdminAdminQueueIdRoute: AdminAdminQueueIdRoute,
+  AdminAdminQueueIndexRoute: AdminAdminQueueIndexRoute,
+}
+
+const AdminAdminQueueRouteWithChildren = AdminAdminQueueRoute._addFileChildren(
+  AdminAdminQueueRouteChildren,
+)
+
+interface AdminRouteChildren {
+  AdminAdminAgentsRoute: typeof AdminAdminAgentsRouteWithChildren
+  AdminAdminEventsRoute: typeof AdminAdminEventsRoute
+  AdminAdminPublishedRoute: typeof AdminAdminPublishedRoute
+  AdminAdminQueueRoute: typeof AdminAdminQueueRouteWithChildren
+  AdminAdminSourcesRoute: typeof AdminAdminSourcesRoute
+  AdminAdminIndexRoute: typeof AdminAdminIndexRoute
+}
+
+const AdminRouteChildren: AdminRouteChildren = {
+  AdminAdminAgentsRoute: AdminAdminAgentsRouteWithChildren,
+  AdminAdminEventsRoute: AdminAdminEventsRoute,
+  AdminAdminPublishedRoute: AdminAdminPublishedRoute,
+  AdminAdminQueueRoute: AdminAdminQueueRouteWithChildren,
+  AdminAdminSourcesRoute: AdminAdminSourcesRoute,
+  AdminAdminIndexRoute: AdminAdminIndexRoute,
+}
+
+const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
+
+interface SiteRouteChildren {
+  SiteAboutRoute: typeof SiteAboutRoute
+  SiteEventsRoute: typeof SiteEventsRoute
+  SiteSearchRoute: typeof SiteSearchRoute
+  SiteIndexRoute: typeof SiteIndexRoute
+  SiteArticleSlugRoute: typeof SiteArticleSlugRoute
+  SiteAuthorSlugRoute: typeof SiteAuthorSlugRoute
+  SiteSectionSlugRoute: typeof SiteSectionSlugRoute
+  SiteTagSlugRoute: typeof SiteTagSlugRoute
+}
+
+const SiteRouteChildren: SiteRouteChildren = {
+  SiteAboutRoute: SiteAboutRoute,
+  SiteEventsRoute: SiteEventsRoute,
+  SiteSearchRoute: SiteSearchRoute,
+  SiteIndexRoute: SiteIndexRoute,
+  SiteArticleSlugRoute: SiteArticleSlugRoute,
+  SiteAuthorSlugRoute: SiteAuthorSlugRoute,
+  SiteSectionSlugRoute: SiteSectionSlugRoute,
+  SiteTagSlugRoute: SiteTagSlugRoute,
+}
+
+const SiteRouteWithChildren = SiteRoute._addFileChildren(SiteRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
-  IndexRoute: IndexRoute,
+  AdminRoute: AdminRouteWithChildren,
+  SiteRoute: SiteRouteWithChildren,
+  AdminLoginRoute: AdminLoginRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
 
-import type { getRouter } from "./router.tsx"
-import type { createStart } from "@tanstack/react-start"
-declare module "@tanstack/react-start" {
+import type { getRouter } from './router.tsx'
+import type { createStart } from '@tanstack/react-start'
+declare module '@tanstack/react-start' {
   interface Register {
     ssr: true
     router: Awaited<ReturnType<typeof getRouter>>

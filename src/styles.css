@@ -1,13 +1,18 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/inter";
+@import "@fontsource-variable/libre-franklin";
+@import "@fontsource-variable/bodoni-moda";
+@import "@fontsource-variable/bodoni-moda/wght-italic.css";
+/* Momo Signature (brand display) is loaded via <link> in src/routes/__root.tsx — Tailwind v4's preflight order makes @import url(...) of external stylesheets unreliable. */
 
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-    --font-heading: var(--font-sans);
-    --font-sans: 'Inter Variable', sans-serif;
+    --font-heading: 'Bodoni Moda Variable', Georgia, 'Times New Roman', serif;
+    --font-editorial: 'Libre Franklin Variable', ui-sans-serif, system-ui, sans-serif;
+    --font-sans: 'Libre Franklin Variable', ui-sans-serif, system-ui, sans-serif;
+    --font-brand: 'Momo Signature', 'Bodoni Moda Variable', Georgia, serif;
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -49,22 +54,22 @@
 }
 
 :root {
-    --background: oklch(1 0 0);
-    --foreground: oklch(0.147 0.004 49.3);
+    --background: oklch(0.99 0.003 80);
+    --foreground: oklch(0.18 0.01 49);
     --card: oklch(1 0 0);
-    --card-foreground: oklch(0.147 0.004 49.3);
+    --card-foreground: oklch(0.18 0.01 49);
     --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.147 0.004 49.3);
+    --popover-foreground: oklch(0.18 0.01 49);
     --primary: oklch(0.214 0.009 43.1);
     --primary-foreground: oklch(0.986 0.002 67.8);
     --secondary: oklch(0.96 0.002 17.2);
     --secondary-foreground: oklch(0.214 0.009 43.1);
     --muted: oklch(0.96 0.002 17.2);
-    --muted-foreground: oklch(0.547 0.021 43.1);
+    --muted-foreground: oklch(0.45 0.02 43);
     --accent: oklch(0.214 0.009 43.1);
     --accent-foreground: oklch(0.986 0.002 67.8);
     --destructive: oklch(0.577 0.245 27.325);
-    --border: oklch(0.922 0.005 34.3);
+    --border: oklch(0.7 0.01 65);
     --input: oklch(0.922 0.005 34.3);
     --ring: oklch(0.714 0.014 41.2);
     --chart-1: oklch(0.868 0.007 39.5);
@@ -72,7 +77,7 @@
     --chart-3: oklch(0.438 0.017 39.3);
     --chart-4: oklch(0.367 0.016 35.7);
     --chart-5: oklch(0.268 0.011 36.5);
-    --radius: 0.875rem;
+    --radius: 0.5rem;
     --sidebar: oklch(0.986 0.002 67.8);
     --sidebar-foreground: oklch(0.147 0.004 49.3);
     --sidebar-primary: oklch(0.214 0.009 43.1);
@@ -84,22 +89,22 @@
 }
 
 .dark {
-    --background: oklch(0.147 0.004 49.3);
-    --foreground: oklch(0.986 0.002 67.8);
-    --card: oklch(0.214 0.009 43.1);
-    --card-foreground: oklch(0.986 0.002 67.8);
-    --popover: oklch(0.214 0.009 43.1);
-    --popover-foreground: oklch(0.986 0.002 67.8);
-    --primary: oklch(0.922 0.005 34.3);
+    --background: oklch(0.16 0.01 60);
+    --foreground: oklch(0.96 0.005 80);
+    --card: oklch(0.2 0.01 50);
+    --card-foreground: oklch(0.96 0.005 80);
+    --popover: oklch(0.2 0.01 50);
+    --popover-foreground: oklch(0.96 0.005 80);
+    --primary: oklch(0.96 0.005 80);
     --primary-foreground: oklch(0.214 0.009 43.1);
-    --secondary: oklch(0.268 0.011 36.5);
-    --secondary-foreground: oklch(0.986 0.002 67.8);
-    --muted: oklch(0.268 0.011 36.5);
-    --muted-foreground: oklch(0.714 0.014 41.2);
-    --accent: oklch(0.922 0.005 34.3);
+    --secondary: oklch(0.27 0.01 50);
+    --secondary-foreground: oklch(0.96 0.005 80);
+    --muted: oklch(0.25 0.01 50);
+    --muted-foreground: oklch(0.7 0.02 50);
+    --accent: oklch(0.96 0.005 80);
     --accent-foreground: oklch(0.214 0.009 43.1);
     --destructive: oklch(0.704 0.191 22.216);
-    --border: oklch(1 0 0 / 10%);
+    --border: oklch(1 0 0 / 28%);
     --input: oklch(1 0 0 / 15%);
     --ring: oklch(0.547 0.021 43.1);
     --chart-1: oklch(0.868 0.007 39.5);
@@ -118,16 +123,138 @@
 }
 
 @layer base {
-  * {
-    @apply border-border outline-ring/50;
+    * {
+        @apply border-border outline-ring/50;
     }
-  body {
-    @apply bg-background text-foreground;
+    body {
+        @apply bg-background text-foreground;
+        font-feature-settings: "ss01", "cv11";
     }
-  button:not(:disabled), [role="button"]:not(:disabled) {
-    cursor: pointer;
+    /* Tiny CSS squircle on every <img>. corner-shape: squircle gives the
+       smoother iOS-style curve where supported (Safari, Chromium ≥ 138);
+       border-radius is the universal fallback. Avatars override with
+       rounded-full so the circle wins. */
+    img {
+        border-radius: 4px;
+        corner-shape: squircle;
+        -webkit-corner-shape: squircle;
     }
-  html {
-    @apply font-sans;
+    button:not(:disabled), [role="button"]:not(:disabled) {
+        cursor: pointer;
+    }
+    html {
+        @apply font-sans;
+    }
+    h1, h2, h3, h4 {
+        @apply font-heading font-semibold tracking-tight;
+    }
+    /* Bodoni Moda Variable defaults to semibold (600) wherever it's used —
+       Tailwind weight utilities (font-bold, font-medium, etc.) still
+       override per-element when needed. */
+    .font-heading {
+        font-weight: 600;
+    }
+
+    /* --- View transitions ------------------------------------------------ */
+    /* TanStack Router wraps SPA navigations in document.startViewTransition
+       when defaultViewTransition is on. Tune the default crossfade. */
+    ::view-transition-old(root),
+    ::view-transition-new(root) {
+        animation-duration: 220ms;
+        animation-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
+    }
+    /* Respect prefers-reduced-motion — disable the transition entirely. */
+    @media (prefers-reduced-motion: reduce) {
+        ::view-transition-old(root),
+        ::view-transition-new(root) {
+            animation: none;
+        }
+    }
+}
+
+/* --- Editorial prose ----------------------------------------------------- */
+@layer components {
+    /* WaPo-style page container: full-bleed on mobile, then capped at
+       628 / 760 / 1024 / 1288 across sm / md / lg / xl breakpoints. Use
+       wherever a max-w-screen-* container was before. */
+    .container-page {
+        @apply mx-auto w-full px-4 sm:max-w-[628px] md:max-w-[760px] lg:max-w-[1024px] xl:max-w-[1288px];
+    }
+
+    .prose-editorial {
+        @apply max-w-[68ch] text-[1.125rem] leading-[1.6] text-foreground;
+        font-family: var(--font-editorial);
+        font-weight: 400;
+        font-feature-settings: "liga", "kern";
+    }
+    .prose-editorial > p {
+        @apply mb-5 text-pretty;
+    }
+    .prose-editorial > p:first-of-type::first-letter {
+        @apply float-left mr-2 mt-1 text-[5rem];
+        font-family: var(--font-heading);
+        color: var(--primary);
+        line-height: 0.78;
+        letter-spacing: -0.04em;
+    }
+    .prose-editorial > h2 {
+        @apply mt-10 mb-3 text-2xl font-semibold;
+        font-family: var(--font-heading);
+    }
+    .prose-editorial > h3 {
+        @apply mt-8 mb-2 text-xl font-semibold;
+        font-family: var(--font-heading);
+    }
+    .prose-editorial > blockquote {
+        @apply my-6 border-l-4 border-foreground pl-5 text-xl italic;
+        font-family: var(--font-heading);
+    }
+    .prose-editorial > ul,
+    .prose-editorial > ol {
+        @apply mb-5 ml-6 list-disc space-y-1.5;
+    }
+    .prose-editorial > ol {
+        @apply list-decimal;
+    }
+    .prose-editorial a {
+        @apply text-primary underline decoration-1 underline-offset-2 hover:decoration-2;
+    }
+    .prose-editorial img {
+        @apply my-6 w-full rounded-md;
+    }
+    .prose-editorial figure {
+        @apply my-6;
+    }
+    .prose-editorial figcaption {
+        @apply mt-2 text-sm text-muted-foreground;
+    }
+    .prose-editorial code {
+        @apply rounded bg-muted px-1.5 py-0.5 font-mono text-sm;
+    }
+    .prose-editorial hr {
+        @apply my-10;
+    }
+
+    /* --- Display headlines (Inter Bold) ----------------------------------- */
+    .display-xs { @apply font-heading text-xl font-semibold leading-tight tracking-[-0.01em] text-balance; }
+    .display-sm { @apply font-heading text-2xl font-semibold leading-tight tracking-[-0.015em] text-balance; }
+    .display-md { @apply font-heading text-3xl font-semibold leading-[1.1] tracking-[-0.02em] text-balance; }
+    .display-lg { @apply font-heading text-4xl font-semibold leading-[1.05] tracking-[-0.025em] md:text-5xl text-balance; }
+    .display-xl { @apply font-heading text-5xl font-semibold leading-[1] tracking-[-0.03em] md:text-6xl text-balance; }
+
+    /* --- Kicker & meta ---------------------------------------------------- */
+    .kicker {
+        @apply font-sans text-[0.7rem] font-bold tracking-[0.12em] uppercase;
+    }
+    .meta {
+        @apply font-sans text-sm text-muted-foreground tabular-nums;
+    }
+
+    /* --- Editorial rule (single, vertical separators between rails) ------- */
+    .rule-top {
+        @apply border-t border-foreground;
+    }
+    .rule-bottom {
+        @apply border-b border-foreground;
     }
 }
