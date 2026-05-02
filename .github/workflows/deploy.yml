@@ -1,0 +1,68 @@
+# Auto-deploy on every push to main:
+#   1. Push Convex schema + functions to prod (joyous-dalmatian-894).
+#   2. Build the TanStack Start bundle with VITE_CONVEX_URL embedded.
+#   3. Ship to Cloudflare Workers via Wrangler.
+#
+# Required repo secrets (Settings → Secrets and variables → Actions):
+#   CONVEX_DEPLOY_KEY     — `npx convex deploy-key --prod` once on your
+#                           machine; copy-paste the key it prints.
+#   CLOUDFLARE_API_TOKEN  — CF Dash → My Profile → API Tokens → Create
+#                           Token → "Edit Cloudflare Workers" template.
+#                           The token needs Account-level Workers Scripts
+#                           Edit + Workers Routes Edit + Account Settings
+#                           Read.
+#   CLOUDFLARE_ACCOUNT_ID — CF Dash → Workers & Pages → on the right side
+#                           your Account ID is displayed.
+#   VITE_CONVEX_URL       — https://joyous-dalmatian-894.convex.cloud
+#
+# Manual trigger: Actions tab → "Deploy" workflow → "Run workflow".
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Push Convex schema + functions to prod
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+        run: npx convex deploy --yes
+
+      - name: Build
+        env:
+          VITE_CONVEX_URL: ${{ secrets.VITE_CONVEX_URL }}
+        run: pnpm build
+
+      - name: Deploy to Cloudflare Workers
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
