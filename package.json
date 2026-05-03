@@ -5,12 +5,29 @@
   "scripts": {
     "dev": "vite dev --port 3000",
     "build": "vite build",
+    "build:prod": "vite build --mode production",
     "preview": "vite preview",
+    "ship": "vite build && wrangler deploy",
     "deploy": "vite build && wrangler deploy",
     "test": "vitest run",
     "lint": "eslint",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx}\"",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+
+    "//---convex--dev---": "scripts targeting the DEV deployment (adjoining-rat-68)",
+    "convex:dev": "convex dev",
+    "convex:env": "convex env list",
+    "convex:logs": "convex logs",
+    "convex:dash": "convex dashboard",
+    "seed": "convex run seed:run",
+
+    "//---convex--prod---": "scripts targeting PROD (joyous-dalmatian-894). All carry --prod.",
+    "convex:env:prod": "convex env list --prod",
+    "convex:logs:prod": "convex logs --prod",
+    "convex:dash:prod": "convex dashboard --prod",
+    "convex:deploy:prod": "convex deploy",
+    "seed:prod": "convex run seed:run --prod",
+    "preview:prod": "VITE_CONVEX_URL=https://joyous-dalmatian-894.convex.cloud vite dev --port 3000"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.36.0",
