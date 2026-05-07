@@ -239,7 +239,7 @@ function buildDraftTool(sectionSlugs: Array<string>) {
             sectionSlug: {
               type: "string",
               description:
-                "Section to file this event under. Pick from the desk's allowed sections (same list as drafts). Default to the desk's primary section if no sub-section fits.",
+                "REQUIRED. Section to file this event under. Pick the most-specific match from the desk's allowed sections (same list as articles). Music event → music. Restaurant opening → food. School-board town hall → education. Use the desk's primary section only when no sub-section fits.",
             },
             citationItemIndices: {
               type: "array",
@@ -267,6 +267,7 @@ function buildDraftTool(sectionSlugs: Array<string>) {
             "allDay",
             "tags",
             "neighborhoodSlugs",
+            "sectionSlug",
             "citationItemIndices",
             "relatedArticleIndices",
           ],
