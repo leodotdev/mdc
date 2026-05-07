@@ -1337,6 +1337,99 @@ export const seedMegaDesk = internalMutation({
   handler: async (ctx) => installMegaDesk(ctx),
 })
 
+// One-shot: drop the legacy "things-to-do" section. Re-sections every
+// article + event filed under it before deletion so we don't orphan
+// FKs. Each row is moved by tag heuristic (first matching section
+// slug in its tags) → falling back to News.
+//
+// Idempotent: returns { sectionMissing: true } when there's nothing
+// to do. Safe to run on dev and prod.
+//
+// Run: `npx convex run seed:dropThingsToDo --prod`
+export const dropThingsToDo = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const ttd = await ctx.db
+      .query("sections")
+      .withIndex("by_slug", (q) => q.eq("slug", "things-to-do"))
+      .unique()
+    if (!ttd) return { sectionMissing: true as const }
+
+    // Build slug → id map for re-section heuristic.
+    const allSections = await ctx.db.query("sections").collect()
+    const idBySlug = new Map<string, Id<"sections">>()
+    for (const s of allSections) idBySlug.set(s.slug, s._id)
+    const news = idBySlug.get("news") ?? allSections[0]?._id
+    if (!news) {
+      throw new Error("No fallback section available — seed sections first")
+    }
+
+    const pickBetterSection = (
+      tags: ReadonlyArray<string>,
+    ): Id<"sections"> => {
+      // First tag that matches a non-things-to-do section slug wins.
+      for (const t of tags) {
+        const id = idBySlug.get(t)
+        if (id && id !== ttd._id) return id
+      }
+      return news
+    }
+
+    let articlesMoved = 0
+    let eventsMoved = 0
+
+    // Move articles.
+    const articles = await ctx.db
+      .query("articles")
+      .withIndex("by_section_status_published", (q) =>
+        q.eq("sectionId", ttd._id),
+      )
+      .collect()
+    for (const a of articles) {
+      const next = pickBetterSection(a.tags)
+      await ctx.db.patch(a._id, { sectionId: next })
+      articlesMoved += 1
+    }
+
+    // Move events.
+    const events = await ctx.db
+      .query("events")
+      .withIndex("by_section_starts", (q) => q.eq("sectionId", ttd._id))
+      .collect()
+    for (const e of events) {
+      const next = pickBetterSection(e.tags ?? [])
+      await ctx.db.patch(e._id, { sectionId: next })
+      eventsMoved += 1
+    }
+
+    // Move any sources that listed it. Sources can have multiple
+    // sectionIds — drop the things-to-do id and add news only if the
+    // source would otherwise have zero sections.
+    const sources = await ctx.db.query("sources").collect()
+    let sourcesPatched = 0
+    for (const src of sources) {
+      if (!src.sectionIds.includes(ttd._id)) continue
+      const cleaned = src.sectionIds.filter((id) => id !== ttd._id)
+      const finalIds = cleaned.length > 0 ? cleaned : [news]
+      await ctx.db.patch(src._id, { sectionIds: finalIds })
+      sourcesPatched += 1
+    }
+
+    // Move any ingestedItems? They reference sourceId, not sectionId,
+    // so nothing to do there.
+
+    // Now safe to delete the section row.
+    await ctx.db.delete(ttd._id)
+
+    return {
+      sectionMissing: false as const,
+      articlesMoved,
+      eventsMoved,
+      sourcesPatched,
+    }
+  },
+})
+
 // One-shot Miami aggregator seed. Broad RSS feeds that already cover
 // Miami at scale — news, food, real-estate, arts, things-to-do — and
 // happen to capture the museum / institutional events the desks would
