@@ -165,7 +165,6 @@ function HomePage() {
   for (const article of latest) {
     if (used.has(article._id)) continue
     if (!article.section) continue
-    if (article.section.slug === "things-to-do") continue
     const list = railsBySection.get(article.section.slug) ?? []
     list.push(article)
     railsBySection.set(article.section.slug, list)

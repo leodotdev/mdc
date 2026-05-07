@@ -26,7 +26,6 @@ const SECTION_NAMES: Record<string, Record<Lang, string>> = {
   galleries: { en: "Galleries", es: "Galerías" },
   books: { en: "Books", es: "Libros" },
   "street-art": { en: "Street Art", es: "Arte urbano" },
-  "things-to-do": { en: "Events", es: "Eventos" },
   opinion: { en: "Opinion", es: "Opinión" },
   investigations: { en: "Investigations", es: "Investigaciones" },
   "miami-history": { en: "Miami History", es: "Historia de Miami" },
@@ -83,10 +82,6 @@ const SECTION_DESCRIPTIONS: Record<string, Record<Lang, string>> = {
   "street-art": {
     en: "Murals, public installations, Wynwood Walls, the artists painting Miami's exteriors.",
     es: "Murales, instalaciones públicas, Wynwood Walls y los artistas que pintan las fachadas de Miami.",
-  },
-  "things-to-do": {
-    en: "What's happening this weekend, this week, this month — concerts, festivals, public meetings, free finds.",
-    es: "Lo que pasa este fin de semana, esta semana, este mes — conciertos, festivales, reuniones públicas, planes gratis.",
   },
   opinion: {
     en: "Editorials, op-eds, and letters from Miamians who care enough to write.",

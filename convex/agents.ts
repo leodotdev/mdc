@@ -986,10 +986,11 @@ export const runMegaDeskInternal = internalAction({
         await log(`Drafted "${draft.title}"`)
       }
 
-      // 6. Insert events — same flow as runDeskInternal, just with
-      //    section pick falling back to things-to-do.
+      // 6. Insert events — same flow as runDeskInternal. Every event
+      //    must land in a real section: prefer News as the fallback,
+      //    then any other section. Things-to-do isn't a section anymore.
       const fallbackEventSectionId =
-        sectionIdBySlug.get("things-to-do") ?? allSections[0]?._id
+        sectionIdBySlug.get("news") ?? allSections[0]?._id
       for (const ev of events) {
         const validIndices = ev.citationItemIndices.filter(
           (i) => i >= 0 && i < candidates.length,

@@ -40,9 +40,7 @@ export function SectionFilterDropdown({
   // Top-level sections only — sub-sections aren't standalone feeds; the
   // parent's filter naturally includes events filed under any of its
   // children via the same `sectionMatcher` logic the page uses.
-  const topLevel = (sections ?? []).filter(
-    (s) => !s.parentId && s.slug !== "things-to-do",
-  )
+  const topLevel = (sections ?? []).filter((s) => !s.parentId)
   const selectedSet = new Set(selected)
   const active = selected.length > 0
 

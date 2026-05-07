@@ -254,16 +254,6 @@ const SECTIONS: Array<{
     parentSlug: "arts",
   },
   {
-    slug: "things-to-do",
-    name: "Things to Do",
-    description:
-      "What's happening this weekend, this week, this month — concerts, festivals, public meetings, free finds.",
-    // Events ride the site's primary theme color so they read as the
-    // anchor in the nav row — same hue as the brand.
-    accentColor: "var(--primary)",
-    order: 80,
-  },
-  {
     slug: "miami-history",
     name: "Miami History",
     description:
@@ -784,7 +774,7 @@ export const run = internalMutation({
       {
         slug: "events",
         name: "Events Desk",
-        sectionSlug: "things-to-do",
+        sectionSlug: "news",
         authorSlug: "events-desk",
         model: "claude-opus-4-7",
         systemPrompt: EVENTS_PROMPT,
@@ -910,22 +900,22 @@ export const seedIcsSources = internalMutation({
       {
         name: "City of Miami Beach — events",
         url: "https://events.miamibeachfl.gov/?ical=1",
-        sectionSlugs: ["things-to-do", "news"],
+        sectionSlugs: ["news", "news"],
       },
       {
         name: "City of North Miami — city events",
         url: "https://www.northmiamifl.gov/common/modules/iCalendar/iCalendar.aspx?catID=14&feed=calendar",
-        sectionSlugs: ["things-to-do", "news"],
+        sectionSlugs: ["news", "news"],
       },
       {
         name: "City of North Miami — library events",
         url: "https://www.northmiamifl.gov/common/modules/iCalendar/iCalendar.aspx?catID=23&feed=calendar",
-        sectionSlugs: ["things-to-do", "books"],
+        sectionSlugs: ["news", "books"],
       },
       {
         name: "City of North Miami — parks & recreation",
         url: "https://www.northmiamifl.gov/common/modules/iCalendar/iCalendar.aspx?catID=24&feed=calendar",
-        sectionSlugs: ["things-to-do"],
+        sectionSlugs: ["news"],
       },
       {
         name: "City of North Miami — commission meetings",
@@ -935,7 +925,7 @@ export const seedIcsSources = internalMutation({
       {
         name: "City of North Miami Beach — events",
         url: "https://www.citynmb.com/common/modules/iCalendar/iCalendar.aspx?catID=14&feed=calendar",
-        sectionSlugs: ["things-to-do", "news"],
+        sectionSlugs: ["news", "news"],
       },
       {
         name: "City of North Miami Beach — meetings",
@@ -955,12 +945,12 @@ export const seedIcsSources = internalMutation({
       {
         name: "City of Miami Gardens — council events",
         url: "https://www.miamigardens-fl.gov/common/modules/iCalendar/iCalendar.aspx?catID=24&feed=calendar",
-        sectionSlugs: ["things-to-do", "news"],
+        sectionSlugs: ["news", "news"],
       },
       {
         name: "City of Miami Gardens — other city events",
         url: "https://www.miamigardens-fl.gov/common/modules/iCalendar/iCalendar.aspx?catID=27&feed=calendar",
-        sectionSlugs: ["things-to-do", "news"],
+        sectionSlugs: ["news", "news"],
       },
     ]
 
@@ -1156,7 +1146,7 @@ export const seedYoutubeSources = internalMutation({
       {
         name: "Bayfront Park Miami (YouTube)",
         url: "@BayfrontParkMiami",
-        sectionSlugs: ["things-to-do", "music"],
+        sectionSlugs: ["news", "music"],
       },
     ]
 
@@ -1219,12 +1209,12 @@ export const seedPodcastSources = internalMutation({
       {
         name: "What's Good Miami (podcast)",
         url: "https://media.rss.com/whatsgoodmiami/feed.xml",
-        sectionSlugs: ["food", "things-to-do"],
+        sectionSlugs: ["food", "news"],
       },
       {
         name: "Miami On The Rocks (podcast)",
         url: "https://miaontherocks.podbean.com/feed.xml",
-        sectionSlugs: ["things-to-do", "music"],
+        sectionSlugs: ["news", "music"],
       },
       {
         name: "Miami History Podcast",
@@ -1424,12 +1414,12 @@ export const seedAggregatorSources = internalMutation({
       {
         name: "MiamiCurated",
         url: "https://www.miamicurated.com/feed/",
-        sectionSlugs: ["food", "things-to-do", "arts"],
+        sectionSlugs: ["food", "news", "arts"],
       },
       {
         name: "South Florida on the Cheap",
         url: "https://miamionthecheap.com/feed/",
-        sectionSlugs: ["things-to-do"],
+        sectionSlugs: ["news"],
       },
       {
         name: "The Miami Hurricane (UMiami student paper)",
@@ -1760,14 +1750,14 @@ const EXPANSION_FEEDS: ReadonlyArray<ExpansionFeed> = [
         name: "Coral Gables Magazine",
         type: "rss",
         url: "https://coralgablesmagazine.com/feed/",
-        sectionSlugs: ["news", "things-to-do"],
+        sectionSlugs: ["news", "news"],
         pollMinutes: 240,
       },
       {
         name: "Brickell Magazine",
         type: "rss",
         url: "https://www.brickellmag.com/feed/",
-        sectionSlugs: ["news", "things-to-do"],
+        sectionSlugs: ["news", "news"],
         pollMinutes: 240,
       },
       {
@@ -1873,14 +1863,14 @@ const EXPANSION_FEEDS: ReadonlyArray<ExpansionFeed> = [
         name: "r/Miami",
         type: "reddit",
         url: "https://www.reddit.com/r/Miami/.rss",
-        sectionSlugs: ["news", "things-to-do"],
+        sectionSlugs: ["news", "news"],
         pollMinutes: 30,
       },
       {
         name: "r/305",
         type: "reddit",
         url: "https://www.reddit.com/r/305/.rss",
-        sectionSlugs: ["news", "things-to-do"],
+        sectionSlugs: ["news", "news"],
         pollMinutes: 60,
       },
       {
@@ -1931,7 +1921,7 @@ const EXPANSION_FEEDS: ReadonlyArray<ExpansionFeed> = [
         name: "Everglades National Park (NPS)",
         type: "rss",
         url: "https://www.nps.gov/ever/learn/news/news.htm?feed=rss2",
-        sectionSlugs: ["nature", "climate", "things-to-do"],
+        sectionSlugs: ["nature", "climate", "news"],
         pollMinutes: 240,
       },
       {
@@ -1970,7 +1960,7 @@ const EXPANSION_FEEDS: ReadonlyArray<ExpansionFeed> = [
     name: "Pérez Art Museum Miami (PAMM) blog",
     type: "rss",
     url: "https://www.pamm.org/feed/",
-    sectionSlugs: ["arts", "things-to-do"],
+    sectionSlugs: ["arts", "news"],
     pollMinutes: 240,
   },
 
@@ -2141,7 +2131,7 @@ const EXPANSION_FEEDS: ReadonlyArray<ExpansionFeed> = [
     name: "Time Out Miami",
     type: "rss",
     url: "https://www.timeout.com/miami/feed",
-    sectionSlugs: ["food", "things-to-do", "arts"],
+    sectionSlugs: ["food", "news", "arts"],
     pollMinutes: 60,
   },
 

@@ -57,7 +57,6 @@ function AdminLayout() {
     { to: "/admin/published", label: "Published" },
     { to: "/admin/events", label: "Events" },
     { to: "/admin/sources", label: "Sources" },
-    { to: "/admin/agents", label: "Agents" },
     { to: "/admin/runs", label: "Runs" },
   ] as const
 

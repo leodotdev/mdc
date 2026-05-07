@@ -33,11 +33,9 @@ export function MainNav() {
 
   // Show top-level sections only. Sub-sections (parentId set) are
   // reachable through the SubNav strip that renders below the main nav
-  // when the editor opens a parent section. things-to-do is surfaced as
-  // the top-level Events nav item.
-  const visible = sections.filter(
-    (s) => !s.parentId && s.slug !== "things-to-do",
-  )
+  // when the editor opens a parent section. Events is its own nav
+  // anchor (its own route), not a section.
+  const visible = sections.filter((s) => !s.parentId)
   const regular = visible.filter((s) => s.order < SPECIALTY_THRESHOLD)
   const specialty = visible.filter((s) => s.order >= SPECIALTY_THRESHOLD)
 
