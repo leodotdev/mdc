@@ -14,8 +14,15 @@ import type * as agentsData from "../agentsData.js";
 import type * as articles from "../articles.js";
 import type * as auth from "../auth.js";
 import type * as authors from "../authors.js";
+import type * as budget from "../budget.js";
+import type * as cleanup from "../cleanup.js";
+import type * as crons from "../crons.js";
+import type * as dedup from "../dedup.js";
 import type * as events from "../events.js";
 import type * as http from "../http.js";
+import type * as imageWatchdog from "../imageWatchdog.js";
+import type * as lib_adapters_bluesky from "../lib/adapters/bluesky.js";
+import type * as lib_adapters_ics from "../lib/adapters/ics.js";
 import type * as lib_adapters_index from "../lib/adapters/index.js";
 import type * as lib_adapters_reddit from "../lib/adapters/reddit.js";
 import type * as lib_adapters_rss from "../lib/adapters/rss.js";
@@ -24,7 +31,8 @@ import type * as lib_adapters_web from "../lib/adapters/web.js";
 import type * as lib_adapters_wikipediaOtd from "../lib/adapters/wikipediaOtd.js";
 import type * as lib_adapters_x from "../lib/adapters/x.js";
 import type * as lib_adapters_youtube from "../lib/adapters/youtube.js";
-import type * as lib_eventKinds from "../lib/eventKinds.js";
+import type * as lib_budget from "../lib/budget.js";
+import type * as lib_dataAdapters from "../lib/dataAdapters.js";
 import type * as lib_guard from "../lib/guard.js";
 import type * as lib_llm from "../lib/llm.js";
 import type * as lib_media from "../lib/media.js";
@@ -32,11 +40,16 @@ import type * as lib_neighborhoods from "../lib/neighborhoods.js";
 import type * as lib_scoring from "../lib/scoring.js";
 import type * as lib_storyArcs from "../lib/storyArcs.js";
 import type * as me from "../me.js";
+import type * as metrics from "../metrics.js";
 import type * as migrations from "../migrations.js";
 import type * as sections from "../sections.js";
 import type * as seed from "../seed.js";
+import type * as siteSettings from "../siteSettings.js";
+import type * as sourceHealth from "../sourceHealth.js";
 import type * as sources from "../sources.js";
 import type * as sourcesData from "../sourcesData.js";
+import type * as systemAlerts from "../systemAlerts.js";
+import type * as widgets from "../widgets.js";
 
 import type {
   ApiFromModules,
@@ -51,8 +64,15 @@ declare const fullApi: ApiFromModules<{
   articles: typeof articles;
   auth: typeof auth;
   authors: typeof authors;
+  budget: typeof budget;
+  cleanup: typeof cleanup;
+  crons: typeof crons;
+  dedup: typeof dedup;
   events: typeof events;
   http: typeof http;
+  imageWatchdog: typeof imageWatchdog;
+  "lib/adapters/bluesky": typeof lib_adapters_bluesky;
+  "lib/adapters/ics": typeof lib_adapters_ics;
   "lib/adapters/index": typeof lib_adapters_index;
   "lib/adapters/reddit": typeof lib_adapters_reddit;
   "lib/adapters/rss": typeof lib_adapters_rss;
@@ -61,7 +81,8 @@ declare const fullApi: ApiFromModules<{
   "lib/adapters/wikipediaOtd": typeof lib_adapters_wikipediaOtd;
   "lib/adapters/x": typeof lib_adapters_x;
   "lib/adapters/youtube": typeof lib_adapters_youtube;
-  "lib/eventKinds": typeof lib_eventKinds;
+  "lib/budget": typeof lib_budget;
+  "lib/dataAdapters": typeof lib_dataAdapters;
   "lib/guard": typeof lib_guard;
   "lib/llm": typeof lib_llm;
   "lib/media": typeof lib_media;
@@ -69,11 +90,16 @@ declare const fullApi: ApiFromModules<{
   "lib/scoring": typeof lib_scoring;
   "lib/storyArcs": typeof lib_storyArcs;
   me: typeof me;
+  metrics: typeof metrics;
   migrations: typeof migrations;
   sections: typeof sections;
   seed: typeof seed;
+  siteSettings: typeof siteSettings;
+  sourceHealth: typeof sourceHealth;
   sources: typeof sources;
   sourcesData: typeof sourcesData;
+  systemAlerts: typeof systemAlerts;
+  widgets: typeof widgets;
 }>;
 
 /**

@@ -19,7 +19,7 @@ const PROXY_HOSTS = new Set(["wsrv.nl", "images.weserv.nl"])
 
 export function proxiedImageUrl(
   rawUrl: string | undefined,
-  opts?: { width?: number },
+  opts?: { width?: number; format?: "avif" | "webp" },
 ): string | undefined {
   if (!rawUrl) return rawUrl
   if (rawUrl.startsWith("data:")) return rawUrl
@@ -36,5 +36,26 @@ export function proxiedImageUrl(
     url: rawUrl.replace(/^https?:\/\//i, ""),
   })
   if (opts?.width) params.set("w", String(opts.width))
+  // Format conversion (default avif) — wsrv re-encodes server-side and
+  // caches, dropping payloads ~30-50% vs the source jpeg/png. Trusted
+  // hosts bypass conversion above (Unsplash already serves modern
+  // formats; Wikimedia + Convex storage we accept as-is).
+  params.set("output", opts?.format ?? "avif")
   return `https://wsrv.nl/?${params.toString()}`
+}
+
+// Build a `srcset`-ready string for a hero, dispatching multiple widths
+// through the proxy so the browser can pick the right size for the
+// rendered slot. Trusted hosts get the same URL across every entry — a
+// no-op srcset, but harmless. AVIF output applies to proxied URLs only.
+const HERO_WIDTHS = [400, 640, 880, 1200, 1600] as const
+
+export function proxiedImageSrcSet(
+  rawUrl: string | undefined,
+  widths: ReadonlyArray<number> = HERO_WIDTHS,
+): string | undefined {
+  if (!rawUrl) return undefined
+  return widths
+    .map((w) => `${proxiedImageUrl(rawUrl, { width: w })} ${w}w`)
+    .join(", ")
 }

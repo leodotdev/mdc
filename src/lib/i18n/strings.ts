@@ -24,6 +24,10 @@ export const STRINGS = {
       "{count} {label} for",
     "search.results.singular": "result",
     "search.results.plural": "results",
+    "searchPalette.articles": "Articles",
+    "searchPalette.events": "Events",
+    "searchPalette.sections": "Sections",
+    "searchPalette.neighborhoods": "Neighborhoods",
     "lang.label": "Language",
     "lang.english": "English",
     "lang.spanish": "Español",
@@ -33,6 +37,7 @@ export const STRINGS = {
 
     // Nav
     "nav.events": "Events",
+    "nav.neighborhoods": "Neighborhoods",
     "nav.about": "About",
     "nav.menu": "Open menu",
     "nav.signOut": "Sign out",
@@ -50,7 +55,7 @@ export const STRINGS = {
     "home.thingsToDo": "Things to Do",
     "home.onTheCalendar": "On the Calendar",
     "home.opinion": "Opinion",
-    "home.mostRead": "Most Read",
+    "home.trending": "Trending",
     "home.moreTopStories": "More Top Stories",
     "home.allLink": "All →",
     "home.empty.calendar": "Nothing on the calendar yet.",
@@ -81,11 +86,11 @@ export const STRINGS = {
 
     // Footer
     "footer.sections": "Sections",
+    "footer.more": "More",
     "footer.tagline":
       "Hyper-local Miami news, aggregated from the city's best sources, edited by humans, sourced and cited.",
     "footer.copyright": "© {year} miami.community",
-    "footer.byline":
-      "Articles are AI-drafted from cited sources and edited by a human.",
+    "footer.byline": "Established 2026",
 
     // 404
     "notFound.kicker": "404",
@@ -115,6 +120,10 @@ export const STRINGS = {
     "search.results.count": "{count} {label} para",
     "search.results.singular": "resultado",
     "search.results.plural": "resultados",
+    "searchPalette.articles": "Artículos",
+    "searchPalette.events": "Eventos",
+    "searchPalette.sections": "Secciones",
+    "searchPalette.neighborhoods": "Barrios",
     "lang.label": "Idioma",
     "theme.label": "Tema",
     "theme.light": "Claro",
@@ -124,6 +133,7 @@ export const STRINGS = {
 
     // Nav
     "nav.events": "Eventos",
+    "nav.neighborhoods": "Barrios",
     "nav.about": "Acerca de",
     "nav.menu": "Abrir menú",
     "nav.signOut": "Cerrar sesión",
@@ -141,7 +151,7 @@ export const STRINGS = {
     "home.thingsToDo": "Qué hacer",
     "home.onTheCalendar": "En la agenda",
     "home.opinion": "Opinión",
-    "home.mostRead": "Lo más leído",
+    "home.trending": "Tendencias",
     "home.moreTopStories": "Más noticias",
     "home.allLink": "Todos →",
     "home.empty.calendar": "Aún no hay nada en la agenda.",
@@ -172,11 +182,11 @@ export const STRINGS = {
 
     // Footer
     "footer.sections": "Secciones",
+    "footer.more": "Más",
     "footer.tagline":
       "Noticias hiperlocales de Miami, reunidas de las mejores fuentes de la ciudad, editadas por personas, con citas y referencias.",
     "footer.copyright": "© {year} miami.community",
-    "footer.byline":
-      "Los artículos se redactan con IA a partir de fuentes citadas y los edita una persona.",
+    "footer.byline": "Fundado en 2026",
 
     // 404
     "notFound.kicker": "404",

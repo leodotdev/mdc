@@ -28,7 +28,7 @@ export function SidebarRail({
         className,
       )}
     >
-      <div className="space-y-8">{children}</div>
+      <div className="flex flex-col gap-8">{children}</div>
     </aside>
   )
 }

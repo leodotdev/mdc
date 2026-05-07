@@ -2,13 +2,14 @@ import { paginationOptsValidator } from "convex/server"
 import { v } from "convex/values"
 import { api, internal } from "./_generated/api"
 import { action, internalAction, internalMutation, mutation, query } from "./_generated/server"
+import { cleanTags } from "./agents"
 import { requireEditor } from "./lib/guard"
-import { generateTranslation } from "./lib/llm"
+import { estimatedCallCents } from "./lib/budget"
+import { generateTranslation, verifyMerge } from "./lib/llm"
 import { findHeroCandidates } from "./lib/media"
 import { compareByImportance } from "./lib/scoring"
-import { linkRelated } from "./lib/storyArcs"
 import type { HeroCandidate, HeroFinderDiagnostics } from "./lib/media"
-import type {MutationCtx, QueryCtx} from "./_generated/server";
+import type { QueryCtx } from "./_generated/server"
 import type { Doc, Id } from "./_generated/dataModel"
 
 // Hard ceiling on candidate scan when ranking by importance — bounds query
@@ -33,23 +34,70 @@ async function loadAuthorsForArticle(
   ).then((authors) => authors.filter((a): a is Doc<"authors"> => a !== null))
 }
 
+// Attach the trunk-section accent so kickers render in the parent's
+// color (Marlins → Sports red; Business → News blue) rather than the
+// leaf's own. Top-level sections get the field omitted; consumers
+// fall back to `section.accentColor`.
+async function attachParentAccent<T extends Doc<"sections"> | null>(
+  ctx: QueryCtx,
+  section: T,
+): Promise<T extends null ? null : T & { parentAccentColor?: string }> {
+  if (!section) return null as T extends null ? null : never
+  if (!section.parentId) return section as never
+  const parent = await ctx.db.get(section.parentId)
+  if (!parent) return section as never
+  return { ...section, parentAccentColor: parent.accentColor } as never
+}
+
 async function hydrate(ctx: QueryCtx, article: Doc<"articles">) {
-  const [section, authors] = await Promise.all([
+  const [rawSection, authors] = await Promise.all([
     ctx.db.get(article.sectionId),
     loadAuthorsForArticle(ctx, article._id),
   ])
+  const section = await attachParentAccent(ctx, rawSection)
   return { ...article, section, authors }
 }
+
+export { attachParentAccent }
 
 export const getBySlug = query({
   args: { slug: v.string() },
   handler: async (ctx, { slug }) => {
-    const article = await ctx.db
+    let article = await ctx.db
       .query("articles")
       .withIndex("by_slug", (q) => q.eq("slug", slug))
       .unique()
+    // Slug fallback for merged articles. The merge sweep absorbs a
+    // loser article's slug into the winner's `previousSlugs` array, so
+    // a request for the loser's old slug still resolves to the merged
+    // (winner) article. Scoped scan: bounded at 50 most-recent merged
+    // candidates by `mergedIntoId` presence — small relative to the
+    // catalog and only fires on cache-miss URLs.
+    if (!article) {
+      const winners = await ctx.db
+        .query("articles")
+        .withIndex("by_status_published", (q) => q.eq("status", "published"))
+        .order("desc")
+        .take(200)
+      const match = winners.find((a) =>
+        (a.previousSlugs ?? []).includes(slug),
+      )
+      if (match) article = match
+    }
     if (!article) return null
-    return await hydrate(ctx, article)
+    // If the article was itself merged INTO another, follow the chain
+    // and serve the canonical winner. Bounded loop just in case.
+    let canonical: Doc<"articles"> = article
+    let depth = 0
+    while (canonical.mergedIntoId && depth < 4) {
+      const next: Doc<"articles"> | null = await ctx.db.get(
+        canonical.mergedIntoId,
+      )
+      if (!next) break
+      canonical = next
+      depth += 1
+    }
+    return await hydrate(ctx, canonical)
   },
 })
 
@@ -128,6 +176,47 @@ export const latest = query({
       .order("desc")
       .take(limit)
     return await Promise.all(articles.map((a) => hydrate(ctx, a)))
+  },
+})
+
+// Video articles — published rows with `mediaType: "video"`. Scans
+// recent published items and filters; bounded scan size keeps the
+// query cheap regardless of total catalog. Used by the /watch route
+// and by section-page "Watch" rails.
+export const recentVideos = query({
+  args: { limit: v.optional(v.number()), sectionSlug: v.optional(v.string()) },
+  handler: async (ctx, { limit, sectionSlug }) => {
+    const cap = limit ?? 24
+    // Scan ~10× the cap so we still find enough video items even when
+    // most recent articles are non-video. 240 is well below the 1000-row
+    // best-practice ceiling.
+    const candidates = await ctx.db
+      .query("articles")
+      .withIndex("by_status_published", (q) => q.eq("status", "published"))
+      .order("desc")
+      .take(cap * 10)
+    const filtered = candidates.filter((a) => a.mediaType === "video")
+    let scoped = filtered
+    if (sectionSlug) {
+      const section = await ctx.db
+        .query("sections")
+        .withIndex("by_slug", (q) => q.eq("slug", sectionSlug))
+        .unique()
+      if (!section) return []
+      const sectionId = section._id
+      const childIds = new Set(
+        (
+          await ctx.db
+            .query("sections")
+            .withIndex("by_parent", (q) => q.eq("parentId", sectionId))
+            .collect()
+        ).map((c) => c._id),
+      )
+      scoped = filtered.filter(
+        (a) => a.sectionId === sectionId || childIds.has(a.sectionId),
+      )
+    }
+    return await Promise.all(scoped.slice(0, cap).map((a) => hydrate(ctx, a)))
   },
 })
 
@@ -311,7 +400,26 @@ export const moreFromSection = query({
         .slice(0, limit)
         .map((a) => hydrate(ctx, a)),
     )
-    return { section, articles }
+    return { section: await attachParentAccent(ctx, section), articles }
+  },
+})
+
+// Articles whose `neighborhoods` array includes the given slug. Powers
+// the per-neighborhood landing page (`/neighborhood/$slug`). Same scan-
+// then-filter pattern as listByTag — Convex doesn't index array fields,
+// so we cap the recent scan at 500.
+export const listByNeighborhood = query({
+  args: { slug: v.string(), limit: v.number() },
+  handler: async (ctx, { slug, limit }) => {
+    const recent = await ctx.db
+      .query("articles")
+      .withIndex("by_status_published", (q) => q.eq("status", "published"))
+      .order("desc")
+      .take(500)
+    const matches = recent.filter((a) =>
+      (a.neighborhoods ?? []).includes(slug),
+    )
+    return await Promise.all(matches.slice(0, limit).map((a) => hydrate(ctx, a)))
   },
 })
 
@@ -365,19 +473,6 @@ export const listByAuthor = query({
 
 // ---------- Editorial mutations (called from CMS) ----------
 
-export const reviewQueue = query({
-  args: {},
-  handler: async (ctx) => {
-    await requireEditor(ctx)
-    const articles = await ctx.db
-      .query("articles")
-      .withIndex("by_status_created", (q) => q.eq("status", "pending_review"))
-      .order("desc")
-      .collect()
-    return await Promise.all(articles.map((a) => hydrate(ctx, a)))
-  },
-})
-
 // Composes the denormalized `searchableText` blob. Pulls weight from the
 // title (repeated to bias ranking), the dek, and the tag list. Called by
 // every write path so the search index stays current.
@@ -430,8 +525,6 @@ export const augmentArticle = mutation({
       newCitations,
       newSourceItems,
       patch,
-      agentSlug,
-      agentRunId,
     },
   ) => {
     const article = await ctx.db.get(articleId)
@@ -488,16 +581,6 @@ export const augmentArticle = mutation({
     }
 
     await ctx.db.patch(articleId, updates)
-    await ctx.db.insert("articleRevisions", {
-      articleId,
-      at: Date.now(),
-      kind: "agent_augmented",
-      agentSlug,
-      agentRunId,
-      changedFields: changedFields.length > 0 ? changedFields : undefined,
-      citationsAdded: addedCitations.length,
-      sourceItemsAdded: addedItems.length,
-    })
 
     return {
       merged: true,
@@ -508,283 +591,89 @@ export const augmentArticle = mutation({
   },
 })
 
-// Articles a desk is allowed to enrich — both already-PUBLISHED pieces
-// AND pending-review drafts queued for editor approval. Filters to the
-// desk's section (primary + sub-sections via parentId), oldest-first so
-// the bulk loop hits the stories with the longest accrual window before
-// fresh ones (which haven't had time to attract follow-up coverage).
-// `rejected` and `archived` are excluded — those are intentional removals.
-export const enrichableForAgent = query({
-  args: {
-    agentId: v.id("agents"),
-    limit: v.optional(v.number()),
-    sinceMs: v.optional(v.number()),
-  },
-  handler: async (ctx, { agentId, limit, sinceMs }) => {
-    const agent = await ctx.db.get(agentId)
-    if (!agent) return []
+
+// Auto-published articles in the last 24h that look weak — too long,
+// too short, missing a hero, single-source. Surfaced on the admin
+// dashboard so the editor can pop in and re-roll voice / find a better
+// hero / mark for follow-up. Doesn't block publishing, just flags.
+//
+// Returns each anomalous row with the specific reasons it tripped, so
+// the dashboard UI can show the "why" without re-computing client-side.
+export const recentAnomalies = query({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, { limit }) => {
     const cap = limit ?? 12
-    const since = sinceMs ?? Date.now() - 30 * 24 * 3_600_000
-    const childSections = await ctx.db
-      .query("sections")
-      .withIndex("by_parent", (q) => q.eq("parentId", agent.sectionId))
-      .collect()
-    const sectionIds: Array<Id<"sections">> = [
-      agent.sectionId,
-      ...childSections.map((s) => s._id),
-    ]
-    const collected: Array<Doc<"articles">> = []
-    for (const sectionId of sectionIds) {
-      for (const status of ["published", "pending_review"] as const) {
-        const rows = await ctx.db
-          .query("articles")
-          .withIndex("by_section_status_published", (q) =>
-            q.eq("sectionId", sectionId).eq("status", status),
-          )
-          .order("desc")
-          .take(cap * 2)
-        for (const row of rows) {
-          const at = row.publishedAt ?? row.createdAt
-          if (at < since) continue
-          collected.push(row)
-        }
-      }
-    }
-    collected.sort(
-      (a, b) =>
-        (a.publishedAt ?? a.createdAt) - (b.publishedAt ?? b.createdAt),
-    )
-    return await Promise.all(
-      collected.slice(0, cap).map(async (a) => {
-        const section = await ctx.db.get(a.sectionId)
-        return { ...a, section }
-      }),
-    )
-  },
-})
-
-// Apply LLM-driven enrichment to an existing article. Additive on citations,
-// derivedFromItems, and relatedArticleIds (dedup by URL / id). Optional
-// rewrites land in title/dek/body/tags/neighborhoods/hero. Every change
-// records a row in articleRevisions so the timeline shows what the desk
-// touched and why. Skips rejected/archived articles outright.
-export const enrichArticle = mutation({
-  args: {
-    articleId: v.id("articles"),
-    patch: v.object({
-      title: v.optional(v.string()),
-      dek: v.optional(v.string()),
-      body: v.optional(v.string()),
-      tags: v.optional(v.array(v.string())),
-      neighborhoods: v.optional(v.array(v.string())),
-      heroImage: v.optional(v.string()),
-      heroCaption: v.optional(v.string()),
-      heroSource: v.optional(
-        v.union(
-          v.literal("source"),
-          v.literal("unsplash"),
-          v.literal("wikimedia"),
-          v.literal("none"),
-        ),
-      ),
-    }),
-    newCitations: v.array(
-      v.object({
-        url: v.string(),
-        title: v.string(),
-        publisher: v.optional(v.string()),
-        fetchedAt: v.number(),
-        snippet: v.optional(v.string()),
-      }),
-    ),
-    newSourceItems: v.array(v.id("ingestedItems")),
-    newRelatedIds: v.array(v.id("articles")),
-    agentSlug: v.string(),
-    agentRunId: v.id("agentRuns"),
-    note: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const article = await ctx.db.get(args.articleId)
-    if (!article) return { changed: false }
-    if (article.status === "rejected" || article.status === "archived") {
-      return { changed: false }
-    }
-
-    const updates: Record<string, unknown> = {}
-    const changedFields: Array<string> = []
-
-    const patchString = (
-      field: "title" | "dek" | "body",
-      next: string | undefined,
-    ) => {
-      if (next === undefined) return
-      const trimmed = next.trim()
-      if (!trimmed || trimmed === article[field]) return
-      updates[field] = trimmed
-      changedFields.push(field)
-    }
-    patchString("title", args.patch.title)
-    patchString("dek", args.patch.dek)
-    patchString("body", args.patch.body)
-
-    if (args.patch.tags) {
-      const dedup = Array.from(
-        new Set(args.patch.tags.map((t) => t.toLowerCase().trim()).filter(Boolean)),
+    const since = Date.now() - 24 * 3_600_000
+    const recent = await ctx.db
+      .query("articles")
+      .withIndex("by_status_published", (q) => q.eq("status", "published"))
+      .order("desc")
+      .take(60)
+    const flagged: Array<{
+      _id: Doc<"articles">["_id"]
+      slug: string
+      title: string
+      sectionAccent?: string
+      sectionName?: string
+      heroImage?: string
+      reasons: Array<string>
+    }> = []
+    for (const a of recent) {
+      if (!a.publishedAt || a.publishedAt < since) continue
+      const reasons: Array<string> = []
+      if (a.title.length > 60) reasons.push(`title ${a.title.length} chars`)
+      if (a.dek.length > 120) reasons.push(`dek ${a.dek.length} chars`)
+      const bodyWords = a.body.trim().split(/\s+/).filter(Boolean).length
+      if (bodyWords < 30) reasons.push(`body ${bodyWords} words (thin)`)
+      if (bodyWords > 100) reasons.push(`body ${bodyWords} words (bloated)`)
+      if (!a.heroImage || a.heroSource === "none") reasons.push("no hero")
+      const distinctPublishers = new Set(
+        a.citations
+          .map((c) => c.publisher)
+          .filter((p): p is string => !!p),
       )
-      const same =
-        dedup.length === article.tags.length &&
-        dedup.every((t, i) => article.tags[i] === t)
-      if (!same) {
-        updates.tags = dedup
-        changedFields.push("tags")
-      }
-    }
-    if (args.patch.neighborhoods) {
-      const next = args.patch.neighborhoods
-      const cur = article.neighborhoods ?? []
-      const same =
-        next.length === cur.length && next.every((n, i) => cur[i] === n)
-      if (!same) {
-        updates.neighborhoods = next
-        changedFields.push("neighborhoods")
-      }
-    }
-    if (args.patch.heroImage && args.patch.heroImage !== article.heroImage) {
-      updates.heroImage = args.patch.heroImage
-      if (args.patch.heroCaption !== undefined)
-        updates.heroCaption = args.patch.heroCaption
-      if (args.patch.heroSource !== undefined)
-        updates.heroSource = args.patch.heroSource
-      changedFields.push("hero")
-    }
-
-    // Append unique citations.
-    const existingUrls = new Set(article.citations.map((c) => c.url))
-    const addedCitations = args.newCitations.filter(
-      (c) => !existingUrls.has(c.url),
-    )
-    if (addedCitations.length > 0) {
-      updates.citations = [...article.citations, ...addedCitations]
-    }
-
-    // Append unique derivedFromItems.
-    const existingItems = new Set(
-      article.derivedFromItems.map((id) => id as string),
-    )
-    const addedItems = args.newSourceItems.filter(
-      (id) => !existingItems.has(id as string),
-    )
-    if (addedItems.length > 0) {
-      updates.derivedFromItems = [...article.derivedFromItems, ...addedItems]
-    }
-
-    // Append unique relatedArticleIds.
-    const currentRelated = article.relatedArticleIds ?? []
-    const existingRelated = new Set(currentRelated.map((id) => id as string))
-    const addedRelated = args.newRelatedIds.filter(
-      (id) => !existingRelated.has(id as string) && (id as string) !== (args.articleId as string),
-    )
-    if (addedRelated.length > 0) {
-      updates.relatedArticleIds = [...currentRelated, ...addedRelated]
-      changedFields.push("related")
-    }
-
-    // Refresh searchableText if any indexed field moved.
-    if (
-      changedFields.includes("title") ||
-      changedFields.includes("dek") ||
-      changedFields.includes("tags")
-    ) {
-      updates.searchableText = buildSearchableText({
-        title: (updates.title as string | undefined) ?? article.title,
-        dek: (updates.dek as string | undefined) ?? article.dek,
-        tags: (updates.tags as Array<string> | undefined) ?? article.tags,
+      if (a.citations.length < 2) reasons.push("only 1 citation")
+      else if (distinctPublishers.size < 2) reasons.push("single source")
+      if (reasons.length === 0) continue
+      const section = await ctx.db.get(a.sectionId)
+      flagged.push({
+        _id: a._id,
+        slug: a.slug,
+        title: a.title,
+        sectionAccent: section?.accentColor,
+        sectionName: section?.name,
+        heroImage: a.heroImage,
+        reasons,
       })
+      if (flagged.length >= cap) break
     }
-
-    const noChange =
-      Object.keys(updates).length === 0 && addedRelated.length === 0
-    if (noChange) return { changed: false }
-
-    if (Object.keys(updates).length > 0) {
-      await ctx.db.patch(args.articleId, updates)
-    }
-
-    if (addedRelated.length > 0) {
-      await linkRelated(
-        ctx,
-        args.articleId,
-        addedRelated,
-        (updates.title as string | undefined) ?? article.title,
-      )
-    }
-
-    await ctx.db.insert("articleRevisions", {
-      articleId: args.articleId,
-      at: Date.now(),
-      kind: "agent_enriched",
-      agentSlug: args.agentSlug,
-      agentRunId: args.agentRunId,
-      changedFields: changedFields.length > 0 ? changedFields : undefined,
-      citationsAdded: addedCitations.length,
-      sourceItemsAdded: addedItems.length,
-      note: args.note,
-    })
-
-    return {
-      changed: true,
-      changedFields,
-      citationsAdded: addedCitations.length,
-      sourceItemsAdded: addedItems.length,
-      relatedAdded: addedRelated.length,
-    }
+    return flagged
   },
 })
 
-// Published articles whose copy is bloated by the new house style (title
-// > 60 chars, dek > 120 chars, or body > 80 words). Used by the bulk
-// voice-refresh action — scans the most recent N published pieces and
-// returns just the ones that need a re-roll. Stays cheap by capping the
-// scan window; callers can call it repeatedly to drain the backlog.
-export const needingVoiceRefresh = query({
-  args: {
-    limit: v.optional(v.number()),
-    scan: v.optional(v.number()),
-  },
-  handler: async (ctx, { limit, scan }) => {
-    const cap = limit ?? 20
-    const scanCap = scan ?? 200
+// Articles published in the last 24h that came in via the auto-graduate
+// gate (i.e. agentSlug set and createdAt very close to publishedAt). Used
+// by the live admin status panel "Recently auto-published" inbox.
+export const recentlyAutoPublished = query({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, { limit }) => {
+    const cap = limit ?? 8
+    const since = Date.now() - 24 * 3_600_000
     const all = await ctx.db
       .query("articles")
       .withIndex("by_status_published", (q) => q.eq("status", "published"))
       .order("desc")
-      .take(scanCap)
-    const bloated = all.filter((a) => {
-      if (a.title.length > 60) return true
-      if (a.dek.length > 120) return true
-      const wordCount = a.body.trim().split(/\s+/).length
-      if (wordCount > 80) return true
-      return false
-    })
-    return bloated.slice(0, cap).map((a) => ({
-      _id: a._id,
-      title: a.title,
-      dek: a.dek,
-      titleLen: a.title.length,
-      dekLen: a.dek.length,
-      bodyWords: a.body.trim().split(/\s+/).length,
-    }))
-  },
-})
-
-export const revisions = query({
-  args: { articleId: v.id("articles") },
-  handler: async (ctx, { articleId }) => {
-    return await ctx.db
-      .query("articleRevisions")
-      .withIndex("by_article_at", (q) => q.eq("articleId", articleId))
-      .order("desc")
       .take(50)
+    const auto = all.filter(
+      (a) =>
+        !!a.agentSlug &&
+        a.publishedAt !== undefined &&
+        a.publishedAt >= since &&
+        Math.abs((a.publishedAt ?? 0) - a.createdAt) < 60_000,
+    )
+    return await Promise.all(
+      auto.slice(0, cap).map((a) => hydrate(ctx, a)),
+    )
   },
 })
 
@@ -831,6 +720,74 @@ export const getById = query({
   },
 })
 
+// Hourly publish volume for the last 24 hours. Index 0 = 23 hours ago,
+// index 23 = the current hour. Used by the dashboard's Output card
+// sparkline. Scans recent published rows once and buckets them — cheap
+// because the by_status_published index is keyed by publishedAt desc,
+// so the take(200) hits the most-recent rows first.
+export const publishedSparkline24h = query({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now()
+    const since = now - 24 * 3_600_000
+    const articles = await ctx.db
+      .query("articles")
+      .withIndex("by_status_published", (q) => q.eq("status", "published"))
+      .order("desc")
+      .take(200)
+    const buckets = new Array<number>(24).fill(0)
+    let total = 0
+    for (const a of articles) {
+      const ts = a.publishedAt ?? a.createdAt
+      if (ts < since) break
+      const hoursAgo = Math.floor((now - ts) / 3_600_000)
+      if (hoursAgo < 0 || hoursAgo > 23) continue
+      buckets[23 - hoursAgo] += 1
+      total += 1
+    }
+    return { buckets, total }
+  },
+})
+
+// Section-level breakdown of the last 24h's published articles. Returns
+// rows sorted by count desc, capped at 8 — the dashboard's Output card
+// only needs the headline mix, not the full taxonomy. Reuses the same
+// 200-row scan window as `publishedSparkline24h`; for higher publish
+// volumes we'd add a separate per-section index.
+export const publishedLast24hBySection = query({
+  args: {},
+  handler: async (ctx) => {
+    const since = Date.now() - 24 * 3_600_000
+    const articles = await ctx.db
+      .query("articles")
+      .withIndex("by_status_published", (q) => q.eq("status", "published"))
+      .order("desc")
+      .take(200)
+    const counts = new Map<string, { name: string; accent: string; count: number }>()
+    for (const a of articles) {
+      const ts = a.publishedAt ?? a.createdAt
+      if (ts < since) break
+      const section = await ctx.db.get(a.sectionId)
+      if (!section) continue
+      const slug = section.slug
+      const existing = counts.get(slug)
+      if (existing) {
+        existing.count += 1
+      } else {
+        counts.set(slug, {
+          name: section.name,
+          accent: section.accentColor,
+          count: 1,
+        })
+      }
+    }
+    return Array.from(counts.entries())
+      .map(([slug, v]) => ({ slug, ...v }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 8)
+  },
+})
+
 // Find candidate hero images for a story — used by the editor's "Find
 // image" picker. Pulls every OG / twitter:image / inline image from
 // each cited source page plus Unsplash + Wikimedia Commons matches
@@ -855,8 +812,6 @@ export const findHeroOptions = action({
         diagnostics: {
           sourcesScanned: 0,
           sourcesWithImage: 0,
-          unsplashEnabled: !!process.env.UNSPLASH_ACCESS_KEY,
-          unsplashCount: 0,
           wikimediaCount: 0,
           totalCandidates: 0,
         },
@@ -901,7 +856,7 @@ export const setHero = mutation({
     ),
   },
   handler: async (ctx, { articleId, heroImage, heroCaption, heroSource }) => {
-    const editorEmail = await requireEditor(ctx)
+    await requireEditor(ctx)
     const article = await ctx.db.get(articleId)
     if (!article) return { changed: false }
     const same =
@@ -913,16 +868,6 @@ export const setHero = mutation({
       heroImage,
       heroCaption,
       heroSource: heroSource ?? (heroImage ? "source" : "none"),
-    })
-    await ctx.db.insert("articleRevisions", {
-      articleId,
-      at: Date.now(),
-      kind: "editor_edited",
-      editorEmail,
-      changedFields: ["hero"],
-      note: heroImage
-        ? `Hero swapped to ${heroSource ?? "source"}`
-        : "Hero cleared",
     })
     return { changed: true }
   },
@@ -942,19 +887,21 @@ export const updateDraft = mutation({
     neighborhoods: v.optional(v.array(v.string())),
   },
   handler: async (ctx, { id, ...patch }) => {
-    const editorEmail = await requireEditor(ctx)
+    await requireEditor(ctx)
     const cleaned: Record<string, unknown> = {}
     for (const [key, value] of Object.entries(patch)) {
       if (value !== undefined) cleaned[key] = value
     }
+    if (cleaned.tags !== undefined) {
+      cleaned.tags = cleanTags(cleaned.tags as Array<string>)
+    }
     // Refresh the search blob whenever any of its sources changed.
-    let existing: Doc<"articles"> | null = null
     if (
       cleaned.title !== undefined ||
       cleaned.dek !== undefined ||
       cleaned.tags !== undefined
     ) {
-      existing = await ctx.db.get(id)
+      const existing = await ctx.db.get(id)
       if (existing) {
         cleaned.searchableText = buildSearchableText({
           title: (cleaned.title as string | undefined) ?? existing.title,
@@ -965,48 +912,11 @@ export const updateDraft = mutation({
       }
     }
     if (Object.keys(cleaned).length > 0) {
-      // Compute changed fields for the revision log (excluding the
-      // derived searchableText).
-      if (!existing) existing = await ctx.db.get(id)
-      const changedFields = existing
-        ? Object.keys(cleaned).filter((k) => {
-            if (k === "searchableText") return false
-            const before = (existing as unknown as Record<string, unknown>)[k]
-            const after = cleaned[k]
-            return JSON.stringify(before) !== JSON.stringify(after)
-          })
-        : Object.keys(cleaned)
       await ctx.db.patch(id, cleaned)
-      if (changedFields.length > 0) {
-        await ctx.db.insert("articleRevisions", {
-          articleId: id,
-          at: Date.now(),
-          kind: "editor_edited",
-          editorEmail,
-          changedFields,
-        })
-      }
     }
     return id
   },
 })
-
-async function logStatusChange(
-  ctx: MutationCtx,
-  articleId: Id<"articles">,
-  before: string,
-  after: string,
-  editorEmail: string,
-): Promise<void> {
-  await ctx.db.insert("articleRevisions", {
-    articleId,
-    at: Date.now(),
-    kind: "status_changed",
-    editorEmail,
-    statusBefore: before,
-    statusAfter: after,
-  })
-}
 
 // Cheap deterministic hash of an article's EN copy. Used as
 // `translations.es.sourceHash` so we can detect when EN drifted and the
@@ -1096,8 +1006,26 @@ export const translateArticleAction = internalAction({
     if (article.status === "rejected" || article.status === "archived") {
       return { translated: false }
     }
+    // Idempotency / debounce: if the stored ES translation already matches
+    // the current EN sourceHash, there's nothing to do. Lets us schedule
+    // translations cheaply on every publish without paying for repeat work
+    // when the editor publishes → tweaks → re-publishes within the debounce
+    // window.
+    const sourceHash = articleSourceHash({
+      title: article.title,
+      dek: article.dek,
+      body: article.body,
+    })
+    if (article.translations?.es?.sourceHash === sourceHash) {
+      return { translated: false }
+    }
+    const reservation = await ctx.runMutation(internal.budget.reserve, {
+      estimatedCents: estimatedCallCents("claude-sonnet-4-6"),
+      label: "translateArticle",
+    })
+    if (!reservation.allowed) return { translated: false, budgetCapped: true }
     const result = await generateTranslation({
-      model: "claude-opus-4-7",
+      model: "claude-sonnet-4-6",
       article: {
         title: article.title,
         dek: article.dek,
@@ -1108,11 +1036,6 @@ export const translateArticleAction = internalAction({
       },
     })
     if (!result) return { translated: false }
-    const sourceHash = articleSourceHash({
-      title: article.title,
-      dek: article.dek,
-      body: article.body,
-    })
     await ctx.runMutation(internal.articles.setTranslation, {
       articleId,
       lang,
@@ -1128,25 +1051,11 @@ export const translateArticleAction = internalAction({
   },
 })
 
-// Editor-triggered single-article translation (e.g. from the queue
-// editor). Wraps the internal action behind an auth check.
-export const translateArticleNow = action({
-  args: { articleId: v.id("articles") },
-  handler: async (ctx, { articleId }): Promise<{ translated: boolean }> => {
-    // Auth check — the action runs LLM calls so we don't want it
-    // hammered by anonymous traffic.
-    await ctx.runQuery(api.me.current, {})
-    return await ctx.runAction(internal.articles.translateArticleAction, {
-      articleId,
-      lang: "es",
-    })
-  },
-})
-
-// Drain the backlog. Defaults to 10 articles per call so cost is
-// predictable; the editor's "Translate backlog" button on the dashboard
-// re-clicks until everything is current.
-export const bulkTranslate = action({
+// Cron-fired backlog drain. No editor UI — translation must always
+// happen automatically. Catches rows where the on-publish scheduler
+// failed (transient network error, daily budget cap, app restart).
+// Idempotent via sourceHash short-circuit.
+export const bulkTranslateInternal = internalAction({
   args: { maxArticles: v.optional(v.number()) },
   handler: async (
     ctx,
@@ -1156,7 +1065,6 @@ export const bulkTranslate = action({
     translated: number
     errors: number
   }> => {
-    await ctx.runQuery(api.me.current, {})
     const cap = maxArticles ?? 10
     const stale = await ctx.runQuery(api.articles.needingTranslation, {
       limit: cap,
@@ -1183,19 +1091,16 @@ export const bulkTranslate = action({
 export const publish = mutation({
   args: { id: v.id("articles") },
   handler: async (ctx, { id }) => {
-    const editorEmail = await requireEditor(ctx)
+    await requireEditor(ctx)
     const existing = await ctx.db.get(id)
     if (!existing) return
     await ctx.db.patch(id, {
       status: "published",
       publishedAt: existing.publishedAt ?? Date.now(),
     })
-    await logStatusChange(ctx, id, existing.status, "published", editorEmail)
-    // Auto-translate on publish so the ES copy is ready when the next
-    // ES-language reader hits the page. Scheduled (not awaited) so the
-    // editor's publish click stays snappy.
+    // Auto-translate on publish (60s debounce + sourceHash short-circuit).
     await ctx.scheduler.runAfter(
-      0,
+      60_000,
       internal.articles.translateArticleAction,
       { articleId: id, lang: "es" },
     )
@@ -1205,21 +1110,377 @@ export const publish = mutation({
 export const unpublish = mutation({
   args: { id: v.id("articles") },
   handler: async (ctx, { id }) => {
-    const editorEmail = await requireEditor(ctx)
-    const existing = await ctx.db.get(id)
-    if (!existing) return
+    await requireEditor(ctx)
     await ctx.db.patch(id, { status: "archived" })
-    await logStatusChange(ctx, id, existing.status, "archived", editorEmail)
   },
 })
 
 export const reject = mutation({
   args: { id: v.id("articles") },
   handler: async (ctx, { id }) => {
-    const editorEmail = await requireEditor(ctx)
-    const existing = await ctx.db.get(id)
-    if (!existing) return
+    await requireEditor(ctx)
     await ctx.db.patch(id, { status: "rejected" })
-    await logStatusChange(ctx, id, existing.status, "rejected", editorEmail)
+  },
+})
+
+// =====================================================================
+// Post-publish merge sweep. Runs every few hours via cron. Finds
+// recently-published article pairs that share enough surface signal
+// (citation URLs + title-token overlap), then asks Haiku to verify
+// they're actually the same news event before auto-merging. The
+// in-run dedup mechanism (LLM `updateOfRelatedIndex`) handles
+// same-batch duplicates; this sweep handles the across-batch case
+// where two desks (or two runs) drafted the same story hours apart.
+//
+// Merge policy is cite-only — winner keeps its title/dek/body, just
+// absorbs the loser's citations + derivedFromItems + tags +
+// neighborhoods + relatedArticleIds. Loser is archived with
+// `mergedIntoId` set + its slug pushed to the winner's
+// `previousSlugs` so old URLs keep resolving.
+// =====================================================================
+
+// 7 days. The window has to cover the worst-case "system was down for
+// the weekend" scenario — otherwise a stale prod with the cross-section
+// duplicate we want to merge sits forever. Work is bounded by a fixed
+// 80-article fetch limit regardless of window.
+const MERGE_LOOKBACK_HOURS = 24 * 7
+// Lower floor lets Haiku adjudicate looser pairs — the cross-section
+// case (e.g. same incident filed under News + Nature) needs the
+// permissive pre-filter because shared citation URLs are usually 0.
+const MERGE_TITLE_TOKEN_OVERLAP_MIN = 0.3
+const MERGE_CITATION_OVERLAP_MIN = 2
+const VERIFY_MODEL = "claude-haiku-4-5-20251001"
+
+// Common English filler words — stripping them stops generic words
+// like "in"/"the"/"and"/"for"/"with" from inflating Jaccard overlap
+// between unrelated headlines and crowding out the actual signal
+// tokens (people, places, verbs).
+const STOP_WORDS = new Set([
+  "the",
+  "and",
+  "for",
+  "with",
+  "from",
+  "into",
+  "onto",
+  "after",
+  "over",
+  "this",
+  "that",
+  "but",
+  "not",
+  "are",
+  "was",
+  "will",
+  "have",
+  "has",
+  "had",
+  "you",
+  "your",
+  "its",
+])
+
+function tokenize(s: string): Set<string> {
+  return new Set(
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9 ]+/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length >= 3 && !STOP_WORDS.has(w)),
+  )
+}
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0
+  let inter = 0
+  for (const t of a) if (b.has(t)) inter += 1
+  return inter / (a.size + b.size - inter)
+}
+
+export const recordMerge = internalMutation({
+  args: {
+    winnerId: v.id("articles"),
+    loserId: v.id("articles"),
+    reason: v.string(),
+  },
+  handler: async (ctx, { winnerId, loserId, reason }) => {
+    const winner = await ctx.db.get(winnerId)
+    const loser = await ctx.db.get(loserId)
+    if (!winner || !loser) return { ok: false }
+    if (winner._id === loser._id) return { ok: false }
+
+    // Union citations (dedup by URL).
+    const seenUrls = new Set(winner.citations.map((c) => c.url))
+    const mergedCitations = [...winner.citations]
+    for (const c of loser.citations) {
+      if (seenUrls.has(c.url)) continue
+      seenUrls.add(c.url)
+      mergedCitations.push(c)
+    }
+
+    // Union derivedFromItems.
+    const winnerItems = new Set(
+      (winner.derivedFromItems ?? []).map((id) => id as string),
+    )
+    const mergedItems = [...(winner.derivedFromItems ?? [])]
+    for (const id of loser.derivedFromItems ?? []) {
+      if (winnerItems.has(id)) continue
+      winnerItems.add(id)
+      mergedItems.push(id)
+    }
+
+    // Union tags + neighborhoods.
+    const tagSet = new Set([...winner.tags, ...loser.tags])
+    const hoodSet = new Set([
+      ...(winner.neighborhoods ?? []),
+      ...(loser.neighborhoods ?? []),
+    ])
+
+    // Union relatedArticleIds (drop the loser if it's in there).
+    const winnerRelated = new Set(
+      (winner.relatedArticleIds ?? []).map((id) => id as string),
+    )
+    for (const id of loser.relatedArticleIds ?? []) {
+      if ((id as string) === (loser._id as string)) continue
+      winnerRelated.add(id)
+    }
+    winnerRelated.delete(winner._id)
+    winnerRelated.delete(loser._id)
+
+    // Push loser's slug into winner's previousSlugs.
+    const previousSlugs = new Set([
+      ...(winner.previousSlugs ?? []),
+      ...(loser.previousSlugs ?? []),
+      loser.slug,
+    ])
+    previousSlugs.delete(winner.slug)
+
+    await ctx.db.patch(winner._id, {
+      citations: mergedCitations,
+      derivedFromItems: mergedItems,
+      tags: Array.from(tagSet),
+      neighborhoods: Array.from(hoodSet),
+      relatedArticleIds: Array.from(winnerRelated).map(
+        (id) => id as Id<"articles">,
+      ),
+      previousSlugs: Array.from(previousSlugs),
+    })
+    await ctx.db.patch(loser._id, {
+      status: "archived",
+      mergedIntoId: winner._id,
+      mergedAt: Date.now(),
+    })
+    return { ok: true, reason }
+  },
+})
+
+// Recent merges for the dashboard's Self-healing card. Returns up to
+// `limit` losers (status=archived, mergedIntoId set), each hydrated
+// with its winner's title so the editor can see "loser → winner" at a
+// glance. Bounded scan; no separate index needed at v1 volume.
+export const recentMerges = query({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, { limit }) => {
+    const cap = limit ?? 6
+    const candidates = await ctx.db.query("articles").order("desc").take(200)
+    const merges = candidates
+      .filter((a) => a.mergedIntoId && a.mergedAt)
+      .sort((a, b) => (b.mergedAt ?? 0) - (a.mergedAt ?? 0))
+      .slice(0, cap)
+    return await Promise.all(
+      merges.map(async (loser) => {
+        const winner = loser.mergedIntoId
+          ? await ctx.db.get(loser.mergedIntoId)
+          : null
+        return {
+          _id: loser._id,
+          loserTitle: loser.title,
+          winnerTitle: winner?.title ?? null,
+          winnerSlug: winner?.slug ?? null,
+          mergedAt: loser.mergedAt ?? 0,
+        }
+      }),
+    )
+  },
+})
+
+// Total count of articles that have been merged away — the cumulative
+// "this many duplicate stories were absorbed" number for the
+// dashboard. Bounded scan; bump if volume grows.
+export const mergedCount = query({
+  args: {},
+  handler: async (ctx) => {
+    const all = await ctx.db.query("articles").take(2000)
+    let merged = 0
+    let last7d = 0
+    const weekAgo = Date.now() - 7 * 24 * 3_600_000
+    for (const a of all) {
+      if (!a.mergedIntoId) continue
+      merged += 1
+      if ((a.mergedAt ?? 0) >= weekAgo) last7d += 1
+    }
+    return { total: merged, last7d }
+  },
+})
+
+export const mergeSweep = internalAction({
+  args: {},
+  handler: async (
+    ctx,
+  ): Promise<{
+    scanned: number
+    candidates: number
+    verified: number
+    merged: number
+    notes: Array<string>
+  }> => {
+    const since = Date.now() - MERGE_LOOKBACK_HOURS * 3_600_000
+    const recent = await ctx.runQuery(api.articles.publishedRecentForMerge, {
+      sinceMs: since,
+      limit: 80,
+    })
+    const notes: Array<string> = []
+
+    // Pre-filter: pairs with citation OR title overlap above threshold.
+    type Candidate = { a: typeof recent[number]; b: typeof recent[number] }
+    const candidates: Array<Candidate> = []
+    for (let i = 0; i < recent.length; i += 1) {
+      const a = recent[i]
+      if (a.mergedIntoId) continue
+      const aTokens = tokenize(`${a.title} ${a.dek}`)
+      const aUrls = new Set(a.citations.map((c) => c.url))
+      for (let j = i + 1; j < recent.length; j += 1) {
+        const b = recent[j]
+        if (b.mergedIntoId) continue
+        // Cross-section pairs are allowed — the gator-shooting case
+        // (Nature + News filing the same incident) needs the merge
+        // sweep to consider pairs across sections. Haiku verification
+        // is the gate on false positives.
+        const bTokens = tokenize(`${b.title} ${b.dek}`)
+        const bUrls = new Set(b.citations.map((c) => c.url))
+        let urlOverlap = 0
+        for (const u of aUrls) if (bUrls.has(u)) urlOverlap += 1
+        const titleOverlap = jaccard(aTokens, bTokens)
+        if (
+          urlOverlap >= MERGE_CITATION_OVERLAP_MIN ||
+          titleOverlap >= MERGE_TITLE_TOKEN_OVERLAP_MIN
+        ) {
+          candidates.push({ a, b })
+        }
+      }
+    }
+
+    // LLM verification + merge for verified pairs. Mark merged loser
+    // ids so we don't re-merge them inside this same run.
+    const mergedLoserIds = new Set<string>()
+    let verified = 0
+    let merged = 0
+    for (const { a, b } of candidates) {
+      if (mergedLoserIds.has(a._id)) continue
+      if (mergedLoserIds.has(b._id)) continue
+      // Budget gate — verifications are cheap (~1¢) but still booked.
+      const reservation = await ctx.runMutation(internal.budget.reserve, {
+        estimatedCents: estimatedCallCents(VERIFY_MODEL),
+        label: "mergeVerify",
+      })
+      if (!reservation.allowed) {
+        notes.push(`budget cap hit at ${verified} verifications`)
+        break
+      }
+      const result = await verifyMerge({
+        model: VERIFY_MODEL,
+        a: { title: a.title, dek: a.dek, body: a.body },
+        b: { title: b.title, dek: b.dek, body: b.body },
+      })
+      verified += 1
+      if (!result || !result.sameStory) {
+        notes.push(
+          `kept distinct: "${a.title.slice(0, 40)}" / "${b.title.slice(0, 40)}" — ${result?.reason ?? "no verdict"}`,
+        )
+        continue
+      }
+      // Pick winner: most citations, fall back to most-recent.
+      const aCount = a.citations.length
+      const bCount = b.citations.length
+      const winner =
+        aCount === bCount
+          ? (a.publishedAt ?? a.createdAt) >=
+            (b.publishedAt ?? b.createdAt)
+            ? a
+            : b
+          : aCount > bCount
+            ? a
+            : b
+      const loser = winner._id === a._id ? b : a
+      const r = await ctx.runMutation(internal.articles.recordMerge, {
+        winnerId: winner._id,
+        loserId: loser._id,
+        reason: result.reason,
+      })
+      if (r.ok) {
+        merged += 1
+        mergedLoserIds.add(loser._id)
+        notes.push(
+          `merged "${loser.title.slice(0, 40)}" into "${winner.title.slice(0, 40)}" — ${result.reason}`,
+        )
+      }
+    }
+
+    return {
+      scanned: recent.length,
+      candidates: candidates.length,
+      verified,
+      merged,
+      notes,
+    }
+  },
+})
+
+// Internal query — pulls recently-published articles for the merge
+// sweep with just the fields the sweep needs (citation URLs, body for
+// LLM verification, slug for redirects).
+export const publishedRecentForMerge = query({
+  args: { sinceMs: v.number(), limit: v.number() },
+  handler: async (ctx, { sinceMs, limit }) => {
+    const all = await ctx.db
+      .query("articles")
+      .withIndex("by_status_published", (q) => q.eq("status", "published"))
+      .order("desc")
+      .take(limit * 2)
+    return all
+      .filter((a) => (a.publishedAt ?? a.createdAt) >= sinceMs)
+      .slice(0, limit)
+  },
+})
+
+// Diagnostic for the merge sweep — when `mergeSweep` returns scanned=0
+// you usually want to know whether the deployment has any published
+// articles at all, when the most recent was, and what the oldest in
+// the merge window looks like. Run via `npx convex run articles:diagnoseMerge --prod`.
+export const diagnoseMerge = query({
+  args: {},
+  handler: async (ctx) => {
+    const sample = await ctx.db
+      .query("articles")
+      .withIndex("by_status_published", (q) => q.eq("status", "published"))
+      .order("desc")
+      .take(20)
+    const now = Date.now()
+    const newest = sample[0]
+    const oldest = sample[sample.length - 1]
+    return {
+      publishedSampleSize: sample.length,
+      newestPublishedAt: newest?.publishedAt
+        ? new Date(newest.publishedAt).toISOString()
+        : null,
+      newestAgeHours: newest?.publishedAt
+        ? Math.round((now - newest.publishedAt) / 3_600_000)
+        : null,
+      newestTitle: newest?.title ?? null,
+      oldestPublishedAt: oldest?.publishedAt
+        ? new Date(oldest.publishedAt).toISOString()
+        : null,
+      now: new Date(now).toISOString(),
+    }
   },
 })

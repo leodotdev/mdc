@@ -9,7 +9,16 @@ export type RawItem = {
 }
 
 export type SourceForAdapter = {
-  type: "rss" | "reddit" | "youtube" | "x" | "web" | "wikipedia-otd"
+  type:
+    | "rss"
+    | "reddit"
+    | "youtube"
+    | "x"
+    | "bluesky"
+    | "web"
+    | "wikipedia-otd"
+    | "ics"
+    | "data"
   url: string
   config?: unknown
 }

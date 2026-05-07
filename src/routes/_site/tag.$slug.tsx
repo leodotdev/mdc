@@ -5,12 +5,13 @@ import { Link, createFileRoute } from "@tanstack/react-router"
 import { api } from "../../../convex/_generated/api"
 import { BlockSeparator } from "@/components/editorial/block-separator"
 import { HeroSplit } from "@/components/editorial/hero-split"
-import { MostReadStrip } from "@/components/editorial/most-read-strip"
+import { TrendingStrip } from "@/components/editorial/trending-strip"
 import { PageHeader } from "@/components/editorial/page-header"
 import { SectionHeaderCell } from "@/components/editorial/section-header-cell"
 import { SidebarRail } from "@/components/editorial/sidebar-rail"
 import { StoryItem } from "@/components/editorial/story-item"
 import { XlRowList } from "@/components/editorial/xl-row-list"
+import { BannerAd } from "@/components/site/banner-ad"
 import { convexSuspenseQuery } from "@/lib/convex-suspense"
 
 function humanize(slug: string): string {
@@ -60,7 +61,7 @@ function TagPage() {
     .slice(0, 12)
 
   return (
-    <div className="space-y-10">
+    <div className="flex flex-col gap-10">
       <PageHeader
         kicker={`Tag · ${slug}`}
         title={`#${humanize(slug).toLowerCase()}`}
@@ -92,8 +93,8 @@ function TagPage() {
           </div>
 
           <SidebarRail className="lg:col-span-3">
-            <MostReadStrip
-              label={`Most Read · #${slug}`}
+            <TrendingStrip
+              label={`Trending · #${slug}`}
               articles={data}
             />
             {coTags.length > 0 ? (
@@ -120,6 +121,8 @@ function TagPage() {
         </section>
       )}
 
+      <BannerAd slot={`tag-${slug}-mid`} className="pt-4" />
+
       {longTail.length > 0 ? (
         <section className="pt-10">
           <SectionHeaderCell
@@ -141,6 +144,8 @@ function TagPage() {
           </div>
         </section>
       ) : null}
+
+      <BannerAd slot={`tag-${slug}-bottom`} className="pt-6" />
     </div>
   )
 }

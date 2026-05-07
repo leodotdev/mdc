@@ -2,6 +2,7 @@ import { ExternalLink } from "lucide-react"
 
 import type { Citation } from "@/lib/article-types"
 import { formatLongDate } from "@/lib/dates"
+import { decodeEntities } from "@/lib/decode-entities"
 
 function hostname(url: string): string {
   try {
@@ -69,7 +70,7 @@ export function SourcesBlock({ citations }: { citations: Array<Citation> }) {
 
             {/* Middle: source headline — clamps to keep card height fixed */}
             <p className="font-heading text-sm leading-tight font-semibold line-clamp-5">
-              {c.title}
+              {decodeEntities(c.title)}
             </p>
 
             {/* Bottom: fetched date */}

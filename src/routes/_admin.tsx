@@ -11,6 +11,7 @@ import { LogOut } from "lucide-react"
 import { useEffect } from "react"
 
 import { api } from "../../convex/_generated/api"
+import { ThemeSwitcher } from "@/components/site/theme-switcher"
 import { Button } from "@/components/ui/button"
 import { useTranslation } from "@/lib/i18n/context"
 
@@ -53,17 +54,17 @@ function AdminLayout() {
 
   const navItems = [
     { to: "/admin", label: "Dashboard" },
-    { to: "/admin/queue", label: "Queue" },
     { to: "/admin/published", label: "Published" },
     { to: "/admin/events", label: "Events" },
     { to: "/admin/sources", label: "Sources" },
     { to: "/admin/agents", label: "Agents" },
+    { to: "/admin/runs", label: "Runs" },
   ] as const
 
   return (
     <div className="flex min-h-dvh flex-col bg-background">
       <header className="border-b">
-        <div className="container-page flex items-center justify-between gap-4 py-3">
+        <div className="flex w-full items-center justify-between gap-4 px-6 py-3">
           <Link to="/admin" className="flex items-baseline gap-2">
             <span className="font-brand text-2xl leading-none">
               {t("brand.name")}
@@ -85,6 +86,7 @@ function AdminLayout() {
             ))}
           </nav>
           <div className="flex items-center gap-3">
+            <ThemeSwitcher />
             <Button
               variant="ghost"
               size="sm"
@@ -97,7 +99,7 @@ function AdminLayout() {
             </Button>
           </div>
         </div>
-        <nav className="container-page flex gap-3 pb-2 md:hidden">
+        <nav className="flex w-full gap-3 px-6 pb-2 md:hidden">
           {navItems.map((n) => (
             <Link
               key={n.to}
@@ -110,7 +112,7 @@ function AdminLayout() {
           ))}
         </nav>
       </header>
-      <main className="container-page flex-1 py-8">
+      <main className="w-full flex-1 px-6 py-8">
         <Outlet />
       </main>
     </div>

@@ -18,6 +18,13 @@ export const getBySlug = query({
   },
 })
 
+export const getById = query({
+  args: { id: v.id("sections") },
+  handler: async (ctx, { id }) => {
+    return await ctx.db.get(id)
+  },
+})
+
 export const upsert = mutation({
   args: {
     slug: v.string(),

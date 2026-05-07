@@ -1,6 +1,11 @@
+// Hero resolution outcome. Unsplash was removed as an auto-fallback
+// (stock photos read as confusing on hyperlocal coverage); the
+// fallback chain is now: source page OG/Twitter image → Wikimedia
+// Commons (place / landmark / public-figure photos) → none. Stories
+// and events without a hero render fine — better empty than wrong.
 export type HeroResolution =
   | { source: "source"; url: string; caption?: string }
-  | { source: "unsplash"; url: string; caption: string }
+  | { source: "wikimedia"; url: string; caption: string }
   | { source: "none" }
 
 function metaContent(html: string, prop: string): string | undefined {
@@ -29,37 +34,6 @@ async function extractOgImage(url: string): Promise<string | undefined> {
   }
 }
 
-async function searchUnsplash(
-  query: string,
-): Promise<{ url: string; caption: string } | undefined> {
-  const key = process.env.UNSPLASH_ACCESS_KEY
-  if (!key) return undefined
-  try {
-    const url = `https://api.unsplash.com/search/photos?query=${encodeURIComponent(
-      query,
-    )}&per_page=1&orientation=landscape&content_filter=high`
-    const res = await fetch(url, {
-      headers: { Authorization: `Client-ID ${key}` },
-    })
-    if (!res.ok) return undefined
-    const json = (await res.json()) as {
-      results?: Array<{
-        urls?: { regular?: string }
-        user?: { name?: string; links?: { html?: string } }
-      }>
-    }
-    const first = json.results?.[0]
-    if (!first?.urls?.regular) return undefined
-    const photographer = first.user?.name ?? "Unsplash"
-    return {
-      url: first.urls.regular,
-      caption: `Photo: ${photographer} / Unsplash`,
-    }
-  } catch {
-    return undefined
-  }
-}
-
 export async function resolveHero(
   citationUrls: Array<string>,
   fallbackQuery: string,
@@ -68,12 +42,16 @@ export async function resolveHero(
     const og = await extractOgImage(url)
     if (og) return { source: "source", url: og }
   }
-  const unsplash = await searchUnsplash(fallbackQuery)
-  if (unsplash) {
+  // Wikimedia Commons fallback — public-domain / CC-licensed photos
+  // of civic landmarks, places, public figures, museums. Higher signal
+  // than stock photography for the kind of stories this paper covers.
+  const wm = await searchWikimediaMany(fallbackQuery, 1)
+  const first = wm[0]
+  if (first?.url) {
     return {
-      source: "unsplash",
-      url: unsplash.url,
-      caption: unsplash.caption,
+      source: "wikimedia",
+      url: first.url,
+      caption: first.caption ?? "Photo: Wikimedia Commons",
     }
   }
   return { source: "none" }
@@ -95,17 +73,15 @@ export async function resolveHero(
 
 export type HeroCandidate = {
   url: string
-  source: "source" | "unsplash" | "wikimedia"
+  source: "source" | "wikimedia"
   caption?: string
-  /** Display label — e.g. "miamiherald.com" or "Photo: Jane Doe / Unsplash". */
+  /** Display label — e.g. "miamiherald.com" or "Wikimedia · Jane Doe". */
   label: string
 }
 
 export type HeroFinderDiagnostics = {
   sourcesScanned: number
   sourcesWithImage: number
-  unsplashEnabled: boolean
-  unsplashCount: number
   wikimediaCount: number
   totalCandidates: number
 }
@@ -164,48 +140,10 @@ async function extractImagesFromPage(url: string): Promise<Array<string>> {
   }
 }
 
-async function searchUnsplashMany(
-  query: string,
-  count: number,
-): Promise<Array<HeroCandidate>> {
-  const key = process.env.UNSPLASH_ACCESS_KEY
-  if (!key) return []
-  try {
-    const url = `https://api.unsplash.com/search/photos?query=${encodeURIComponent(
-      query,
-    )}&per_page=${Math.min(count, 12)}&orientation=landscape&content_filter=high`
-    const res = await fetch(url, {
-      headers: { Authorization: `Client-ID ${key}` },
-    })
-    if (!res.ok) return []
-    const json = (await res.json()) as {
-      results?: Array<{
-        urls?: { regular?: string }
-        user?: { name?: string }
-      }>
-    }
-    return (json.results ?? [])
-      .map((r) => {
-        if (!r.urls?.regular) return null
-        const photographer = r.user?.name ?? "Unsplash"
-        const c: HeroCandidate = {
-          url: r.urls.regular,
-          source: "unsplash",
-          caption: `Photo: ${photographer} / Unsplash`,
-          label: `Unsplash · ${photographer}`,
-        }
-        return c
-      })
-      .filter((c): c is HeroCandidate => c !== null)
-  } catch {
-    return []
-  }
-}
-
-// Wikimedia Commons is a no-key fallback — useful when Unsplash returns
-// nothing and the source pages block bots. It indexes a large pool of
-// public-domain / CC-licensed photos, including local civic + political
-// imagery that newspaper-style stories often need.
+// Wikimedia Commons fallback — no key required. Indexes a large pool
+// of public-domain / CC-licensed photos, especially strong for local
+// civic, political, landmark, and museum imagery — the kind of subject
+// matter newspaper-style stories tend to need.
 async function searchWikimediaMany(
   query: string,
   count: number,
@@ -276,6 +214,29 @@ async function searchWikimediaMany(
   }
 }
 
+// Extract a YouTube video ID from a URL (youtube.com/watch?v=ID or youtu.be/ID).
+// Returns the ID or null when not a YouTube URL.
+function youtubeId(url: string): string | null {
+  try {
+    const u = new URL(url)
+    if (u.hostname.endsWith("youtube.com") || u.hostname.endsWith("youtu.be")) {
+      if (u.hostname.endsWith("youtu.be")) {
+        return u.pathname.slice(1).split("/")[0] || null
+      }
+      const v = u.searchParams.get("v")
+      if (v) return v
+      // /shorts/ID, /embed/ID
+      const segs = u.pathname.split("/").filter(Boolean)
+      if (segs.length >= 2 && (segs[0] === "shorts" || segs[0] === "embed")) {
+        return segs[1] || null
+      }
+    }
+  } catch {
+    // fall through
+  }
+  return null
+}
+
 export async function findHeroCandidates(opts: {
   citationUrls: Array<string>
   fallbackQuery: string
@@ -312,49 +273,48 @@ export async function findHeroCandidates(opts: {
     }
   }
 
-  // 2. Unsplash and Wikimedia in parallel — first attempt uses the
-  // narrow tags-and-section query the caller passed in. If that returns
-  // zero from a service, retry it with a one-word broadening (the last
-  // word of the query, usually the section name) which is far more
-  // likely to have hits. "Miami" as the absolute last resort.
+  // 1.5. YouTube thumbnails — when a citation URL is a YouTube video,
+  // grab the high-res thumbnail (no API call required). Cheap and very
+  // reliable; a great hero source for entertainment / music desks.
+  for (const url of sourceUrls) {
+    const ytId = youtubeId(url)
+    if (!ytId) continue
+    const thumb = `https://i.ytimg.com/vi/${ytId}/maxresdefault.jpg`
+    if (seen.has(thumb)) continue
+    seen.add(thumb)
+    ogCandidates.push({
+      url: thumb,
+      source: "source",
+      label: "YouTube",
+      caption: `Image: youtube.com`,
+    })
+  }
+
+  // 2. Wikimedia Commons fallback — first attempt uses the narrow
+  // tags-and-section query the caller passed in. If that returns zero,
+  // retry with a one-word broadening (last word, usually the section
+  // name) which is far more likely to hit. "Miami" as the absolute
+  // last resort.
   const lastWord =
     opts.fallbackQuery.split(/\s+/).filter(Boolean).slice(-1)[0] ?? "Miami"
-  const [unsplash, wikimedia] = await Promise.all([
-    (async () => {
-      const first = await searchUnsplashMany(opts.fallbackQuery, 6)
-      if (first.length > 0) return first
-      return await searchUnsplashMany(lastWord, 6)
-    })(),
-    (async () => {
-      const first = await searchWikimediaMany(opts.fallbackQuery, 6)
-      if (first.length > 0) return first
-      return await searchWikimediaMany(lastWord, 6)
-    })(),
-  ])
-  const unsplashCandidates = unsplash.filter((c) => {
-    if (seen.has(c.url)) return false
-    seen.add(c.url)
-    return true
-  })
+  const wikimedia = await (async () => {
+    const first = await searchWikimediaMany(opts.fallbackQuery, 8)
+    if (first.length > 0) return first
+    return await searchWikimediaMany(lastWord, 8)
+  })()
   const wikimediaCandidates = wikimedia.filter((c) => {
     if (seen.has(c.url)) return false
     seen.add(c.url)
     return true
   })
 
-  const candidates = [
-    ...ogCandidates,
-    ...unsplashCandidates,
-    ...wikimediaCandidates,
-  ]
+  const candidates = [...ogCandidates, ...wikimediaCandidates]
 
   return {
     candidates,
     diagnostics: {
       sourcesScanned: sourceUrls.length,
       sourcesWithImage,
-      unsplashEnabled: !!process.env.UNSPLASH_ACCESS_KEY,
-      unsplashCount: unsplashCandidates.length,
       wikimediaCount: wikimediaCandidates.length,
       totalCandidates: candidates.length,
     },

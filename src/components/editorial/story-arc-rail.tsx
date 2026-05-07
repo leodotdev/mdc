@@ -2,8 +2,8 @@ import { convexQuery } from "@convex-dev/react-query"
 import { useQuery } from "@tanstack/react-query"
 
 import { api } from "../../../convex/_generated/api"
-import type { Id } from "../../../convex/_generated/dataModel"
 import { StoryItem } from "./story-item"
+import type { Id } from "../../../convex/_generated/dataModel"
 
 // Renders the "Story arc" treatment when an article belongs to a cluster of
 // related stories. Shows the arc's other members in chronological order so
@@ -33,7 +33,7 @@ export function StoryArcRail({
             {data.arc.title}
           </h2>
         </div>
-        <span className="meta uppercase tracking-wider text-xs">
+        <span className="meta text-xs">
           {others.length + 1}{" "}
           {others.length + 1 === 1 ? "story" : "stories"} · in order
         </span>

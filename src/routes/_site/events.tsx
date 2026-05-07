@@ -1,128 +1,76 @@
 import { convexQuery } from "@convex-dev/react-query"
-import { keepPreviousData, useQuery, useSuspenseQuery } from "@tanstack/react-query"
-import { Link, createFileRoute } from "@tanstack/react-router"
-import { ChevronLeft, ChevronRight } from "lucide-react"
-import { useCallback, useRef, useState } from "react"
+import { keepPreviousData, useQuery } from "@tanstack/react-query"
+import { Link, createFileRoute, useNavigate } from "@tanstack/react-router"
 
 import { api } from "../../../convex/_generated/api"
+import type {EventRange} from "@/lib/event-helpers";
 import { CalendarList } from "@/components/events/calendar-list"
-import { CalendarMonth } from "@/components/events/calendar-month"
-import { CalendarWeek } from "@/components/events/calendar-week"
-import { EventListItem } from "@/components/events/event-list-item"
+import { CalendarMap } from "@/components/events/calendar-map"
 import { HappeningNowStrip } from "@/components/events/happening-now-strip"
 import { PageHeader } from "@/components/editorial/page-header"
-import { SectionHeaderCell } from "@/components/editorial/section-header-cell"
-import { StoryItem } from "@/components/editorial/story-item"
-import { Button } from "@/components/ui/button"
-import { convexSuspenseQuery } from "@/lib/convex-suspense"
+import { BannerAd } from "@/components/site/banner-ad"
 import {
-  addWeeksUTC,
-  dayKey,
-  formatEventDate,
-  monthLabel,
-  startOfMonth,
-  startOfNextMonth,
-  startOfWeekUTC,
+  
+  bucketEventsByDay,
+  formatRangeLabel,
+  rangeForDay,
+  rangeWindow
 } from "@/lib/event-helpers"
 import { useTranslation } from "@/lib/i18n/context"
-import {
-  EVENT_KINDS,
-  isEventKind,
-} from "../../../convex/lib/eventKinds"
-import type { EventKindSlug } from "../../../convex/lib/eventKinds"
-import { cn } from "@/lib/utils"
 
-type CalendarView = "week" | "list" | "month"
+const SLUG_PATTERN = /^[a-z0-9-]+$/
+const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+const RANGE_VALUES = new Set<EventRange>(["today", "weekend", "nextWeekend"])
 
 type EventsSearch = {
-  view?: CalendarView
-  year?: number
-  month?: number
-  kind?: EventKindSlug
-}
-
-// Initial week-view range — pre-load this many weeks behind + ahead of
-// today's week so the user can scroll a bit each direction before
-// triggering a network round-trip via the sentinel observers.
-const INITIAL_WEEKS_BEHIND = 4
-const INITIAL_WEEKS_AHEAD = 8
-const WEEKS_LOAD_INCREMENT = 4
-
-function todayWeekStart(): number {
-  return startOfWeekUTC(Date.now())
+  range?: EventRange
+  /** Set by the subnav chevrons or the Today datepicker (single-day or
+   *  range-start). Takes precedence over `range`. */
+  day?: string
+  /** Set when the Today dropdown's range mode picks a (start, end) pair.
+   *  When present, the window is [day, until] (inclusive); otherwise it
+   *  collapses to a single-day window. */
+  until?: string
+  view?: "map"
+  /** Top-level section slugs to filter the feed to. Multi-select. */
+  sections?: Array<string>
 }
 
 export const Route = createFileRoute("/_site/events")({
   validateSearch: (search: Record<string, unknown>): EventsSearch => {
-    const now = new Date()
-    const yearRaw = Number(search.year)
-    const monthRaw = Number(search.month)
-    const kindRaw =
-      typeof search.kind === "string" && isEventKind(search.kind)
-        ? search.kind
-        : undefined
-    const viewRaw: CalendarView =
-      search.view === "month"
-        ? "month"
-        : search.view === "list"
-          ? "list"
-          : "week"
-    return {
-      view: viewRaw,
-      year:
-        Number.isFinite(yearRaw) && yearRaw > 2020 && yearRaw < 2100
-          ? yearRaw
-          : now.getFullYear(),
-      month:
-        Number.isFinite(monthRaw) && monthRaw >= 1 && monthRaw <= 12
-          ? monthRaw
-          : now.getMonth() + 1,
-      kind: kindRaw,
-    }
-  },
-  loaderDeps: ({ search }) => ({
-    view: search.view ?? "week",
-    year: search.year,
-    month: search.month,
-    kind: search.kind,
-  }),
-  loader: async ({ context, deps }) => {
-    const now = new Date()
-    const year = deps.year ?? now.getFullYear()
-    const month = deps.month ?? now.getMonth() + 1
-    const view = deps.view
-    // For week view, pre-fetch the initial scroll window. For month view,
-    // pre-fetch the requested calendar month.
     const range =
-      view === "week"
-        ? {
-            rangeStart: addWeeksUTC(
-              todayWeekStart(),
-              -INITIAL_WEEKS_BEHIND,
-            ),
-            rangeEnd: addWeeksUTC(
-              todayWeekStart(),
-              INITIAL_WEEKS_AHEAD + 1,
-            ),
-          }
-        : {
-            rangeStart: startOfMonth(year, month),
-            rangeEnd: startOfNextMonth(year, month),
-          }
-    await Promise.all([
-      context.queryClient.ensureQueryData(
-        convexQuery(api.events.inRange, {
-          ...range,
-          kind: deps.kind,
-        }),
-      ),
-      context.queryClient.ensureQueryData(
-        convexQuery(api.articles.listBySection, {
-          sectionSlug: "things-to-do",
-          paginationOpts: { numItems: 12, cursor: null },
-        }),
-      ),
-    ])
+      typeof search.range === "string" && RANGE_VALUES.has(search.range as EventRange)
+        ? (search.range as EventRange)
+        : undefined
+    const day =
+      typeof search.day === "string" && DAY_PATTERN.test(search.day)
+        ? search.day
+        : undefined
+    const until =
+      typeof search.until === "string" && DAY_PATTERN.test(search.until)
+        ? search.until
+        : undefined
+    const view = search.view === "map" ? "map" : undefined
+    let sections: Array<string> | undefined
+    const raw = search.sections
+    if (typeof raw === "string" && raw.length > 0) {
+      sections = raw.split(",").filter((s) => SLUG_PATTERN.test(s))
+    } else if (Array.isArray(raw)) {
+      sections = raw.filter(
+        (s): s is string => typeof s === "string" && SLUG_PATTERN.test(s),
+      )
+    }
+    if (sections && sections.length === 0) sections = undefined
+    return { range, day, until, view, sections }
+  },
+  loader: async ({ context }) => {
+    // Pre-warm "today" so the page paints immediately. Other ranges
+    // refetch on the client when their chip is clicked — they're each a
+    // small windowed query so the cost is bounded.
+    const { startMs, endMs } = rangeWindow("today")
+    await context.queryClient.ensureQueryData(
+      convexQuery(api.events.inRange, { rangeStart: startMs, rangeEnd: endMs }),
+    )
   },
   head: () => ({
     meta: [{ title: "Events · miami.community" }],
@@ -131,449 +79,194 @@ export const Route = createFileRoute("/_site/events")({
 })
 
 function EventsPage() {
-  const { t } = useTranslation()
   const search = Route.useSearch()
-  const view: CalendarView = search.view ?? "week"
-  const now = new Date()
-  const year = search.year ?? now.getFullYear()
-  const month = search.month ?? now.getMonth() + 1
+  const { t } = useTranslation()
+
+  // Resolve the active window. Day (chevron-stepped) wins; otherwise the
+  // explicit range; otherwise today.
+  const activeRange: EventRange | null = search.range
+    ? search.range
+    : rangeForDay(search.day) ?? (search.day ? null : "today")
+
+  const window = (() => {
+    if (search.day && search.until) {
+      // Range mode — inclusive end; bump by one day so the
+      // `inRange` query covers the whole final day.
+      const startMs = new Date(`${search.day}T00:00:00Z`).getTime()
+      const endMs =
+        new Date(`${search.until}T00:00:00Z`).getTime() + 24 * 3_600_000
+      return { startMs, endMs }
+    }
+    if (search.day) {
+      const ts = new Date(`${search.day}T00:00:00Z`).getTime()
+      return { startMs: ts, endMs: ts + 24 * 3_600_000 }
+    }
+    return rangeWindow(activeRange ?? "today")
+  })()
+
+  const selectedSections = search.sections ?? []
+  const { data: sections } = useQuery(convexQuery(api.sections.list, {}))
+  const sectionMatcher = makeSectionMatcher(selectedSections, sections ?? [])
+
+  const { data: events } = useQuery({
+    ...convexQuery(api.events.inRange, {
+      rangeStart: window.startMs,
+      rangeEnd: window.endMs,
+    }),
+    placeholderData: keepPreviousData,
+  })
+
+  const filtered = (events ?? []).filter(sectionMatcher)
+  const daysWithEvents = (() => {
+    const map = bucketEventsByDay(filtered)
+    return Array.from(map.keys())
+      .sort()
+      .map((k) => ({ dayKey: k, events: map.get(k) ?? [] }))
+  })()
+
+  // "Happening soon" — tiny 24h query, deduped per page.
+  const now = Date.now()
+  const { data: soonEvents } = useQuery({
+    ...convexQuery(api.events.inRange, {
+      rangeStart: now,
+      rangeEnd: now + 24 * 3_600_000,
+    }),
+    placeholderData: keepPreviousData,
+  })
+  const filteredSoon = (soonEvents ?? []).filter(sectionMatcher)
+
+  const headerLabel = search.day
+    ? formatDay(search.day)
+    : activeRange
+      ? formatRangeLabel(activeRange)
+      : "Today"
 
   return (
-    <div className="space-y-10">
+    <div className="flex flex-col gap-10">
       <PageHeader
         kicker={t("events.kicker")}
-        kickerColor="oklch(0.6 0.118 184.704)"
-        title={
-          view === "month" ? monthLabel(year, month) : t("events.kicker")
-        }
+        title="Events"
         dek={t("events.subtitle")}
-        right={
-          <ViewToggle
-            current={view}
-            kind={search.kind}
-            year={year}
-            month={month}
-          />
-        }
       />
 
-      <KindFilter view={view} year={year} month={month} kind={search.kind} />
-
-      {view === "week" ? (
-        <WeekView kind={search.kind} />
-      ) : view === "list" ? (
-        <ListView kind={search.kind} />
-      ) : (
-        <MonthView year={year} month={month} kind={search.kind} />
-      )}
-    </div>
-  )
-}
-
-function ViewToggle({
-  current,
-  kind,
-  year,
-  month,
-}: {
-  current: CalendarView
-  kind?: EventKindSlug
-  year: number
-  month: number
-}) {
-  const cls = (active: boolean) =>
-    cn(
-      "rounded px-3 py-1 font-sans text-xs font-bold uppercase tracking-[0.12em] transition-colors",
-      active
-        ? "bg-foreground text-background"
-        : "text-muted-foreground hover:text-foreground",
-    )
-  return (
-    <nav className="flex items-center gap-1 rounded-md border p-0.5">
-      <Link
-        to="/events"
-        search={{ view: "week", kind }}
-        className={cls(current === "week")}
-      >
-        Week
-      </Link>
-      <Link
-        to="/events"
-        search={{ view: "list", kind }}
-        className={cls(current === "list")}
-      >
-        List
-      </Link>
-      <Link
-        to="/events"
-        search={{ view: "month", year, month, kind }}
-        className={cls(current === "month")}
-      >
-        Month
-      </Link>
-    </nav>
-  )
-}
-
-function KindFilter({
-  view,
-  year,
-  month,
-  kind,
-}: {
-  view: CalendarView
-  year: number
-  month: number
-  kind?: EventKindSlug
-}) {
-  // Week and list views are forward-only / live, so they don't carry
-  // year+month in the URL. Month view does so the user can navigate.
-  const baseSearch =
-    view === "month"
-      ? ({ view, year, month } as const)
-      : ({ view } as const)
-  return (
-    <nav
-      aria-label="Filter events by kind"
-      className="-mt-4 flex flex-wrap items-center gap-2"
-    >
-      <Link
-        to="/events"
-        search={baseSearch}
-        className={cn(
-          "rounded-full border px-3 py-1 font-sans text-xs font-bold uppercase tracking-[0.12em] transition-colors",
-          kind === undefined
-            ? "border-foreground bg-foreground text-background"
-            : "border-foreground/20 text-foreground hover:bg-muted",
-        )}
-      >
-        All
-      </Link>
-      {EVENT_KINDS.map((k) => {
-        const active = kind === k.slug
-        return (
-          <Link
-            key={k.slug}
-            to="/events"
-            search={{ ...baseSearch, kind: k.slug }}
-            className={cn(
-              "rounded-full border px-3 py-1 font-sans text-xs font-bold uppercase tracking-[0.12em] transition-colors",
-              active
-                ? "text-background"
-                : "border-foreground/20 text-foreground hover:bg-muted",
-            )}
-            style={
-              active
-                ? { background: k.accent, borderColor: k.accent }
-                : undefined
-            }
-          >
-            {k.label}
-          </Link>
-        )
-      })}
-    </nav>
-  )
-}
-
-function WeekView({ kind }: { kind?: EventKindSlug }) {
-  const [behind, setBehind] = useState(INITIAL_WEEKS_BEHIND)
-  const [ahead, setAhead] = useState(INITIAL_WEEKS_AHEAD)
-
-  // Range state expands as the user scrolls; query refetches reactively.
-  const rangeStart = addWeeksUTC(todayWeekStart(), -behind)
-  const rangeEnd = addWeeksUTC(todayWeekStart(), ahead + 1)
-
-  // `keepPreviousData` so the calendar doesn't suspend / unmount each
-  // time `behind` or `ahead` bumps — without it the IntersectionObserver
-  // callback unmounts the tree → re-mounts → the leftmost sentinel ends
-  // up in view at mount → fires again, causing the page to flash and
-  // re-trigger loads in a loop. Initial mount is the only suspense
-  // boundary; subsequent range changes keep prior data on screen.
-  const { data: events } = useQuery({
-    ...convexQuery(api.events.inRange, { rangeStart, rangeEnd, kind }),
-    placeholderData: keepPreviousData,
-  })
-  if (!events) return null
-
-  // Bucket events by Miami day so day rows don't have to scan the array.
-  const eventsByDay = (() => {
-    const map = new Map<string, typeof events>()
-    for (const e of events) {
-      const k = dayKey(e.startsAt)
-      const list = map.get(k) ?? []
-      list.push(e)
-      map.set(k, list)
-    }
-    // Sort each day chronologically.
-    for (const list of map.values())
-      list.sort((a, b) => a.startsAt - b.startsAt)
-    return map
-  })()
-
-  const weekStarts = (() => {
-    const total = behind + 1 + ahead
-    const out: Array<number> = []
-    for (let i = 0; i < total; i += 1) {
-      out.push(addWeeksUTC(todayWeekStart(), -behind + i))
-    }
-    return out
-  })()
-
-  // Cooldown guard — when the user lands on a sentinel and we expand
-  // the range, the DOM shifts and the IntersectionObserver may briefly
-  // re-fire the same callback as the layout settles. Without this guard
-  // that re-fire bumps state again, expanding the range further, which
-  // shifts the layout again — a loop that flashes the page. 800ms is
-  // enough for the new content to render and the sentinel to be moved
-  // off-screen by subsequent scrolls.
-  const earlierCooldown = useRef(false)
-  const laterCooldown = useRef(false)
-  const onLoadEarlier = useCallback(() => {
-    if (earlierCooldown.current) return
-    earlierCooldown.current = true
-    setBehind((b) => b + WEEKS_LOAD_INCREMENT)
-    setTimeout(() => {
-      earlierCooldown.current = false
-    }, 800)
-  }, [])
-  const onLoadLater = useCallback(() => {
-    if (laterCooldown.current) return
-    laterCooldown.current = true
-    setAhead((a) => a + WEEKS_LOAD_INCREMENT)
-    setTimeout(() => {
-      laterCooldown.current = false
-    }, 800)
-  }, [])
-
-  return (
-    <div className="space-y-8">
-      <HappeningNowStrip events={events} />
-      <CalendarWeek
-        weekStarts={weekStarts}
-        eventsByDay={eventsByDay}
-        onLoadEarlier={onLoadEarlier}
-        onLoadLater={onLoadLater}
-      />
-    </div>
-  )
-}
-
-// Forward-only chronological list. Anchored at today (range start);
-// bottom sentinel bumps `ahead` (in weeks) to extend the range. Same
-// `keepPreviousData` + cooldown patterns as the week view to avoid
-// flash + load loops.
-const LIST_INITIAL_WEEKS = 6
-const LIST_LOAD_INCREMENT = 6
-
-function ListView({ kind }: { kind?: EventKindSlug }) {
-  const [ahead, setAhead] = useState(LIST_INITIAL_WEEKS)
-  const cooldownRef = useRef(false)
-
-  // Range starts at midnight Miami "today" so events that started
-  // earlier today still show up if they haven't ended yet.
-  const today = new Date()
-  const todayStart = Date.UTC(
-    today.getUTCFullYear(),
-    today.getUTCMonth(),
-    today.getUTCDate(),
-  )
-  const rangeEnd = addWeeksUTC(todayStart, ahead)
-
-  const { data: events, isFetching } = useQuery({
-    ...convexQuery(api.events.inRange, {
-      rangeStart: todayStart,
-      rangeEnd,
-      kind,
-    }),
-    placeholderData: keepPreviousData,
-  })
-
-  // Bucket by Miami day, drop empty days, sort chronologically.
-  const daysWithEvents = (() => {
-    const arr = events ?? []
-    const map = new Map<string, typeof arr>()
-    for (const e of arr) {
-      const k = dayKey(e.startsAt)
-      const list = map.get(k) ?? []
-      list.push(e)
-      map.set(k, list)
-    }
-    const keys = Array.from(map.keys()).sort()
-    return keys.map((k) => {
-      const list = map.get(k) ?? []
-      list.sort((a, b) => a.startsAt - b.startsAt)
-      return { dayKey: k, events: list }
-    })
-  })()
-
-  const onLoadMore = useCallback(() => {
-    if (cooldownRef.current) return
-    cooldownRef.current = true
-    setAhead((a) => a + LIST_LOAD_INCREMENT)
-    setTimeout(() => {
-      cooldownRef.current = false
-    }, 800)
-  }, [])
-
-  return (
-    <div className="space-y-8">
-      <HappeningNowStrip events={events ?? []} />
-      <CalendarList
-        daysWithEvents={daysWithEvents}
-        loading={isFetching}
-        onLoadMore={onLoadMore}
-      />
-    </div>
-  )
-}
-
-function MonthView({
-  year,
-  month,
-  kind,
-}: {
-  year: number
-  month: number
-  kind?: EventKindSlug
-}) {
-  const { t } = useTranslation()
-  const { data: events } = useSuspenseQuery(
-    convexSuspenseQuery(api.events.inRange, {
-      rangeStart: startOfMonth(year, month),
-      rangeEnd: startOfNextMonth(year, month),
-      kind,
-    }),
-  )
-  const { data: stories } = useSuspenseQuery(
-    convexSuspenseQuery(api.articles.listBySection, {
-      sectionSlug: "things-to-do",
-      paginationOpts: { numItems: 12, cursor: null },
-    }),
-  )
-
-  const prev =
-    month === 1 ? { year: year - 1, month: 12 } : { year, month: month - 1 }
-  const next =
-    month === 12 ? { year: year + 1, month: 1 } : { year, month: month + 1 }
-
-  // Group events by day for the list view.
-  const groups = new Map<string, typeof events>()
-  for (const e of events) {
-    const key = dayKey(e.startsAt)
-    const list = groups.get(key) ?? []
-    list.push(e)
-    groups.set(key, list)
-  }
-  const orderedDays = Array.from(groups.keys()).sort()
-  const now = new Date()
-
-  return (
-    <div className="space-y-10">
-      <nav className="flex items-center gap-2" aria-label={t("events.kicker")}>
-        <Link
-          to="/events"
-          search={{ view: "month", ...prev, kind }}
-          aria-label={t("events.prevMonth.label", {
-            month: monthLabel(prev.year, prev.month),
-          })}
-        >
-          <Button variant="outline" size="icon-sm" tabIndex={-1}>
-            <ChevronLeft />
-          </Button>
-        </Link>
-        <Link
-          to="/events"
-          search={{
-            view: "month",
-            year: now.getFullYear(),
-            month: now.getMonth() + 1,
-            kind,
-          }}
-          className="meta uppercase tracking-wider hover:underline"
-        >
-          {t("events.today")}
-        </Link>
-        <Link
-          to="/events"
-          search={{ view: "month", ...next, kind }}
-          aria-label={t("events.nextMonth.label", {
-            month: monthLabel(next.year, next.month),
-          })}
-        >
-          <Button variant="outline" size="icon-sm" tabIndex={-1}>
-            <ChevronRight />
-          </Button>
-        </Link>
-      </nav>
-
-      <CalendarMonth year={year} month={month} events={events} />
-
-      {events.length === 0 ? (
-        <div className="font-editorial mt-12 max-w-2xl text-lg text-muted-foreground">
-          <p>{t("events.empty.title", { month: monthLabel(year, month) })}</p>
-          <p className="mt-4 text-base">
-            {t("events.empty.bodyPrefix")}{" "}
-            <Link
-              to="/events"
-              search={{ view: "month", ...next, kind }}
-              className="underline"
-            >
-              {monthLabel(next.year, next.month)}
-            </Link>
-            .
-          </p>
+      {filtered.length === 0 ? (
+        <EmptyState activeRange={activeRange} />
+      ) : search.view === "map" ? (
+        <div className="full-bleed">
+          <CalendarMap events={filtered} />
         </div>
       ) : (
         <section>
-          <SectionHeaderCell
-            title={t("events.fullSchedule")}
-            className="mb-6"
+          <p className="meta mb-4">{headerLabel}</p>
+          <CalendarList
+            daysWithEvents={daysWithEvents}
+            focalDay={search.day}
+            loading={false}
+            onLoadMore={() => {}}
           />
-          <div className="space-y-10">
-            {orderedDays.map((key) => {
-              const dayEvents = groups.get(key) ?? []
-              if (dayEvents.length === 0) return null
-              return (
-                <section key={key}>
-                  <h3 className="font-heading mb-4 text-2xl font-semibold tracking-[-0.015em]">
-                    {formatEventDate(dayEvents[0].startsAt)}
-                  </h3>
-                  <ul className="grid gap-x-10 gap-y-8 md:grid-cols-2 lg:grid-cols-3">
-                    {dayEvents.map((e) => (
-                      <li key={e._id}>
-                        <EventListItem event={e} />
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              )
-            })}
-          </div>
         </section>
       )}
 
-      {stories.page.length > 0 ? (
-        <section>
-          <SectionHeaderCell
-            title={t("events.stories")}
-            className="mb-6"
-          />
-          <ul className="grid gap-x-10 gap-y-8 md:grid-cols-2 lg:grid-cols-3">
-            {stories.page.map((article) => (
-              <li key={article._id}>
-                <StoryItem
-                  article={article}
-                  layout={article.heroImage ? "image-top" : "text-only"}
-                  size="default"
-                  showDek
-                  showKicker={false}
-                />
-              </li>
-            ))}
-          </ul>
-        </section>
+      <BannerAd slot="events-mid" className="pt-4" />
+
+      <HappeningNowStrip events={filteredSoon} />
+
+      <BannerAd slot="events-bottom" className="pt-4" />
+    </div>
+  )
+}
+
+function EmptyState({ activeRange }: { activeRange: EventRange | null }) {
+  const navigate = useNavigate()
+  // Suggest the next preset window when the active one is empty —
+  // chains today → weekend → nextWeekend.
+  const suggestion: EventRange | null = (() => {
+    if (activeRange === "today") return "weekend"
+    if (activeRange === "weekend") return "nextWeekend"
+    return null
+  })()
+  return (
+    <div className="font-editorial mt-12 max-w-2xl text-lg text-muted-foreground">
+      <p>Nothing on the calendar for this window yet.</p>
+      {suggestion ? (
+        <p className="mt-3 text-base">
+          Try{" "}
+          <Link
+            to="/events"
+            search={(prev: Record<string, unknown>) => ({
+              ...prev,
+              range: suggestion,
+              day: undefined,
+            })}
+            className="underline hover:text-foreground"
+            onClick={(e) => {
+              // Defensive — the Link does navigate, this just keeps
+              // smooth scroll-to-top from interfering.
+              e.preventDefault()
+              void navigate({
+                to: "/events",
+                search: ((prev: Record<string, unknown>) => ({
+                  ...prev,
+                  range: suggestion,
+                  day: undefined,
+                })) as never,
+              })
+            }}
+          >
+            {nextRangeLabel(suggestion)}
+          </Link>
+          {" instead."}
+        </p>
       ) : null}
     </div>
   )
 }
+
+function nextRangeLabel(r: EventRange): string {
+  if (r === "weekend") return "this weekend"
+  if (r === "nextWeekend") return "next weekend"
+  return "today"
+}
+
+function formatDay(day: string): string {
+  const ts = new Date(`${day}T00:00:00Z`).getTime()
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(ts))
+}
+
+// Build a section matcher that's true for every event whose section
+// (or section's parent — sub-sections roll up to their trunk) matches
+// any of the selected slugs. Empty selection passes everything through.
+function makeSectionMatcher(
+  selected: ReadonlyArray<string>,
+  sections: ReadonlyArray<{
+    _id: string
+    slug: string
+    parentId?: string
+  }>,
+): (e: { section?: { slug?: string } | null }) => boolean {
+  if (selected.length === 0) return () => true
+  const selectedSet = new Set(selected)
+  // Build a map of every section slug → its top-level (trunk) slug so a
+  // sub-section like "music" matches when the user filters on "arts".
+  const trunkBySlug = new Map<string, string>()
+  for (const s of sections) {
+    if (!s.parentId) {
+      trunkBySlug.set(s.slug, s.slug)
+    } else {
+      const parent = sections.find((p) => p._id === s.parentId)
+      trunkBySlug.set(s.slug, parent?.slug ?? s.slug)
+    }
+  }
+  return (e) => {
+    const slug = e.section?.slug
+    if (!slug) return false
+    const trunk = trunkBySlug.get(slug) ?? slug
+    return selectedSet.has(trunk)
+  }
+}
+

@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router"
 
 import { PageHeader } from "@/components/editorial/page-header"
+import { BannerAd } from "@/components/site/banner-ad"
 
 export const Route = createFileRoute("/_site/about")({
   head: () => ({
@@ -18,7 +19,7 @@ const TOC = [
 
 function AboutPage() {
   return (
-    <div className="space-y-10">
+    <div className="flex flex-col gap-10">
       <PageHeader
         kicker="About"
         title="miami.community"
@@ -84,6 +85,8 @@ function AboutPage() {
             plainly so readers can calibrate.
           </p>
 
+          <BannerAd slot="about-mid" className="my-10" />
+
           <h2 id="why" className="scroll-mt-20">
             Why we're here
           </h2>
@@ -105,6 +108,8 @@ function AboutPage() {
           </p>
         </div>
       </article>
+
+      <BannerAd slot="about-bottom" className="pt-6" />
     </div>
   )
 }

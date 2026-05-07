@@ -26,8 +26,28 @@ function parseDate(value: unknown): number | undefined {
 
 function stripHtml(s: string | undefined): string | undefined {
   if (!s) return undefined
-  return s.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()
+  return decodeEntities(s.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim())
 }
+
+// Decode HTML entities (named + numeric) that fast-xml-parser passes
+// through inside CDATA sections. Without this, RSS titles like
+// "April &#8217;26" land in the database as literal `&#8217;` and
+// render that way in citations and source lists.
+function decodeEntities(s: string): string {
+  if (!s.includes("&")) return s
+  return s
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) =>
+      String.fromCodePoint(parseInt(hex, 16)),
+    )
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)))
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&nbsp;/g, " ")
+}
+
 
 function findEnclosure(item: Record<string, unknown>): string | undefined {
   const enc = item.enclosure as Record<string, unknown> | undefined
@@ -60,7 +80,7 @@ export async function fetchRss(source: SourceForAdapter): Promise<Array<RawItem>
       const item = raw as Record<string, unknown>
       const url = pickString(item.link) ?? ""
       const guid = pickString(item.guid) ?? url
-      const title = pickString(item.title) ?? "(untitled)"
+      const title = decodeEntities(pickString(item.title) ?? "(untitled)")
       const description = stripHtml(pickString(item.description))
       const content = stripHtml(pickString(item["content:encoded"]))
       return {
@@ -98,7 +118,7 @@ export async function fetchRss(source: SourceForAdapter): Promise<Array<RawItem>
       return {
         externalId: id,
         url,
-        title: pickString(entry.title) ?? "(untitled)",
+        title: decodeEntities(pickString(entry.title) ?? "(untitled)"),
         snippet: stripHtml(pickString(entry.summary))?.slice(0, 400),
         body: stripHtml(pickString(entry.content)),
         publishedAt: parseDate(entry.published ?? entry.updated),

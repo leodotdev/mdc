@@ -2,13 +2,13 @@ import { Link } from "@tanstack/react-router"
 import { Loader2, MapPin } from "lucide-react"
 import { useEffect, useRef } from "react"
 
-import { EVENT_KINDS } from "../../../convex/lib/eventKinds"
 import type { EventWithSection } from "@/lib/event-helpers"
 import { formatEventTime, todayKey } from "@/lib/event-helpers"
-import { proxiedImageUrl } from "@/lib/image-proxy"
+import { useTranslation } from "@/lib/i18n/context"
+import { localizedEvent } from "@/lib/localized-event"
+import { HeroImg } from "@/components/site/hero-img"
+import { useOpenArticleDrawer } from "@/lib/use-open-article-drawer"
 import { cn } from "@/lib/utils"
-
-const KIND_BY_SLUG = new Map(EVENT_KINDS.map((k) => [k.slug, k]))
 
 // Vertical timeline view — events grouped by day, days only rendered
 // when they have at least one event (skipping empty days keeps the
@@ -19,10 +19,16 @@ const KIND_BY_SLUG = new Map(EVENT_KINDS.map((k) => [k.slug, k]))
 // the range and refetches with a wider end bound.
 export function CalendarList({
   daysWithEvents,
+  focalDay,
   loading = false,
   onLoadMore,
 }: {
   daysWithEvents: Array<{ dayKey: string; events: Array<EventWithSection> }>
+  /** Day key (YYYY-MM-DD) the reader has focused via the minimap. The
+   *  list itself does NOT scroll to this day — the page should stay
+   *  put when the reader picks a date — but the focal day still gets a
+   *  visual ring so they can find their pick by eye. */
+  focalDay: string | undefined
   loading?: boolean
   onLoadMore: () => void
 }) {
@@ -74,13 +80,22 @@ export function CalendarList({
     <div className="flex flex-col gap-10">
       {daysWithEvents.map(({ dayKey, events }) => {
         const isToday = dayKey === today
+        const isFocal = dayKey === focalDay
         return (
-          <section key={dayKey} className="grid gap-4 md:grid-cols-[8rem_1fr]">
+          <section
+            key={dayKey}
+            className={cn(
+              "grid gap-4 md:grid-cols-[8rem_1fr]",
+              isToday && "rounded-md bg-primary/5 p-3 ring-2 ring-primary/40",
+              isFocal && !isToday && "rounded-md p-3 ring-2 ring-primary",
+            )}
+            aria-current={isToday ? "date" : undefined}
+          >
             <header className="md:sticky md:top-24 md:self-start">
               <p
                 className={cn(
-                  "font-sans text-xs font-bold tracking-[0.18em] uppercase",
-                  isToday ? "text-foreground" : "text-muted-foreground",
+                  "font-sans text-sm font-semibold",
+                  isToday ? "text-primary" : "text-muted-foreground",
                 )}
               >
                 {isToday ? "Today" : formatDayHeader(dayKey).weekday}
@@ -88,7 +103,7 @@ export function CalendarList({
               <p
                 className={cn(
                   "font-heading text-3xl leading-none font-semibold tabular-nums",
-                  isToday ? "text-foreground" : "text-foreground/80",
+                  isToday ? "text-primary" : "text-foreground/80",
                 )}
               >
                 {formatDayHeader(dayKey).monthDay}
@@ -97,7 +112,7 @@ export function CalendarList({
                 {events.length} {events.length === 1 ? "event" : "events"}
               </p>
             </header>
-            <ul className="flex flex-col gap-4 border-t pt-4 md:border-t-0 md:pt-0">
+            <ul className="flex flex-col divide-y divide-foreground/10 border-t border-foreground/10 md:border-t-0">
               {events.map((e) => (
                 <li key={e._id}>
                   <ListEventCard event={e} />
@@ -149,22 +164,21 @@ function formatDayHeader(dayKeyStr: string): {
 // kicker + title + dek + time/venue meta line. Click target follows the
 // same precedence the rest of the events UI uses: external URL → linked
 // article → static.
-function ListEventCard({ event }: { event: EventWithSection }) {
+function ListEventCard({ event: rawEvent }: { event: EventWithSection }) {
+  const { lang } = useTranslation()
+  const event = localizedEvent(rawEvent, lang)
+  const openInDrawer = useOpenArticleDrawer()
   const accent = event.section?.accentColor ?? "var(--foreground)"
-  const kind = event.kind ? KIND_BY_SLUG.get(event.kind) : undefined
-  const label = event.section?.name ?? kind?.label ?? "Event"
+  const label = event.section?.name ?? "Event"
   const time = formatEventTime(event)
 
   const Body = (
-    <article
-      className="group/event grid gap-4 rounded-md border bg-card p-4 transition-colors hover:bg-muted/40 sm:grid-cols-[1fr_140px]"
-      style={{ borderLeftWidth: "3px", borderLeftColor: accent }}
-    >
+    <article className="group/event grid gap-4 py-4 transition-colors sm:grid-cols-[1fr_140px]">
       <div className="flex min-w-0 flex-col gap-2">
         <span className="kicker text-[0.65rem]" style={{ color: accent }}>
           {label}
         </span>
-        <h3 className="font-heading text-lg leading-snug font-semibold">
+        <h3 className="font-heading text-lg leading-snug font-semibold transition-colors group-hover/event:text-primary">
           {event.title}
         </h3>
         {event.description ? (
@@ -180,21 +194,40 @@ function ListEventCard({ event }: { event: EventWithSection }) {
               {event.locationName}
             </span>
           ) : null}
-          {event.neighborhood ? <span>· {event.neighborhood}</span> : null}
+          {event.neighborhoods?.[0] ? (
+            <span>· {event.neighborhoods[0]}</span>
+          ) : null}
           {event.price ? <span>· {event.price}</span> : null}
         </div>
       </div>
-      {event.imageUrl ? (
-        <img
-          src={proxiedImageUrl(event.imageUrl, { width: 320 })}
-          alt=""
-          loading="lazy"
-          className="aspect-[4/3] w-full rounded-[3px] object-cover sm:h-full"
+      {event.heroImage ? (
+        <HeroImg
+          url={event.heroImage}
+          width={320}
+          className="aspect-[4/3] w-full rounded-md object-cover sm:h-full"
         />
       ) : null}
     </article>
   )
 
+  // Prefer canonical event detail page for events with a slug; fall back
+  // to external URL or related-article link for legacy rows.
+  if (event.slug) {
+    return (
+      <Link
+        to="."
+        search={
+          ((prev: Record<string, unknown>) => ({
+            ...prev,
+            event: event.slug,
+          })) as never
+        }
+        className="block"
+      >
+        {Body}
+      </Link>
+    )
+  }
   if (event.url) {
     return (
       <a href={event.url} target="_blank" rel="noreferrer" className="block">
@@ -207,6 +240,7 @@ function ListEventCard({ event }: { event: EventWithSection }) {
       <Link
         to="/article/$slug"
         params={{ slug: event.article.slug }}
+        onClick={(e) => openInDrawer(event.article!.slug, e)}
         className="block"
       >
         {Body}

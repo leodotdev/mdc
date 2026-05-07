@@ -8,17 +8,26 @@ import {
 } from "@tanstack/react-router"
 
 import { api } from "../../../convex/_generated/api"
-import { BlockSeparator } from "@/components/editorial/block-separator"
-import { HeroSplit } from "@/components/editorial/hero-split"
-import { MostReadStrip } from "@/components/editorial/most-read-strip"
 import { PageHeader } from "@/components/editorial/page-header"
+import { TrendingInline } from "@/components/editorial/trending-inline"
+import { TrendingStrip } from "@/components/editorial/trending-strip"
 import { SectionHeaderCell } from "@/components/editorial/section-header-cell"
-import { SidebarRail } from "@/components/editorial/sidebar-rail"
 import { StoryItem } from "@/components/editorial/story-item"
-import { XlRowList } from "@/components/editorial/xl-row-list"
+import { EventListItem } from "@/components/events/event-list-item"
+import { BannerAd } from "@/components/site/banner-ad"
+import { HeroImg } from "@/components/site/hero-img"
+import { SectionMetrics } from "@/components/widgets/section-metrics"
+import { TeamWidgets } from "@/components/widgets/sports-widget"
 import { convexSuspenseQuery } from "@/lib/convex-suspense"
-import { localizeSectionDescription, localizeSectionName } from "@/lib/i18n/sections"
 import { useTranslation } from "@/lib/i18n/context"
+import { useOpenArticleDrawer } from "@/lib/use-open-article-drawer"
+import { localizeSectionName } from "@/lib/i18n/sections"
+
+// Vertical spacing between major page blocks. Mirrors the homepage's
+// `BLOCK` rhythm so the two pages read as one paper.
+const BLOCK = "pt-10"
+// Heavy rule between consecutive xl rows in the top hero stack.
+const HEAVY = "border-t border-foreground"
 
 export const Route = createFileRoute("/_site/section/$slug")({
   loader: async ({ context, params }) => {
@@ -34,17 +43,23 @@ export const Route = createFileRoute("/_site/section/$slug")({
       context.queryClient.ensureQueryData(
         convexQuery(api.articles.topInSection, {
           sectionSlug: params.slug,
-          limit: 6,
+          limit: 8,
         }),
       ),
       context.queryClient.ensureQueryData(
         convexQuery(api.articles.listBySection, {
           sectionSlug: params.slug,
-          paginationOpts: { numItems: 24, cursor: null },
+          paginationOpts: { numItems: 40, cursor: null },
         }),
       ),
       context.queryClient.ensureQueryData(
         convexQuery(api.sections.list, {}),
+      ),
+      context.queryClient.ensureQueryData(
+        convexQuery(api.events.upcomingBySectionSlug, {
+          sectionSlug: params.slug,
+          limit: 5,
+        }),
       ),
     ])
     return { section }
@@ -64,83 +79,62 @@ export const Route = createFileRoute("/_site/section/$slug")({
 function SectionPage() {
   const { slug } = Route.useParams()
   const { section } = Route.useLoaderData()
-  const { lang } = useTranslation()
+  const { lang, t } = useTranslation()
+  const openInDrawer = useOpenArticleDrawer()
+
+  // Mirrors homepage's `tr` shim — pull localized title/heroCaption
+  // alongside the canonical record so img/Link blocks stay simple.
+  const tr = (a: {
+    heroCaption?: string
+    title: string
+    dek: string
+    body: string
+    translations?: {
+      es?: {
+        title: string
+        dek: string
+        body: string
+        heroCaption?: string
+      }
+    }
+  }) =>
+    lang === "es"
+      ? {
+          title: a.translations?.es?.title ?? a.title,
+          heroCaption: a.translations?.es?.heroCaption ?? a.heroCaption,
+        }
+      : { title: a.title, heroCaption: a.heroCaption }
+
   // Top stories ranked by importance (above-fold candidates).
   const { data: top } = useSuspenseQuery(
     convexSuspenseQuery(api.articles.topInSection, {
       sectionSlug: slug,
-      limit: 6,
+      limit: 8,
     }),
   )
   // Recent stories paginated (long tail).
   const { data: list } = useSuspenseQuery(
     convexSuspenseQuery(api.articles.listBySection, {
       sectionSlug: slug,
-      paginationOpts: { numItems: 24, cursor: null },
+      paginationOpts: { numItems: 40, cursor: null },
     }),
   )
-  // Sub-sections for the rail nav (e.g. Music under Arts & Culture).
-  const { data: allSections } = useSuspenseQuery(
-    convexSuspenseQuery(api.sections.list, {}),
+  // Upcoming events filed under this section. Empty array when none —
+  // we still render the rail with an empty-state line, matching the
+  // homepage's pattern.
+  const { data: sectionEvents } = useSuspenseQuery(
+    convexSuspenseQuery(api.events.upcomingBySectionSlug, {
+      sectionSlug: slug,
+      limit: 5,
+    }),
   )
-  const subSections = allSections.filter((s) => s.parentId === section._id)
-
-  // Wave 1: hero split (lead + 2 sub-leads). Wave 2: xl rows. Wave 3:
-  // long tail in a framed-cell grid for visual variety. Dedupe across
-  // waves so no story shows twice.
-  const used = new Set<string>()
-  const take = (
-    pool: Array<(typeof list.page)[number]>,
-    n: number,
-  ) => {
-    const out: Array<(typeof list.page)[number]> = []
-    for (const a of pool) {
-      if (used.has(a._id as string)) continue
-      out.push(a)
-      used.add(a._id as string)
-      if (out.length >= n) break
-    }
-    return out
-  }
-
-  const rankedPool = top.length > 0 ? top : list.page
-  const allPool = [...rankedPool, ...list.page]
-
-  const lead = take(rankedPool, 1)[0]
-  const subleads = take(allPool, 2)
-  const xlRows = take(allPool, 5)
-  const longTail = list.page.filter((a) => !used.has(a._id as string)).slice(0, 9)
 
   const sectionName = localizeSectionName(section, lang)
-  const sectionDescription = localizeSectionDescription(section, lang)
 
-  return (
-    <div className="space-y-10">
-      <PageHeader
-        kicker={sectionName}
-        kickerColor={section.accentColor}
-        title={sectionName}
-        dek={sectionDescription}
-        right={
-          subSections.length > 0 ? (
-            <nav className="flex flex-wrap items-center gap-2">
-              {subSections.map((s) => (
-                <Link
-                  key={s._id}
-                  to="/section/$slug"
-                  params={{ slug: s.slug }}
-                  className="rounded-full border border-foreground/20 px-3 py-1 font-sans text-xs font-bold tracking-[0.12em] uppercase transition-colors hover:bg-muted"
-                  style={{ color: s.accentColor }}
-                >
-                  {localizeSectionName(s, lang)}
-                </Link>
-              ))}
-            </nav>
-          ) : null
-        }
-      />
-
-      {list.page.length === 0 ? (
+  if (list.page.length === 0) {
+    return (
+      <div className="flex flex-col gap-10">
+        <PageHeader title={sectionName} ruleBottom={false} className="pb-2" />
         <div className="font-editorial mt-12 max-w-2xl text-lg text-muted-foreground">
           <p>No published stories in {sectionName} yet.</p>
           <p className="mt-4 text-base">
@@ -154,54 +148,305 @@ function SectionPage() {
             .
           </p>
         </div>
-      ) : (
-        <section className="grid grid-cols-1 gap-y-8 lg:grid-cols-12 lg:gap-x-6">
-          {/* Main column — 8/12 */}
-          <div className="lg:col-span-9">
-            {lead ? <HeroSplit lead={lead} subleads={subleads} /> : null}
-            {xlRows.length > 0 ? (
-              <BlockSeparator
-                accent={section.accentColor}
-                className="mt-2"
-              >
-                <XlRowList articles={xlRows} />
-              </BlockSeparator>
-            ) : null}
-          </div>
+      </div>
+    )
+  }
 
-          {/* Right rail — 4/12. Most read in section + sub-section nav. */}
-          <SidebarRail className="lg:col-span-3">
-            <MostReadStrip
-              label={`Most Read in ${sectionName}`}
-              articles={rankedPool}
+  // Dedupe across the page so the same story doesn't appear twice in
+  // different blocks. Mirrors the homepage `take` pattern exactly.
+  const used = new Set<string>()
+  const take = (
+    pool: Array<(typeof list.page)[number]>,
+    n: number,
+  ): Array<(typeof list.page)[number]> => {
+    const picked: Array<(typeof list.page)[number]> = []
+    for (const a of pool) {
+      if (used.has(a._id)) continue
+      picked.push(a)
+      used.add(a._id)
+      if (picked.length >= n) break
+    }
+    return picked
+  }
+
+  const rankedPool = top.length > 0 ? top : list.page
+  const allPool = [...rankedPool, ...list.page]
+
+  // Top hero (mirrors homepage):
+  //   Lead split + 2 stacked text-only + 5 xl rows.
+  const lead = take(rankedPool, 1)[0]
+  const leadStack = take(allPool, 2)
+  const xlRows = take(allPool, 5)
+
+  // More Top Stories block: 1 lead + 4 stacked text-only.
+  const morelead = take(allPool, 1)[0]
+  const moreRail = take(allPool, 4)
+
+  // Trending uses the same ranked pool; cap to 4 for the strip.
+  const trending = rankedPool.slice(0, 4)
+
+  // Long-tail framed grid below — leftovers after every block grabs.
+  const longTail = list.page
+    .filter((a) => !used.has(a._id as string))
+    .slice(0, 9)
+
+  return (
+    <div className="flex flex-col gap-10">
+      {/* Title + inline trending strip read as one block — the
+          trending row replaces what used to be the section dek, sits
+          centered under the title, and shares its scale. */}
+      <div className="flex flex-col gap-3 pb-4">
+        <PageHeader title={sectionName} ruleBottom={false} className="pb-0" />
+        <TrendingInline
+          articles={top.slice(0, 2)}
+          className="justify-center border-0 pb-0"
+        />
+      </div>
+
+      {/* ════════════════════ TOP HERO TABLE ════════════════════
+          Same 9/3 split as the homepage, scoped to this section. */}
+      <section className="grid grid-cols-1 gap-y-8 lg:grid-cols-12 lg:gap-x-6">
+        <div className="flex flex-col lg:col-span-9">
+          {lead ? (
+            <div className="grid grid-cols-1 gap-x-6 gap-y-6 pb-8 md:grid-cols-12">
+              {lead.heroImage ? (
+                <Link
+                  to="/article/$slug"
+                  params={{ slug: lead.slug }}
+                  onClick={(e) => openInDrawer(lead.slug, e)}
+                  className="group/lead block self-start [contain:paint] md:col-span-7 md:col-start-6"
+                >
+                  <HeroImg
+                    url={lead.heroImage}
+                    width={1200}
+                    priority
+                    className="aspect-[3/2] w-full object-cover transition-transform duration-200 ease-out group-hover/lead:scale-[1.015]"
+                  />
+                  {tr(lead).heroCaption ? (
+                    <figcaption className="meta mt-2">
+                      {tr(lead).heroCaption}
+                    </figcaption>
+                  ) : null}
+                </Link>
+              ) : null}
+              <div className="flex flex-col divide-y divide-foreground/15 md:col-span-5 md:col-start-1 md:row-start-1">
+                <div className="pb-5">
+                  <StoryItem
+                    article={lead}
+                    layout="text-only"
+                    size="lead"
+                    showDek
+
+                  />
+                </div>
+                {leadStack[0] ? (
+                  <div className="py-5">
+                    <StoryItem
+                      article={leadStack[0]}
+                      layout="text-only"
+                      size="compact"
+  
+                    />
+                  </div>
+                ) : null}
+                {leadStack[1] ? (
+                  <div className="pt-5">
+                    <StoryItem
+                      article={leadStack[1]}
+                      layout="text-only"
+                      size="compact"
+  
+                    />
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+
+          {xlRows.map((a) => (
+            <div
+              key={a._id}
+              className={`${HEAVY} grid grid-cols-1 gap-x-6 gap-y-4 pt-8 pb-8 md:grid-cols-12`}
+            >
+              {a.heroImage ? (
+                <Link
+                  to="/article/$slug"
+                  params={{ slug: a.slug }}
+                  onClick={(e) => openInDrawer(a.slug, e)}
+                  className="group/xl block self-start [contain:paint] md:col-span-7 md:col-start-6"
+                >
+                  <HeroImg
+                    url={a.heroImage}
+                    width={1000}
+                    className="aspect-[3/2] w-full object-cover transition-transform duration-200 ease-out group-hover/xl:scale-[1.015]"
+                  />
+                  {tr(a).heroCaption ? (
+                    <figcaption className="meta mt-2">
+                      {tr(a).heroCaption}
+                    </figcaption>
+                  ) : null}
+                </Link>
+              ) : null}
+              <div className="flex flex-col md:col-span-5 md:col-start-1 md:row-start-1">
+                <StoryItem
+                  article={a}
+                  layout="text-only"
+                  size="lead"
+                  showDek
+
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Right rail — events scoped to this section + section-relevant
+            widgets. The Sports widget is hoisted into this rail on the
+            sports section so every franchise's latest result lives next
+            to the section's coverage instead of in a separate strip
+            below the fold. */}
+        <aside className="flex flex-col gap-8 lg:col-span-3 lg:border-l lg:border-foreground/15 lg:pl-6">
+          {slug === "sports" ? <TeamWidgets /> : null}
+          <SectionMetrics
+            sectionSlug={slug}
+            accent={section.accentColor}
+          />
+          <div>
+            <SectionHeaderCell
+              title={`${sectionName} ${t("nav.events").toLowerCase()}`}
+              accent={section.accentColor}
+              right={
+                <Link
+                  to="/events"
+                  search={{ sections: [slug] }}
+                  className="meta hover:underline"
+                >
+                  {t("home.allLink")}
+                </Link>
+              }
             />
-          </SidebarRail>
-        </section>
-      )}
+            <div className="flex flex-col divide-y divide-foreground/15">
+              {sectionEvents.length === 0 ? (
+                <p className="meta py-6 text-xs">
+                  No upcoming events in {sectionName}.
+                </p>
+              ) : (
+                sectionEvents.map((e) => (
+                  <div key={e._id} className="py-4 first:pt-5 last:pb-0">
+                    <EventListItem event={e} />
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </aside>
+      </section>
 
-      {/* Long-tail framed-cell grid — visual texture below the rail block. */}
+      <BannerAd slot={`section-${slug}-mid`} className={BLOCK} />
+
+      {/* ════════════════════ More Top Stories ════════════════════ */}
+      {morelead ? (
+        <section className={BLOCK}>
+          <SectionHeaderCell
+            title={t("home.moreTopStories")}
+            accent={section.accentColor}
+            className="mb-6"
+          />
+          <div className="grid grid-cols-1 gap-x-8 gap-y-6 lg:grid-cols-12 lg:divide-x lg:divide-foreground/15">
+            <div className="lg:col-span-9 lg:pr-6">
+              <div className="grid grid-cols-1 gap-x-6 gap-y-4 md:grid-cols-12">
+                {morelead.heroImage ? (
+                  <Link
+                    to="/article/$slug"
+                    params={{ slug: morelead.slug }}
+                    onClick={(e) => openInDrawer(morelead.slug, e)}
+                    className="group/more block self-start [contain:paint] md:col-span-7 md:col-start-6"
+                  >
+                    <HeroImg
+                      url={morelead.heroImage}
+                      width={1000}
+                      className="aspect-[3/2] w-full object-cover transition-transform duration-200 ease-out group-hover/more:scale-[1.015]"
+                    />
+                    {tr(morelead).heroCaption ? (
+                      <figcaption className="meta mt-2">
+                        {tr(morelead).heroCaption}
+                      </figcaption>
+                    ) : null}
+                  </Link>
+                ) : null}
+                <div className="flex flex-col md:col-span-5 md:col-start-1 md:row-start-1">
+                  <StoryItem
+                    article={morelead}
+                    layout="text-only"
+                    size="lead"
+                    showDek
+
+                  />
+                </div>
+              </div>
+            </div>
+            <div className="flex flex-col divide-y divide-foreground/15 lg:col-span-3 lg:pl-6">
+              {moreRail.map((a, i) => (
+                <div
+                  key={a._id}
+                  className={
+                    i === 0
+                      ? "pb-4"
+                      : i === moreRail.length - 1
+                        ? "pt-4"
+                        : "py-4"
+                  }
+                >
+                  <StoryItem
+                    article={a}
+                    layout="text-only"
+                    size="compact"
+
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      {/* ════════════════════ Trending ════════════════════ */}
+      {trending.length > 0 ? (
+        <section className={BLOCK}>
+          <TrendingStrip
+            label={`${t("home.trending")} · ${sectionName}`}
+            articles={trending}
+          />
+        </section>
+      ) : null}
+
+      {/* ════════════════════ Long-tail grid ════════════════════
+          No cell borders — just an auto-fit grid with comfortable
+          gaps between cards. The SectionHeaderCell rule above is
+          enough visual structure for this block. */}
       {longTail.length > 0 ? (
-        <section className="pt-10">
+        <section className={BLOCK}>
           <SectionHeaderCell
             title={`More from ${sectionName}`}
             accent={section.accentColor}
             className="mb-6"
           />
-          <div className="grid border-t border-l border-foreground md:grid-cols-3">
+          <div className="grid gap-x-6 gap-y-10 md:grid-cols-2 lg:grid-cols-3">
             {longTail.map((article) => (
               <StoryItem
                 key={article._id}
                 article={article}
-                layout="framed"
-                size="sm"
-                imageAspect="4/3"
+                layout="image-top"
+                size="compact"
+                imageAspect="16/9"
                 showDek={false}
-                showKicker={false}
               />
             ))}
           </div>
         </section>
       ) : null}
+
+      <BannerAd slot={`section-${slug}-bottom`} className={BLOCK} />
     </div>
   )
 }

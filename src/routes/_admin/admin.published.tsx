@@ -2,14 +2,14 @@ import { convexQuery } from "@convex-dev/react-query"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useConvex } from "convex/react"
-import { ExternalLink, ImageOff, Pencil, Undo2 } from "lucide-react"
+import { ExternalLink, Pencil, Undo2 } from "lucide-react"
 import { useMemo } from "react"
 
 import { api } from "../../../convex/_generated/api"
 import type { Id } from "../../../convex/_generated/dataModel"
 import { ImportanceGauge } from "@/components/editorial/importance-gauge"
 import { TableLoadingRows } from "@/components/editorial/story-card-skeleton"
-import { proxiedImageUrl } from "@/lib/image-proxy"
+import { Thumb } from "@/components/admin/thumb"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -80,10 +80,10 @@ function PublishedPage() {
   })
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="font-heading text-3xl font-semibold tracking-[-0.02em]">
+          <h1 className="font-sans text-3xl font-semibold tracking-[-0.02em]">
             Published
           </h1>
           <p className="meta mt-1">
@@ -142,13 +142,11 @@ function PublishedPage() {
 
       {data && data.length === 0 ? (
         <div className="rounded-md border bg-card p-6">
-          <p className="font-editorial">Nothing published yet.</p>
+          <p className="font-sans">Nothing published yet.</p>
           <p className="meta mt-1">
-            Approved drafts will appear here. Start by reviewing the{" "}
-            <Link to="/admin/queue" className="underline">
-              queue
-            </Link>
-            .
+            Desks publish here automatically once they finish their next
+            run. Wait for the cron tick (every 4h) or trigger one from the
+            dashboard.
           </p>
         </div>
       ) : (
@@ -192,7 +190,7 @@ function PublishedPage() {
                         )
                           return
                         void navigate({
-                          to: "/admin/queue/$id",
+                          to: "/admin/article/$id",
                           params: { id: a._id },
                         })
                       }}
@@ -205,29 +203,19 @@ function PublishedPage() {
                         />
                       </TableCell>
                       <TableCell>
-                        {a.heroImage ? (
-                          <img
-                            src={proxiedImageUrl(a.heroImage, { width: 200 })}
-                            alt=""
-                            loading="lazy"
-                            className="h-12 w-16 rounded object-cover"
-                          />
-                        ) : (
-                          <div className="flex h-12 w-16 items-center justify-center rounded bg-muted text-muted-foreground">
-                            <ImageOff className="h-4 w-4" />
-                          </div>
-                        )}
+                        <Thumb url={a.heroImage} />
                       </TableCell>
                       <TableCell className="max-w-md whitespace-normal">
                         <Link
                           to="/article/$slug"
                           params={{ slug: a.slug }}
                           target="_blank"
-                          className="font-heading text-base font-semibold leading-tight hover:underline"
+                          rel="noopener noreferrer"
+                          className="text-base font-semibold leading-tight hover:underline"
                         >
                           {a.title}
                         </Link>
-                        <div className="font-editorial text-sm text-muted-foreground ">
+                        <div className="text-sm text-muted-foreground">
                           {a.dek}
                         </div>
                       </TableCell>
@@ -258,6 +246,7 @@ function PublishedPage() {
                             to="/article/$slug"
                             params={{ slug: a.slug }}
                             target="_blank"
+                            rel="noopener noreferrer"
                             aria-label="View on site"
                             title="View on site"
                             className={buttonVariants({
@@ -268,7 +257,7 @@ function PublishedPage() {
                             <ExternalLink />
                           </Link>
                           <Link
-                            to="/admin/queue/$id"
+                            to="/admin/article/$id"
                             params={{ id: a._id }}
                             aria-label="Edit"
                             title="Edit"

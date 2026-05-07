@@ -1,11 +1,21 @@
 import { v } from "convex/values"
-import { mutation, query } from "./_generated/server"
+import { internalQuery, mutation, query } from "./_generated/server"
 import { requireEditor } from "./lib/guard"
 
 export const list = query({
   args: {},
   handler: async (ctx) => {
     await requireEditor(ctx)
+    return await ctx.db.query("sources").collect()
+  },
+})
+
+// Internal-only — no editor gate. Called from `runMegaDeskInternal`
+// when the run is triggered by cron (which has no auth identity).
+// The editor-facing /admin/sources page uses `list` above.
+export const listInternal = internalQuery({
+  args: {},
+  handler: async (ctx) => {
     return await ctx.db.query("sources").collect()
   },
 })
@@ -41,6 +51,8 @@ export const create = mutation({
       v.literal("x"),
       v.literal("web"),
       v.literal("wikipedia-otd"),
+      v.literal("ics"),
+      v.literal("data"),
     ),
     url: v.string(),
     sectionIds: v.array(v.id("sections")),
@@ -124,13 +136,34 @@ export const recordFetch = mutation({
       })
       inserted += 1
     }
-    await ctx.db.patch(sourceId, {
+    // Track consecutive error count for auto-disable. Reset to 0 on
+    // successful fetches so a temporary outage doesn't trip the cap.
+    const existingSource = await ctx.db.get(sourceId)
+    const prevErrors = existingSource?.consecutiveErrors ?? 0
+    const consecutiveErrors = status === "ok" ? 0 : prevErrors + 1
+    // Permanent-failure shortcut: 404 / 410 / 403 mean the URL is gone
+    // or auth-walled — no point waiting for the consecutive-errors cap.
+    // Disable on the first occurrence so the next fetch tick doesn't
+    // burn time on a known-dead feed.
+    const errStr = error ?? ""
+    const permanentlyGone =
+      status === "error" &&
+      /(?:→|\b|: )(?:HTTP )?40[34]\b/.test(errStr) ||
+      /\b410\b/.test(errStr)
+    const patch: Record<string, unknown> = {
       lastFetchedAt: now,
       lastFetchStatus: status,
       lastFetchError: error,
       lastFetchItemCount: items.length,
       lastFetchNewCount: inserted,
-    })
-    return { inserted }
+      consecutiveErrors,
+    }
+    if (permanentlyGone) {
+      patch.enabled = false
+      patch.autoDisabledAt = now
+      patch.autoDisabledReason = `permanent failure: ${errStr.slice(0, 120)}`
+    }
+    await ctx.db.patch(sourceId, patch)
+    return { inserted, autoDisabled: !!permanentlyGone }
   },
 })

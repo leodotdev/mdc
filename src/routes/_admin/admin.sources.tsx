@@ -112,10 +112,10 @@ function SourcesPage() {
   })
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="font-heading text-3xl font-semibold tracking-[-0.02em]">
+          <h1 className="font-sans text-3xl font-semibold tracking-[-0.02em]">
             Sources
           </h1>
           <p className="meta mt-1">
@@ -306,3 +306,4 @@ function SourcesPage() {
     </div>
   )
 }
+

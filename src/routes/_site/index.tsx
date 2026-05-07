@@ -1,25 +1,44 @@
 import { convexQuery } from "@convex-dev/react-query"
 import { useSuspenseQuery } from "@tanstack/react-query"
-import { createFileRoute } from "@tanstack/react-router"
+import { Link, createFileRoute  } from "@tanstack/react-router"
 
-import { Link } from "@tanstack/react-router"
 
 import { api } from "../../../convex/_generated/api"
-import { MostReadStrip } from "@/components/editorial/most-read-strip"
+import { TrendingStrip } from "@/components/editorial/trending-strip"
 import { SectionHeaderCell } from "@/components/editorial/section-header-cell"
 import { StoryItem } from "@/components/editorial/story-item"
 import { EventListItem } from "@/components/events/event-list-item"
+import { HeroImg } from "@/components/site/hero-img"
+import { MetricsGrid } from "@/components/widgets/metrics-grid"
+import { PhotoOfDayWidget } from "@/components/widgets/photo-of-day-widget"
+import { RadarWidget } from "@/components/widgets/radar-widget"
+import {
+  AnimalFactWidget,
+  FunFactWidget,
+  LandmarkWidget,
+  OnThisDayWidget,
+  QuoteWidget,
+} from "@/components/widgets/rail-widgets"
 import { SportsWidget } from "@/components/widgets/sports-widget"
 import { WeatherWidget } from "@/components/widgets/weather-widget"
 import { convexSuspenseQuery } from "@/lib/convex-suspense"
-import { proxiedImageUrl } from "@/lib/image-proxy"
 import { useTranslation } from "@/lib/i18n/context"
 import { localizeSectionName } from "@/lib/i18n/sections"
-import { localizedArticle } from "@/lib/localized-article"
+import { useOpenArticleDrawer } from "@/lib/use-open-article-drawer"
+import { proxiedImageSrcSet } from "@/lib/image-proxy"
+import { BannerAd } from "@/components/site/banner-ad"
+
+// `sizes` for the homepage lead image — must match the rendered slot
+// (cols 6-12 of a 12-col grid inside `container-page`'s breakpoint
+// caps). Used by both the rendered <HeroImg> default override and the
+// `<link rel="preload">` injected into the document head so the
+// browser starts pulling the LCP image as the HTML streams.
+const LEAD_HERO_SIZES =
+  "(min-width: 1280px) 753px, (min-width: 1024px) 597px, (min-width: 768px) 443px, 100vw"
 
 export const Route = createFileRoute("/_site/")({
   loader: async ({ context }) => {
-    await Promise.all([
+    const [top, latest] = await Promise.all([
       context.queryClient.ensureQueryData(
         convexQuery(api.articles.topStories, { limit: 8 }),
       ),
@@ -31,6 +50,28 @@ export const Route = createFileRoute("/_site/")({
         convexQuery(api.events.upcoming, { limit: 5, days: 14 }),
       ),
     ])
+    // The lead image is the LCP candidate — top story preferred, latest
+    // story as fallback. Returned so the route's `head` function can
+    // emit a `<link rel="preload">` for it.
+    const leadHeroUrl = top?.[0]?.heroImage ?? latest?.[0]?.heroImage
+    return { leadHeroUrl }
+  },
+  head: ({ loaderData }) => {
+    const url = loaderData?.leadHeroUrl
+    const srcSet = url ? proxiedImageSrcSet(url) : undefined
+    return {
+      links: srcSet
+        ? [
+            {
+              rel: "preload",
+              as: "image",
+              imageSrcSet: srcSet,
+              imageSizes: LEAD_HERO_SIZES,
+              fetchPriority: "high",
+            },
+          ]
+        : [],
+    }
   },
   component: HomePage,
 })
@@ -48,6 +89,7 @@ const HEAVY = "border-t border-foreground"
 
 function HomePage() {
   const { t, lang } = useTranslation()
+  const openInDrawer = useOpenArticleDrawer()
   // Lift heroCaption + title localization once per render so the raw
   // <img> / Link blocks below can read the right-language caption
   // without re-running the helper at each call site. Image src and
@@ -60,9 +102,6 @@ function HomePage() {
           heroCaption: a.translations?.es?.heroCaption ?? a.heroCaption,
         }
       : { title: a.title, heroCaption: a.heroCaption }
-  // Suppress unused warning when translations table is empty;
-  // localizedArticle is also used by deeper components like StoryItem.
-  void localizedArticle
   const { data: top } = useSuspenseQuery(
     convexSuspenseQuery(api.articles.topStories, { limit: 8 }),
   )
@@ -94,9 +133,9 @@ function HomePage() {
   ): Array<(typeof latest)[number]> => {
     const picked: Array<(typeof latest)[number]> = []
     for (const a of pool) {
-      if (used.has(a._id as string)) continue
+      if (used.has(a._id)) continue
       picked.push(a)
-      used.add(a._id as string)
+      used.add(a._id)
       if (picked.length >= n) break
     }
     return picked
@@ -120,11 +159,11 @@ function HomePage() {
   const morelead = take(allPool, 1)[0]
   const moreRail = take(allPool, 4)
 
-  const mostRead = rankedPool.slice(0, 4)
+  const trending = rankedPool.slice(0, 4)
 
   const railsBySection = new Map<string, typeof latest>()
   for (const article of latest) {
-    if (used.has(article._id as string)) continue
+    if (used.has(article._id)) continue
     if (!article.section) continue
     if (article.section.slug === "things-to-do") continue
     const list = railsBySection.get(article.section.slug) ?? []
@@ -133,7 +172,7 @@ function HomePage() {
   }
 
   return (
-    <div className="space-y-10">
+    <div className="flex flex-col gap-10">
       {/* ════════════════════ TOP HERO TABLE ════════════════════
           Mirrors WaPo's hp-top-table-main: an 8/4 split where the main
           column stacks several "tables" (split lead + xl rows) and the
@@ -150,13 +189,15 @@ function HomePage() {
                 <Link
                   to="/article/$slug"
                   params={{ slug: lead.slug }}
-                  className="group/lead block self-start overflow-hidden rounded-[4px] md:col-span-7 md:col-start-6"
+                  onClick={(e) => openInDrawer(lead.slug, e)}
+                  className="group/lead block self-start [contain:paint] md:col-span-7 md:col-start-6"
                 >
-                  <img
-                    src={proxiedImageUrl(lead.heroImage, { width: 1200 })}
-                    alt=""
-                    loading="eager"
-                    className="aspect-[3/2] w-full object-cover transition-transform duration-200 ease-out group-hover/lead:scale-[1.01]"
+                  <HeroImg
+                    url={lead.heroImage}
+                    width={1200}
+                    priority
+                    sizes={LEAD_HERO_SIZES}
+                    className="aspect-[3/2] w-full object-cover transition-transform duration-200 ease-out group-hover/lead:scale-[1.015]"
                   />
                   {tr(lead).heroCaption ? (
                     <figcaption className="meta mt-2">
@@ -208,13 +249,13 @@ function HomePage() {
                 <Link
                   to="/article/$slug"
                   params={{ slug: a.slug }}
-                  className="group/xl block self-start overflow-hidden rounded-[4px] md:col-span-7 md:col-start-6"
+                  onClick={(e) => openInDrawer(a.slug, e)}
+                  className="group/xl block self-start [contain:paint] md:col-span-7 md:col-start-6"
                 >
-                  <img
-                    src={proxiedImageUrl(a.heroImage, { width: 1000 })}
-                    alt=""
-                    loading="lazy"
-                    className="aspect-[3/2] w-full object-cover transition-transform duration-200 ease-out group-hover/xl:scale-[1.01]"
+                  <HeroImg
+                    url={a.heroImage}
+                    width={1000}
+                    className="aspect-[3/2] w-full object-cover transition-transform duration-200 ease-out group-hover/xl:scale-[1.015]"
                   />
                   {tr(a).heroCaption ? (
                     <figcaption className="meta mt-2">
@@ -233,62 +274,57 @@ function HomePage() {
               </div>
             </div>
           ))}
+
+          {/* "Miami in numbers" — full-width grid of metrics in the
+              main column, immediately after the day's top-news stack.
+              Hidden until at least 3 metrics exist so the section
+              doesn't read as half-built when the catalog is empty. */}
+          <MetricsGrid className="mt-10" />
         </div>
 
-        {/* RIGHT RAIL — 3 of 12. Full vertical span alongside the hero stack. */}
-        <aside className="lg:col-span-3 lg:border-l lg:border-foreground/15 lg:pl-6">
-          <SectionHeaderCell
-            title={t("nav.events")}
-            right={
-              <Link
-                to="/events"
-                className="meta tracking-wider uppercase hover:underline"
-              >
-                {t("home.allLink")}
-              </Link>
-            }
-          />
-          <div className="flex flex-col divide-y divide-foreground/15">
-            {upcomingEvents.length === 0 ? (
-              <p className="meta py-6 text-xs">{t("home.empty.calendar")}</p>
-            ) : (
-              upcomingEvents.map((e) => (
-                <div key={e._id} className="py-4 first:pt-5 last:pb-0">
-                  <EventListItem event={e} />
-                </div>
-              ))
-            )}
+        {/* RIGHT RAIL — 3 of 12. Stacks all sidebar widgets vertically so
+            the rail extends past the hero's main column when the LLM-fed
+            widgets are populated. Order: weather, sports, events, then
+            the daily-rotating LLM widgets — first the date-specific
+            "On this day" up top, followed by the rotation set. */}
+        <aside className="flex flex-col gap-8 lg:col-span-3 lg:border-l lg:border-foreground/15 lg:pl-6">
+          <WeatherWidget />
+          <RadarWidget />
+          <SportsWidget />
+          <div>
+            <SectionHeaderCell
+              title={t("nav.events")}
+              right={
+                <Link
+                  to="/events"
+                  className="meta hover:underline"
+                >
+                  {t("home.allLink")}
+                </Link>
+              }
+            />
+            <div className="flex flex-col divide-y divide-foreground/15">
+              {upcomingEvents.length === 0 ? (
+                <p className="meta py-6 text-xs">{t("home.empty.calendar")}</p>
+              ) : (
+                upcomingEvents.map((e) => (
+                  <div key={e._id} className="py-4 first:pt-5 last:pb-0">
+                    <EventListItem event={e} />
+                  </div>
+                ))
+              )}
+            </div>
           </div>
+          <OnThisDayWidget />
+          <PhotoOfDayWidget />
+          <LandmarkWidget />
+          <AnimalFactWidget />
+          <FunFactWidget />
+          <QuoteWidget />
         </aside>
       </section>
 
-      {/* ════════════════════ Ad — IAB Billboard ════════════════════
-          Highest-CPM standard desktop banner (IAB 970×250 "Billboard"),
-          falls back to 300×250 Medium Rectangle on mobile. Reserved
-          space prevents CLS when the ad eventually fills in via a tag
-          (DFP, Prebid, etc.) — replace the inner div with the ad slot. */}
-      <aside aria-label="Advertisement" className={BLOCK}>
-        <p className="meta mb-3 text-center text-[0.65rem] tracking-[0.2em] uppercase">
-          Advertisement
-        </p>
-        <div
-          data-ad-slot="home-billboard"
-          className="mx-auto flex h-[250px] w-full max-w-[300px] items-center justify-center rounded-[4px] border border-dashed border-foreground/30 bg-muted/30 md:max-w-[970px]"
-        >
-          <span className="meta text-xs">
-            <span className="md:hidden">300 × 250</span>
-            <span className="hidden md:inline">970 × 250 — Billboard</span>
-          </span>
-        </div>
-      </aside>
-
-      {/* ════════════════════ Widgets ════════════════════ */}
-      <section className={`${BLOCK} grid grid-cols-1 gap-8 md:grid-cols-3`}>
-        <WeatherWidget />
-        <div className="md:col-span-2">
-          <SportsWidget />
-        </div>
-      </section>
+      <BannerAd slot="home-mid" className={BLOCK} />
 
       {/* ════════════════════ More Top Stories ════════════════════
           Mirrors WaPo's second hero chain: lead xl on the left + 4 text-only
@@ -306,13 +342,13 @@ function HomePage() {
                   <Link
                     to="/article/$slug"
                     params={{ slug: morelead.slug }}
-                    className="group/more block self-start overflow-hidden rounded-[4px] md:col-span-7 md:col-start-6"
+                    onClick={(e) => openInDrawer(morelead.slug, e)}
+                    className="group/more block self-start [contain:paint] md:col-span-7 md:col-start-6"
                   >
-                    <img
-                      src={proxiedImageUrl(morelead.heroImage, { width: 1000 })}
-                      alt=""
-                      loading="lazy"
-                      className="aspect-[3/2] w-full object-cover transition-transform duration-200 ease-out group-hover/more:scale-[1.01]"
+                    <HeroImg
+                      url={morelead.heroImage}
+                      width={1000}
+                      className="aspect-[3/2] w-full object-cover transition-transform duration-200 ease-out group-hover/more:scale-[1.015]"
                     />
                     {tr(morelead).heroCaption ? (
                       <figcaption className="meta mt-2">
@@ -355,12 +391,12 @@ function HomePage() {
         </section>
       ) : null}
 
-      {/* ════════════════════ Most Read ════════════════════ */}
-      {mostRead.length > 0 ? (
+      {/* ════════════════════ Trending ════════════════════ */}
+      {trending.length > 0 ? (
         <section className={BLOCK}>
-          <MostReadStrip
-            label={t("home.mostRead")}
-            articles={mostRead}
+          <TrendingStrip
+            label={t("home.trending")}
+            articles={trending}
           />
         </section>
       ) : null}
@@ -415,6 +451,8 @@ function HomePage() {
           </section>
         )
       })}
+
+      <BannerAd slot="home-bottom" className={BLOCK} />
     </div>
   )
 }

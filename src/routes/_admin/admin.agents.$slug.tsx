@@ -68,12 +68,12 @@ function AgentDetailPage() {
   if (!agent) return <p className="meta">Loading…</p>
 
   return (
-    <div className="space-y-8">
+    <div className="flex flex-col gap-8">
       <header>
         <Link to="/admin/agents" className="meta hover:underline">
           ← All desks
         </Link>
-        <h1 className="font-heading mt-2 text-3xl font-semibold">
+        <h1 className="font-sans mt-2 text-3xl font-semibold">
           {agent.name}
         </h1>
       </header>

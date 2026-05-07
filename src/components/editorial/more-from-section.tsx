@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router"
 
-import type { ArticleWithRelations, Section } from "@/lib/article-types"
 import { StoryItem } from "./story-item"
+import type { ArticleWithRelations, Section } from "@/lib/article-types"
 
 // Tighter than `SectionRail` — for the in-article footer. No bold rule,
 // no per-section accent header, no "More →" affordance: this rail lives

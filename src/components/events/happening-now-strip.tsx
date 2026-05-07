@@ -1,17 +1,18 @@
 import { Link } from "@tanstack/react-router"
 import { MapPin } from "lucide-react"
 
-import { EVENT_KINDS } from "../../../convex/lib/eventKinds"
 import type { EventWithSection } from "@/lib/event-helpers"
 import { formatEventTime } from "@/lib/event-helpers"
-import { proxiedImageUrl } from "@/lib/image-proxy"
+import { useTranslation } from "@/lib/i18n/context"
+import { localizedEvent } from "@/lib/localized-event"
+import { HeroImg } from "@/components/site/hero-img"
+import { useOpenArticleDrawer } from "@/lib/use-open-article-drawer"
 
-const KIND_BY_SLUG = new Map(EVENT_KINDS.map((k) => [k.slug, k]))
 const ONE_DAY_MS = 24 * 3_600_000
 
-// "Happening now" — events starting between now and the next 24 hours,
-// rendered as a horizontal strip above the week view. Hidden when the
-// next 24h has nothing scheduled (most overnight hours, e.g.).
+// "Happening soon" — events starting between now and the next 24 hours,
+// rendered as a horizontal strip. Hidden when the next 24h has nothing
+// scheduled (most overnight hours, e.g.).
 //
 // Each tile is section-accented (`border-l-2` + kicker color), shows
 // time + location, and is the click target — opens the event URL when
@@ -31,15 +32,15 @@ export function HappeningNowStrip({
   if (happening.length === 0) return null
 
   return (
-    <section className="space-y-3">
+    <section className="flex flex-col gap-3">
       <header className="flex items-baseline justify-between">
-        <h2 className="font-sans text-sm font-bold tracking-[0.18em] uppercase">
+        <h2 className="font-sans text-base font-semibold">
           <span className="relative inline-flex items-center gap-2">
             <span
               aria-hidden
               className="size-2 rounded-full bg-destructive shadow-[0_0_0_3px_color-mix(in_oklch,var(--destructive)_30%,transparent)]"
             />
-            Happening today
+            Happening soon
           </span>
         </h2>
         <span className="meta text-xs tabular-nums">
@@ -57,21 +58,23 @@ export function HappeningNowStrip({
   )
 }
 
-function HappeningCard({ event }: { event: EventWithSection }) {
+function HappeningCard({ event: rawEvent }: { event: EventWithSection }) {
+  const { lang } = useTranslation()
+  const event = localizedEvent(rawEvent, lang)
+  const openInDrawer = useOpenArticleDrawer()
   const accent = event.section?.accentColor ?? "var(--foreground)"
-  const kind = event.kind ? KIND_BY_SLUG.get(event.kind) : undefined
-  const label = event.section?.name ?? kind?.label ?? "Event"
+  const label = event.section?.name ?? "Event"
   const time = formatEventTime(event)
+  const heroImage = event.heroImage
   const inner = (
     <article
       className="flex h-full w-[280px] shrink-0 snap-start flex-col gap-2 rounded-md border bg-card p-4 transition-colors hover:bg-muted/50"
       style={{ borderLeftWidth: "3px", borderLeftColor: accent }}
     >
-      {event.imageUrl ? (
-        <img
-          src={proxiedImageUrl(event.imageUrl, { width: 480 })}
-          alt=""
-          loading="lazy"
+      {heroImage ? (
+        <HeroImg
+          url={heroImage}
+          width={480}
           className="aspect-[16/10] w-full rounded-[3px] object-cover"
         />
       ) : null}
@@ -95,6 +98,27 @@ function HappeningCard({ event }: { event: EventWithSection }) {
       </div>
     </article>
   )
+  // Always prefer the drawer when a slug is available — the drawer
+  // surfaces the external URL / linked article as CTAs inside its body
+  // (see EventLayout). External-only and article-only fallbacks remain
+  // for legacy rows that haven't been re-saved through the new write
+  // path that stamps a slug.
+  if (event.slug) {
+    return (
+      <Link
+        to="."
+        search={
+          ((prev: Record<string, unknown>) => ({
+            ...prev,
+            event: event.slug,
+          })) as never
+        }
+        className="snap-start"
+      >
+        {inner}
+      </Link>
+    )
+  }
   if (event.url) {
     return (
       <a
@@ -112,6 +136,7 @@ function HappeningCard({ event }: { event: EventWithSection }) {
       <Link
         to="/article/$slug"
         params={{ slug: event.article.slug }}
+        onClick={(e) => openInDrawer(event.article!.slug, e)}
         className="snap-start"
       >
         {inner}

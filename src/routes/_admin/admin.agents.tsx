@@ -2,7 +2,7 @@ import { convexQuery } from "@convex-dev/react-query"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useConvex } from "convex/react"
-import { Loader2, Pencil, Play, Sparkles } from "lucide-react"
+import { Loader2, Pencil, Play } from "lucide-react"
 import { useMemo, useState } from "react"
 import { toast } from "sonner"
 
@@ -34,7 +34,6 @@ function AgentsPage() {
   const { data } = useQuery(convexQuery(api.agentsData.list, {}))
   // Per-desk pending state so multiple desks can run in parallel.
   const [running, setRunning] = useState<Set<string>>(new Set())
-  const [enriching, setEnriching] = useState<Set<string>>(new Set())
 
   const visibleIds = useMemo(
     () => (data ?? []).map((a) => a._id as string),
@@ -45,10 +44,10 @@ function AgentsPage() {
 
   const refetch = () => {
     queryClient.invalidateQueries({
-      queryKey: convexQuery(api.articles.reviewQueue, {}).queryKey,
+      queryKey: convexQuery(api.agentsData.list, {}).queryKey,
     })
     queryClient.invalidateQueries({
-      queryKey: convexQuery(api.agentsData.list, {}).queryKey,
+      queryKey: convexQuery(api.articles.latest, { limit: 6 }).queryKey,
     })
   }
 
@@ -90,7 +89,7 @@ function AgentsPage() {
           description: `From ${result.itemsConsidered} candidate items.`,
           action: {
             label: "View queue →",
-            onClick: () => navigate({ to: "/admin/queue" }),
+            onClick: () => navigate({ to: "/admin/published" }),
           },
         },
       )
@@ -105,7 +104,7 @@ function AgentsPage() {
   const bulkRun = useMutation({
     mutationFn: async () => {
       const slugs =
-        data?.filter((a) => selected.has(a._id as string)).map((a) => a.slug) ??
+        data?.filter((a) => selected.has(a._id)).map((a) => a.slug) ??
         []
       setRunning((prev) => new Set([...prev, ...slugs]))
       try {
@@ -152,122 +151,8 @@ function AgentsPage() {
             description: `${totalDrafts} drafts created.`,
             action: {
               label: "View queue →",
-              onClick: () => navigate({ to: "/admin/queue" }),
+              onClick: () => navigate({ to: "/admin/published" }),
             },
-          },
-        )
-      }
-    },
-  })
-
-  const enrichDesk = useMutation({
-    mutationFn: async (slug: string) => {
-      setEnriching((prev) => new Set(prev).add(slug))
-      try {
-        const result = await convex.action(api.agents.enrichDesk, {
-          agentSlug: slug,
-        })
-        return { ...result, slug }
-      } finally {
-        setEnriching((prev) => {
-          const next = new Set(prev)
-          next.delete(slug)
-          return next
-        })
-      }
-    },
-    onSuccess: (result) => {
-      refetch()
-      const deskName =
-        data?.find((a) => a.slug === result.slug)?.name ?? result.slug
-      if (result.error) {
-        toast.error(`${deskName} enrichment failed`, {
-          description: result.error,
-        })
-        return
-      }
-      const a = result.articlesEnriched
-      const e = result.eventsEnriched
-      if (a === 0 && e === 0) {
-        toast(`${deskName}: nothing to enrich`, {
-          description: `Scanned ${result.articlesScanned} queued + published articles. Try expanding the lookback window.`,
-        })
-        return
-      }
-      toast.success(
-        `${deskName} enriched ${a} ${a === 1 ? "story" : "stories"}${
-          e > 0 ? ` + ${e} ${e === 1 ? "event" : "events"}` : ""
-        }`,
-        {
-          description: `Scanned ${result.articlesScanned} queued + published articles.`,
-        },
-      )
-    },
-    onError: (err) => {
-      toast.error("Enrich failed", {
-        description: err instanceof Error ? err.message : String(err),
-      })
-    },
-  })
-
-  const bulkEnrich = useMutation({
-    mutationFn: async () => {
-      const slugs =
-        data?.filter((a) => selected.has(a._id as string)).map((a) => a.slug) ??
-        []
-      setEnriching((prev) => new Set([...prev, ...slugs]))
-      try {
-        const results = await Promise.all(
-          slugs.map(async (slug) => {
-            try {
-              const r = await convex.action(api.agents.enrichDesk, {
-                agentSlug: slug,
-              })
-              return {
-                slug,
-                ok: !r.error,
-                articles: r.articlesEnriched,
-                events: r.eventsEnriched,
-                error: r.error,
-              }
-            } catch (e) {
-              return {
-                slug,
-                ok: false,
-                articles: 0,
-                events: 0,
-                error: e instanceof Error ? e.message : String(e),
-              }
-            }
-          }),
-        )
-        return results
-      } finally {
-        setEnriching((prev) => {
-          const next = new Set(prev)
-          slugs.forEach((s) => next.delete(s))
-          return next
-        })
-      }
-    },
-    onSuccess: (results) => {
-      clear()
-      refetch()
-      const totalArticles = results.reduce((n, r) => n + r.articles, 0)
-      const totalEvents = results.reduce((n, r) => n + r.events, 0)
-      const failures = results.filter((r) => !r.ok || r.error).length
-      if (failures > 0) {
-        toast.warning(
-          `${results.length - failures}/${results.length} desks enriched`,
-          {
-            description: `${totalArticles} articles · ${totalEvents} events · ${failures} failed`,
-          },
-        )
-      } else {
-        toast.success(
-          `${results.length} ${results.length === 1 ? "desk" : "desks"} enriched`,
-          {
-            description: `${totalArticles} articles + ${totalEvents} events refreshed.`,
           },
         )
       }
@@ -288,10 +173,10 @@ function AgentsPage() {
   })
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="font-heading text-3xl font-semibold tracking-[-0.02em]">
+          <h1 className="font-sans text-3xl font-semibold tracking-[-0.02em]">
             Desks
           </h1>
           <p className="meta mt-1">
@@ -313,20 +198,6 @@ function AgentsPage() {
                 <Play />
               )}{" "}
               Run desks
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={bulkEnrich.isPending}
-              onClick={() => bulkEnrich.mutate()}
-              title="Re-run desks across queued (pending review) + published stories — appends new citations, links related, polishes copy when warranted."
-            >
-              {bulkEnrich.isPending ? (
-                <Loader2 className="animate-spin" />
-              ) : (
-                <Sparkles />
-              )}{" "}
-              Enrich queued + published
             </Button>
             <Button
               size="sm"
@@ -384,7 +255,6 @@ function AgentsPage() {
                   const id = agent._id as string
                   const isSelected = selected.has(id)
                   const isRunning = running.has(agent.slug)
-                  const isEnriching = enriching.has(agent.slug)
                   return (
                     <TableRow
                       key={agent._id}
@@ -464,20 +334,6 @@ function AgentsPage() {
                               <Loader2 className="animate-spin" />
                             ) : (
                               <Play />
-                            )}
-                          </Button>
-                          <Button
-                            size="icon-sm"
-                            variant="ghost"
-                            aria-label="Enrich queued + published"
-                            title="Enrich queued + published — re-runs over existing stories (queued for review and already live) to add citations, link related, polish copy, refresh hero images"
-                            disabled={isEnriching}
-                            onClick={() => enrichDesk.mutate(agent.slug)}
-                          >
-                            {isEnriching ? (
-                              <Loader2 className="animate-spin" />
-                            ) : (
-                              <Sparkles />
                             )}
                           </Button>
                           <Link

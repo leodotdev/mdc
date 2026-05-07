@@ -28,20 +28,20 @@ export function PageHeader({
   return (
     <header
       className={cn(
-        "flex flex-wrap items-end justify-between gap-3 pb-6",
-        ruleBottom && "rule-bottom",
+        "flex flex-wrap items-end justify-between gap-3",
+        ruleBottom && "rule-bottom pb-6",
         className,
       )}
     >
-      <div className="min-w-0">
+      <div className="flex min-w-0 flex-1 flex-col gap-2 text-center">
         {kicker ? (
           <p className="kicker" style={{ color: kickerColor }}>
             {kicker}
           </p>
         ) : null}
-        <h1 className="display-xl mt-2 text-balance">{title}</h1>
+        <h1 className="display-xl text-balance">{title}</h1>
         {dek ? (
-          <p className="font-editorial mt-3 max-w-prose text-base text-pretty text-muted-foreground">
+          <p className="font-editorial mx-auto max-w-prose text-base text-pretty text-muted-foreground">
             {dek}
           </p>
         ) : null}

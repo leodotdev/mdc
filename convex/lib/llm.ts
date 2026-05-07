@@ -1,6 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk"
 
-import { EVENT_KINDS } from "./eventKinds"
 import { NEIGHBORHOODS } from "./neighborhoods"
 
 export type DraftItem = {
@@ -53,24 +52,56 @@ export type SectionChoice = {
 
 // Standalone event extracted from source items. Lives alongside drafts
 // because most events are mentioned in news copy; some are drafted into
-// articles, others stand on their own (a public notice, a holiday).
+// articles, others stand on their own (a public meeting, a holiday).
+//
+// Section parity with articles: every event belongs to a section. The
+// desk's LLM picks the most specific section from its allowed tree,
+// identical to how it picks `sectionSlug` for drafts.
 export type LlmEvent = {
   title: string
   description: string
-  kind: "general" | "meeting" | "notice" | "holiday" | "deal"
   startsAtIso: string
   endsAtIso?: string
   allDay: boolean
   locationName?: string
-  neighborhood?: string
   url?: string
   price?: string
+  /** kebab-case slug, ≤ 80 chars. */
+  suggestedSlug: string
+  tags: Array<string>
+  /** Multi-slug neighborhoods, validated against lib/neighborhoods.ts. */
+  neighborhoodSlugs: Array<string>
+  /** Picked from the desk's allowed sections. Falls back to desk primary. */
+  sectionSlug?: string
   citationItemIndices: Array<number>
+  /** Indices into `relatedCandidates` for sibling articles. */
+  relatedArticleIndices: Array<number>
   /** Optional index into `drafts[]` of this same response for cross-link. */
   relatedDraftIndex?: number
 }
 
-export type DraftBatch = { drafts: Array<LlmDraft>; events: Array<LlmEvent> }
+export type LlmMetric = {
+  slug: string
+  title: string
+  subtitle?: string
+  kind: "number" | "number-with-delta" | "line" | "bars" | "rank" | "compare"
+  data: unknown
+  unit?: string
+  relatedTags: Array<string>
+  relatedSectionSlugs: Array<string>
+  citationItemIndices: Array<number>
+}
+
+export type DraftBatch = {
+  drafts: Array<LlmDraft>
+  events: Array<LlmEvent>
+  metrics: Array<LlmMetric>
+  /** Number of draft objects the LLM emitted before validation. When
+   *  this is > drafts.length, drafts were dropped for missing/invalid
+   *  required fields — the diagnostic helps distinguish "model produced
+   *  nothing" from "model produced unusable output." */
+  rawDraftCount: number
+}
 
 function buildDraftTool(sectionSlugs: Array<string>) {
   const draftProperties: Record<string, unknown> = {
@@ -93,7 +124,7 @@ function buildDraftTool(sectionSlugs: Array<string>) {
       type: "array",
       items: { type: "string" },
       description:
-        "2-5 lowercase tags. Do NOT use generic location tags like 'miami', 'miami-dade', or 'florida' — every story is already local by definition. Prefer specific topics, neighborhoods (e.g. 'wynwood', 'little-havana'), people, institutions, or beats.",
+        "2-5 lowercase tags. Tags are **reusable taxonomy hooks** — only pick tags that other stories or events will plausibly share. Good: ongoing series ('formula-1', 'art-basel'), beats ('housing', 'transit'), institutions ('miami-dade-county', 'inter-miami', 'um'), named people, neighborhood slugs ('wynwood', 'little-havana'), recurring topics ('hurricane-season', 'algorithmic-bias'). BAD (do NOT use): single-event names ('fan-fest', 'opening-night-gala'), marketing slugs, ad-hoc descriptors that won't recur. NEVER use generic location tags ('miami', 'miami-dade', 'florida') — every story is local by definition. When in doubt, drop the tag.",
     },
     citationItemIndices: {
       type: "array",
@@ -167,13 +198,13 @@ function buildDraftTool(sectionSlugs: Array<string>) {
             title: { type: "string", description: "Short event title (≤100 chars)" },
             description: {
               type: "string",
-              description: "1–2 sentence description (≤300 chars)",
-            },
-            kind: {
-              type: "string",
-              enum: EVENT_KINDS.map((k) => k.slug),
               description:
-                "Event category: 'general' for things-to-do (concerts/openings/festivals); 'meeting' for community meetings + public hearings; 'notice' for public notices and comment periods; 'holiday' for civic/cultural/religious holidays; 'deal' for offers, discounts, free-admission days.",
+                "Snappy 1–2 sentence description in our house voice (≤300 chars). Same register as article deks: lead with the news, no filler.",
+            },
+            suggestedSlug: {
+              type: "string",
+              description:
+                "kebab-case slug for the event detail URL (≤80 chars). Should not include the date — the system disambiguates with timestamp when needed.",
             },
             startsAtIso: {
               type: "string",
@@ -189,14 +220,36 @@ function buildDraftTool(sectionSlugs: Array<string>) {
               description: "True for all-day events (holidays, multi-day festivals).",
             },
             locationName: { type: "string", description: "Venue or place name." },
-            neighborhood: { type: "string", description: "Miami neighborhood, if known." },
             url: { type: "string", description: "Canonical event URL if mentioned." },
             price: { type: "string", description: "e.g. 'Free' or '$15-30'." },
+            tags: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "2–5 lowercase reusable taxonomy tags. Pick tags that OTHER events or stories will share — ongoing series ('formula-1', 'art-basel', 'calle-ocho'), beats ('public-art', 'live-music'), institutions, named people, neighborhood slugs. NEVER one-off event names ('fan-fest', 'opening-gala'), marketing slugs, or ad-hoc descriptors. NEVER 'miami' / 'miami-dade' / 'florida'. When in doubt, drop the tag.",
+            },
+            neighborhoodSlugs: {
+              type: "array",
+              items: { type: "string", enum: NEIGHBORHOODS.map((n) => n.slug) },
+              description:
+                "Miami neighborhood slugs the event ties to. 0–3 entries. Use ONLY slugs from the allowed list.",
+            },
+            sectionSlug: {
+              type: "string",
+              description:
+                "Section to file this event under. Pick from the desk's allowed sections (same list as drafts). Default to the desk's primary section if no sub-section fits.",
+            },
             citationItemIndices: {
               type: "array",
               items: { type: "integer" },
               description:
                 "Source item indices that mention this event. Must include ≥1.",
+            },
+            relatedArticleIndices: {
+              type: "array",
+              items: { type: "integer" },
+              description:
+                "Indices into the related candidate articles[] for sibling stories. 0–3 entries. Empty is fine.",
             },
             relatedDraftIndex: {
               type: "integer",
@@ -207,9 +260,87 @@ function buildDraftTool(sectionSlugs: Array<string>) {
           required: [
             "title",
             "description",
-            "kind",
+            "suggestedSlug",
             "startsAtIso",
             "allDay",
+            "tags",
+            "neighborhoodSlugs",
+            "citationItemIndices",
+            "relatedArticleIndices",
+          ],
+        },
+      },
+      metrics: {
+        type: "array",
+        description:
+          "Promote a number from the cited sources to a first-class Miami metric. ONLY when the source explicitly states the number — never estimate or compute. Examples: census population counts, BLS unemployment rates, NAR median home prices, ranking-list mentions ('Miami ranks #4 in cost of living'). The number must be locally relevant (Miami-Dade, Miami metro, South Florida, Florida statewide for big-picture stats). Empty array is the default. Each metric must cite at least one source item.",
+        items: {
+          type: "object",
+          properties: {
+            slug: {
+              type: "string",
+              description:
+                "kebab-case slug, ≤80 chars. Pick a stable identifier so re-runs that find a fresher version of the same metric upsert in place. Example slugs: 'miami-dade-population', 'miami-metro-unemployment', 'miami-median-home-price', 'miami-cost-of-living-rank'.",
+            },
+            title: {
+              type: "string",
+              description:
+                "Short label (≤60 chars). Reads as a stat headline: 'Miami-Dade population', 'Median home price', 'Cost of living rank'.",
+            },
+            subtitle: {
+              type: "string",
+              description:
+                "Optional 1-line context (≤80 chars). Period covered, source agency, vintage. Example: 'Census ACS 2024 5-year', 'BLS, Apr 2026'.",
+            },
+            kind: {
+              type: "string",
+              enum: [
+                "number",
+                "number-with-delta",
+                "line",
+                "bars",
+                "rank",
+                "compare",
+              ],
+              description:
+                "Shape of the data. `number` = single value. `number-with-delta` = value plus YoY/QoQ change. `line` = time series. `bars` = categorical breakdown. `rank` = position on a list. `compare` = two values side by side.",
+            },
+            data: {
+              type: "object",
+              description:
+                "Payload — shape varies by kind. number/number-with-delta: { value, delta?: { value, period } }. line/bars: { points: [{ label, value }] }. rank: { value, outOf, list }. compare: { left: { label, value }, right: { label, value } }.",
+            },
+            unit: {
+              type: "string",
+              description:
+                "Display unit, e.g. 'people', '%', '$', 'rank of 50'. Optional.",
+            },
+            relatedTags: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Tags that signal which articles this metric is relevant to. The renderer can auto-embed when an article shares these tags. Lowercase, reusable.",
+            },
+            relatedSectionSlugs: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Section slugs this metric belongs to (e.g. ['real-estate', 'business']). Empty = homepage-eligible.",
+            },
+            citationItemIndices: {
+              type: "array",
+              items: { type: "integer" },
+              description:
+                "Source item indices that supplied this metric. Must include ≥1 — never invent numbers.",
+            },
+          },
+          required: [
+            "slug",
+            "title",
+            "kind",
+            "data",
+            "relatedTags",
+            "relatedSectionSlugs",
             "citationItemIndices",
           ],
         },
@@ -262,6 +393,14 @@ function validateDraft(raw: unknown): LlmDraft | null {
   }
 }
 
+export type MetricCatalogEntry = {
+  slug: string
+  title: string
+  unit?: string
+  /** Tags that should trigger an inline embed when matched on a draft's tags. */
+  relatedTags: ReadonlyArray<string>
+}
+
 export async function generateDrafts(opts: {
   systemPrompt: string
   model: string
@@ -270,6 +409,10 @@ export async function generateDrafts(opts: {
   relatedCandidates?: Array<RelatedCandidate>
   /** Sections the desk can file stories under (primary + children). */
   sectionChoices?: Array<SectionChoice>
+  /** Current metric catalog. The LLM may drop `[[metric:slug]]` tokens
+   *  into the body of any draft whose tags match the metric's
+   *  relatedTags — the article renderer expands them inline. */
+  metricCatalog?: ReadonlyArray<MetricCatalogEntry>
 }): Promise<DraftBatch> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set in Convex env")
@@ -320,17 +463,20 @@ export async function generateDrafts(opts: {
     `- Never reproduce source text verbatim — re-express in our voice.`,
     `- No headlinese / hedging clichés ("amid", "as", "after", "in a sign that", "experts say", "comes as", "raises concerns"). Cut them.`,
     `- No clickbait. No questions in headlines. No "you'll never believe", "here's what", etc.`,
-    `- Skip items that are not newsworthy for a Miami audience.`,
+    `- The ONLY reasons to omit an item from drafts: (i) it's a duplicate of an existing article on the site (use updateOfRelatedIndex), or (ii) it's clearly not Miami-Dade-relevant (e.g. a Trump/EU trade deal headline carried by Local 10's wire). "Maybe not interesting enough" is NOT a reason to skip — draft it.`,
     relatedText
       ? `- For each draft, look at the "Recently published articles" list below. If this draft is a follow-up, background context, or another angle on one of those, include its bracket index in \`relatedArticleIndices\`. 0–3 entries. Empty is fine — only link when the connection is real.`
       : `- Leave \`relatedArticleIndices\` empty (no recent articles available).`,
     relatedText
-      ? `- DEDUPE: If your incoming sources are reporting on the SAME story we already covered (one of the candidate articles is essentially the same event from a different outlet), set \`updateOfRelatedIndex\` to that candidate's bracket index instead of producing a fresh draft. The system will merge your sources into the existing article. Only use this for *the same story*, not follow-ups or another angle (those go in relatedArticleIndices).`
+      ? `- DEDUPE — BE AGGRESSIVE. If your incoming sources cover the same NEWS EVENT, INCIDENT, PERSON, or specific TOPIC as one of the candidate articles, set \`updateOfRelatedIndex\` to that candidate's bracket index instead of producing a fresh draft. Two stories about the same person/place/incident are the same news. Two stories quoting the same officials about the same matter are the same news. Two stories listing the same upcoming concert / opening / closure are the same news. Two stories about the same legal case, the same vote, the same arrest, the same death, the same charge — ALL the same news. The system will merge your incoming sources into the existing article and re-render the body with the broader citation set. Only use \`relatedArticleIndices\` (not updateOfRelatedIndex) for clearly distinct angles or clear follow-ups (the day-after analysis, a profile of someone tangentially involved, a sidebar).`
       : "",
     sectionsText
       ? `- For each draft, set \`sectionSlug\` to the most specific section from this desk's allowed list (below). Default to the desk's primary section if no sub-section is a clearer fit.`
       : "",
-    `- ALSO populate \`events\`: extract any specific upcoming events mentioned in the source items. Required fields: title, description, kind, startsAtIso (ISO 8601 with Miami offset), allDay, citationItemIndices. Choose kind from: general (things-to-do), meeting (community meeting / public hearing), notice (public notice / comment period), holiday, deal. STRICT: only include events with an explicit date in the source — never invent dates. Empty array is fine when sources mention no concrete events.`,
+    `- ALSO populate \`events\`: extract any specific upcoming events mentioned in the source items. Required fields: title, description, suggestedSlug, startsAtIso (ISO 8601 with Miami offset), allDay, tags, neighborhoodSlugs, citationItemIndices, relatedArticleIndices. STRICT: only include events with an explicit date in the source — never invent dates. Pick \`sectionSlug\` from the desk's allowed sections (same options as drafts) so the event files under the right section. Empty array is fine when sources mention no concrete events.`,
+    (opts.metricCatalog ?? []).length > 0
+      ? `- INLINE METRIC EMBEDS: when a draft's tags overlap with a metric's relatedTags below, drop a \`[[metric:slug]]\` token into the body on its own line where the metric's number would naturally appear. The renderer expands the token into a compact widget. Use sparingly — at most one embed per draft, and only when the metric directly supports the story's claim. Example: a story about cost of living that overlaps with the 'miami-cost-of-living-rank' metric → drop \`[[metric:miami-cost-of-living-rank]]\` near the relevant sentence.`
+      : "",
     ``,
     `Source items:`,
     itemsText,
@@ -339,6 +485,16 @@ export async function generateDrafts(opts: {
       : []),
     ...(relatedText
       ? ["", `Recently published articles (for relatedArticleIndices):`, relatedText]
+      : []),
+    ...((opts.metricCatalog ?? []).length > 0
+      ? [
+          "",
+          `Available metrics for inline embeds (slug — title — relatedTags):`,
+          ...(opts.metricCatalog ?? []).map(
+            (m) =>
+              `- ${m.slug} — ${m.title}${m.unit ? ` (${m.unit})` : ""} — tags: ${m.relatedTags.length > 0 ? m.relatedTags.join(", ") : "(none)"}`,
+          ),
+        ]
       : []),
   ]
     .filter(Boolean)
@@ -363,39 +519,124 @@ export async function generateDrafts(opts: {
     (block): block is Anthropic.ToolUseBlock => block.type === "tool_use",
   )
   if (!toolUse) throw new Error("LLM did not return a tool_use block")
-  const input = toolUse.input as { drafts?: unknown; events?: unknown }
-  if (!Array.isArray(input.drafts)) {
-    throw new Error("LLM tool input did not contain drafts array")
+  const input = toolUse.input as {
+    drafts?: unknown
+    events?: unknown
+    metrics?: unknown
   }
-  const drafts = input.drafts
+  // The model occasionally calls the tool with no drafts array — usually
+  // when it found nothing draft-worthy this batch but still wanted to
+  // emit events or metrics. Treat the absence as an empty array rather
+  // than failing the run.
+  const rawDrafts = Array.isArray(input.drafts) ? input.drafts : []
+  const drafts = rawDrafts
     .map(validateDraft)
     .filter((d): d is LlmDraft => d !== null)
+  const droppedDrafts = rawDrafts.length - drafts.length
+  if (droppedDrafts > 0) {
+    // Dump the raw shape of the first invalid draft so we can see
+    // which required field the model omitted.
+    const firstInvalid = rawDrafts.find((r) => validateDraft(r) === null)
+    console.warn(
+      `[generateDrafts] dropped ${droppedDrafts}/${rawDrafts.length} drafts during validation. First invalid raw object:`,
+      JSON.stringify(firstInvalid)?.slice(0, 600),
+    )
+  }
   const events = Array.isArray(input.events)
     ? input.events
         .map(validateEvent)
         .filter((e): e is LlmEvent => e !== null)
     : []
-  return { drafts, events }
+  const metrics = Array.isArray(input.metrics)
+    ? input.metrics
+        .map(validateMetric)
+        .filter((m): m is LlmMetric => m !== null)
+    : []
+  return {
+    drafts,
+    events,
+    metrics,
+    rawDraftCount: rawDrafts.length,
+  }
 }
 
-const KIND_SET: Set<string> = new Set(EVENT_KINDS.map((k) => k.slug))
+function validateMetric(raw: unknown): LlmMetric | null {
+  if (!raw || typeof raw !== "object") return null
+  const r = raw as Record<string, unknown>
+  if (typeof r.slug !== "string" || !r.slug) return null
+  if (typeof r.title !== "string" || !r.title) return null
+  if (
+    r.kind !== "number" &&
+    r.kind !== "number-with-delta" &&
+    r.kind !== "line" &&
+    r.kind !== "bars" &&
+    r.kind !== "rank" &&
+    r.kind !== "compare"
+  ) {
+    return null
+  }
+  if (!r.data || typeof r.data !== "object") return null
+  if (!Array.isArray(r.citationItemIndices) || r.citationItemIndices.length === 0) {
+    return null
+  }
+  const citationItemIndices = r.citationItemIndices.filter(
+    (n): n is number => typeof n === "number" && Number.isInteger(n),
+  )
+  if (citationItemIndices.length === 0) return null
+  const relatedTags = Array.isArray(r.relatedTags)
+    ? r.relatedTags.filter((t): t is string => typeof t === "string")
+    : []
+  const relatedSectionSlugs = Array.isArray(r.relatedSectionSlugs)
+    ? r.relatedSectionSlugs.filter((t): t is string => typeof t === "string")
+    : []
+  return {
+    slug: r.slug.slice(0, 80),
+    title: r.title.slice(0, 80),
+    subtitle: typeof r.subtitle === "string" ? r.subtitle.slice(0, 100) : undefined,
+    kind: r.kind,
+    data: r.data,
+    unit: typeof r.unit === "string" ? r.unit.slice(0, 32) : undefined,
+    relatedTags,
+    relatedSectionSlugs,
+    citationItemIndices,
+  }
+}
 
 function validateEvent(raw: unknown): LlmEvent | null {
   if (!raw || typeof raw !== "object") return null
   const e = raw as Record<string, unknown>
   if (typeof e.title !== "string" || !e.title.trim()) return null
   if (typeof e.description !== "string") return null
-  if (typeof e.kind !== "string" || !KIND_SET.has(e.kind)) return null
   if (typeof e.startsAtIso !== "string") return null
   if (Number.isNaN(new Date(e.startsAtIso).getTime())) return null
   if (typeof e.allDay !== "boolean") return null
   if (!Array.isArray(e.citationItemIndices)) return null
   if (!e.citationItemIndices.every((i) => Number.isInteger(i))) return null
   if (e.citationItemIndices.length === 0) return null
+  const suggestedSlug =
+    typeof e.suggestedSlug === "string" && e.suggestedSlug.trim().length > 0
+      ? e.suggestedSlug
+      : e.title.slice(0, 80)
+  const tags = Array.isArray(e.tags)
+    ? (e.tags as Array<unknown>)
+        .filter((t): t is string => typeof t === "string" && t.length > 0)
+        .slice(0, 6)
+    : []
+  const neighborhoodSlugs = Array.isArray(e.neighborhoodSlugs)
+    ? (e.neighborhoodSlugs as Array<unknown>)
+        .filter((s): s is string => typeof s === "string")
+        .slice(0, 3)
+    : []
+  const relatedArticleIndices = Array.isArray(e.relatedArticleIndices)
+    ? (e.relatedArticleIndices as Array<unknown>)
+        .filter((i) => Number.isInteger(i))
+        .slice(0, 3) as Array<number>
+    : []
+  const sectionSlug =
+    typeof e.sectionSlug === "string" ? e.sectionSlug : undefined
   return {
     title: e.title.slice(0, 200),
     description: e.description.slice(0, 600),
-    kind: e.kind as LlmEvent["kind"],
     startsAtIso: e.startsAtIso,
     endsAtIso:
       typeof e.endsAtIso === "string" &&
@@ -405,229 +646,18 @@ function validateEvent(raw: unknown): LlmEvent | null {
     allDay: e.allDay,
     locationName:
       typeof e.locationName === "string" ? e.locationName : undefined,
-    neighborhood:
-      typeof e.neighborhood === "string" ? e.neighborhood : undefined,
     url: typeof e.url === "string" ? e.url : undefined,
     price: typeof e.price === "string" ? e.price : undefined,
+    suggestedSlug,
+    tags,
+    neighborhoodSlugs,
+    sectionSlug,
     citationItemIndices: e.citationItemIndices as Array<number>,
+    relatedArticleIndices,
     relatedDraftIndex: Number.isInteger(e.relatedDraftIndex)
       ? (e.relatedDraftIndex as number)
       : undefined,
   }
-}
-
-// =====================================================================
-// Enrichment pass — operates on already-PUBLISHED articles to refine,
-// extend, and connect them. Distinct from generateDrafts (which creates
-// new drafts from raw items) because here the article already exists and
-// we're feeding the LLM both: the existing piece + freshly-ingested items
-// that may add facts, and a candidate set of recent published articles
-// the piece could link to.
-// =====================================================================
-
-export type EnrichmentArticle = {
-  title: string
-  dek: string
-  body: string
-  tags: Array<string>
-  sectionSlug: string
-  citations: Array<{ url: string; title: string; publisher?: string }>
-  neighborhoodSlugs?: Array<string>
-}
-
-export type EnrichmentOutput = {
-  // Optional rewrites — undefined = keep existing.
-  title?: string
-  dek?: string
-  body?: string
-  tags?: Array<string>
-  neighborhoodSlugs?: Array<string>
-  // Indices into the `newItems` argument that genuinely add facts/sources.
-  citationItemIndicesToAdd: Array<number>
-  // Indices into the `relatedCandidates` argument that are truly related.
-  relatedArticleIndicesToLink: Array<number>
-  // One-line reason for any rewrites (so editors see WHY in the timeline).
-  rewriteJustification?: string
-}
-
-const ENRICH_TOOL = {
-  name: "enrich_article",
-  description:
-    "Apply ADDITIVE improvements to a published article: append new citations, link related stories, and OPTIONALLY rewrite title/dek/body for clarity. Only suggest rewrites that materially improve the piece. If new items don't actually add facts, leave citationItemIndicesToAdd empty. If no candidate is truly related, leave relatedArticleIndicesToLink empty. NEVER fabricate facts — every claim must trace to either the existing article or a cited new item.",
-  input_schema: {
-    type: "object",
-    properties: {
-      title: {
-        type: "string",
-        description:
-          "Improved headline (6–10 words, ≤ 60 chars). Active voice. Omit when the existing headline is already short and clear; rewrite when it's long, hedging, or mirrors the source publication.",
-      },
-      dek: {
-        type: "string",
-        description:
-          "Improved standfirst (≤ 120 chars / ~20 words). Adds info the headline doesn't carry. Omit when the existing dek is already tight.",
-      },
-      body: {
-        type: "string",
-        description:
-          "Improved body — ONE paragraph, 40–80 words. Distill, don't paraphrase. Omit unless new facts warrant a rewrite or the existing body reads bloated.",
-      },
-      tags: {
-        type: "array",
-        items: { type: "string" },
-        description:
-          "Replacement tags (2–5 lowercase). Omit to keep existing. Do NOT use generic location tags like 'miami', 'miami-dade', or 'florida'.",
-      },
-      neighborhoodSlugs: {
-        type: "array",
-        items: { type: "string", enum: NEIGHBORHOODS.map((n) => n.slug) },
-        description:
-          "Replacement neighborhood slugs. Omit to keep existing.",
-      },
-      citationItemIndicesToAdd: {
-        type: "array",
-        items: { type: "integer" },
-        description:
-          "Indices into the new-items list that add fresh facts or sources to this story. Empty when nothing genuinely adds.",
-      },
-      relatedArticleIndicesToLink: {
-        type: "array",
-        items: { type: "integer" },
-        description:
-          "Indices into the related-candidates list that are truly related (follow-up, background, sibling story). Empty when nothing connects.",
-      },
-      rewriteJustification: {
-        type: "string",
-        description:
-          "One short line explaining any rewrite — shown to editors in the revision timeline.",
-      },
-    },
-    required: ["citationItemIndicesToAdd", "relatedArticleIndicesToLink"],
-  },
-} as const
-
-function validateEnrichment(raw: unknown): EnrichmentOutput | null {
-  if (!raw || typeof raw !== "object") return null
-  const e = raw as Record<string, unknown>
-  if (!Array.isArray(e.citationItemIndicesToAdd)) return null
-  if (!Array.isArray(e.relatedArticleIndicesToLink)) return null
-  const cite = (e.citationItemIndicesToAdd as Array<unknown>).filter((i) =>
-    Number.isInteger(i),
-  ) as Array<number>
-  const link = (e.relatedArticleIndicesToLink as Array<unknown>).filter((i) =>
-    Number.isInteger(i),
-  ) as Array<number>
-  const tags = Array.isArray(e.tags)
-    ? (e.tags as Array<unknown>)
-        .filter((t): t is string => typeof t === "string" && t.length > 0)
-        .slice(0, 6)
-    : undefined
-  const neighborhoods = Array.isArray(e.neighborhoodSlugs)
-    ? (e.neighborhoodSlugs as Array<unknown>)
-        .filter((s): s is string => typeof s === "string")
-        .slice(0, 3)
-    : undefined
-  return {
-    title:
-      typeof e.title === "string" && e.title.trim().length > 0
-        ? e.title.slice(0, 200)
-        : undefined,
-    dek:
-      typeof e.dek === "string" && e.dek.trim().length > 0
-        ? e.dek.slice(0, 400)
-        : undefined,
-    body:
-      typeof e.body === "string" && e.body.trim().length > 0
-        ? e.body
-        : undefined,
-    tags,
-    neighborhoodSlugs: neighborhoods,
-    citationItemIndicesToAdd: cite,
-    relatedArticleIndicesToLink: link,
-    rewriteJustification:
-      typeof e.rewriteJustification === "string"
-        ? e.rewriteJustification.slice(0, 280)
-        : undefined,
-  }
-}
-
-export async function generateEnrichment(opts: {
-  systemPrompt: string
-  model: string
-  article: EnrichmentArticle
-  newItems: Array<DraftItem>
-  relatedCandidates: Array<RelatedCandidate>
-}): Promise<EnrichmentOutput | null> {
-  const apiKey = process.env.ANTHROPIC_API_KEY
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set in Convex env")
-  const client = new Anthropic({ apiKey })
-
-  const itemsText = opts.newItems
-    .map((item) => {
-      const date = item.publishedAt ? ` (${item.publishedAt})` : ""
-      return `[${item.index}] ${item.source} — ${item.title}${date}\nURL: ${item.url}\n${item.body}\n`
-    })
-    .join("\n---\n")
-
-  const relatedText =
-    opts.relatedCandidates.length > 0
-      ? opts.relatedCandidates
-          .map((c) => {
-            const date = c.publishedAt ? ` (${c.publishedAt})` : ""
-            return `[${c.index}] ${c.section} — ${c.title}${date}\n  ${c.dek}`
-          })
-          .join("\n")
-      : "(no candidates)"
-
-  const existingCitations =
-    opts.article.citations.length > 0
-      ? opts.article.citations
-          .map((c) => `- ${c.title} (${c.publisher ?? "—"}) — ${c.url}`)
-          .join("\n")
-      : "(none recorded)"
-
-  const userPrompt = [
-    `You are doing an ENRICHMENT pass on a published article. Your goal: keep it sharper and more useful by adding new sources, linking related coverage, polishing copy when warranted, and updating metadata.`,
-    `Return your changes ONLY by calling the \`enrich_article\` tool. Do not return text outside the tool call.`,
-    `Hard rules:`,
-    `- Never fabricate facts. Every claim must trace to either the existing article or a cited new item.`,
-    `- Be conservative with rewrites: only rewrite title/dek/body when there is a real improvement (clarity, brevity, accuracy, or a new fact). If it's already short and clear, omit those fields.`,
-    `- House voice: punchy and short. Headlines 6–10 words / ≤ 60 chars. Deks ≤ 120 chars. Body ONE paragraph, 40–80 words. If the existing copy is wordy or mirrors the source publication, that's reason enough to rewrite shorter.`,
-    `- citationItemIndicesToAdd should ONLY include items that add a fact or source not already in the article. Reject anything redundant.`,
-    `- relatedArticleIndicesToLink: only link candidates that a reader would genuinely benefit from. Empty list is fine.`,
-    `- Tags: 2–5, lowercase, specific. No 'miami', 'miami-dade', or 'florida'.`,
-    ``,
-    `=== EXISTING ARTICLE ===`,
-    `Section: ${opts.article.sectionSlug}`,
-    `Title: ${opts.article.title}`,
-    `Dek: ${opts.article.dek}`,
-    `Body: ${opts.article.body}`,
-    `Tags: ${opts.article.tags.join(", ") || "(none)"}`,
-    `Neighborhoods: ${(opts.article.neighborhoodSlugs ?? []).join(", ") || "(none)"}`,
-    `Existing citations:`,
-    existingCitations,
-    ``,
-    `=== NEW INGESTED ITEMS (candidates for citationItemIndicesToAdd) ===`,
-    itemsText || "(none)",
-    ``,
-    `=== RECENT PUBLISHED ARTICLES (candidates for relatedArticleIndicesToLink) ===`,
-    relatedText,
-  ].join("\n")
-
-  const response = await client.messages.create({
-    model: opts.model,
-    max_tokens: 2048,
-    system: opts.systemPrompt,
-    messages: [{ role: "user", content: userPrompt }],
-    tools: [ENRICH_TOOL],
-    tool_choice: { type: "tool", name: "enrich_article" },
-  })
-
-  const toolUse = response.content.find(
-    (block): block is Anthropic.ToolUseBlock => block.type === "tool_use",
-  )
-  if (!toolUse) return null
-  return validateEnrichment(toolUse.input)
 }
 
 // =====================================================================
@@ -698,6 +728,119 @@ function validateTranslation(raw: unknown): TranslationOutput | null {
   }
 }
 
+// =====================================================================
+// Event translation — same house-voice rewrite for the events table.
+// Events store `title` + `description` (no separate dek/body), so the
+// tool schema is shorter than the article one. Voice rules mirror the
+// LLM extraction: ≤60 char title, ≤300 char description, optional ES
+// heroCaption when an EN one exists.
+// =====================================================================
+
+export type EventTranslationOutput = {
+  title: string
+  description: string
+  heroCaption?: string
+}
+
+const TRANSLATE_EVENT_TOOL = {
+  name: "translate_event",
+  description:
+    "Translate a published event into Spanish, preserving the house voice. NOT a literal translation — re-write in the same snappy local-paper register, in Spanish. Hard caps: title ≤ 60 chars, description ≤ 300 chars / 1–2 sentences. Miami Spanish; mixing in natural anglicisms is fine. Proper nouns (venues, place names, person names) stay in their original form.",
+  input_schema: {
+    type: "object",
+    properties: {
+      title: {
+        type: "string",
+        description:
+          "Spanish event title. ≤ 60 chars. Active voice. Lead with what the event IS, not its publisher / sponsor.",
+      },
+      description: {
+        type: "string",
+        description:
+          "Spanish description. 1–2 sentences, ≤ 300 chars. Same register as the EN: punchy, factual, concrete.",
+      },
+      heroCaption: {
+        type: "string",
+        description:
+          "Spanish image caption when an English caption was provided. Omit when no EN caption.",
+      },
+    },
+    required: ["title", "description"],
+  },
+} as const
+
+function validateEventTranslation(
+  raw: unknown,
+): EventTranslationOutput | null {
+  if (!raw || typeof raw !== "object") return null
+  const t = raw as Record<string, unknown>
+  if (typeof t.title !== "string" || !t.title.trim()) return null
+  if (typeof t.description !== "string" || !t.description.trim()) return null
+  return {
+    title: t.title.slice(0, 200),
+    description: t.description.slice(0, 600),
+    heroCaption:
+      typeof t.heroCaption === "string" && t.heroCaption.trim().length > 0
+        ? t.heroCaption
+        : undefined,
+  }
+}
+
+export async function generateEventTranslation(opts: {
+  model: string
+  event: {
+    title: string
+    description: string
+    heroCaption?: string
+    sectionSlug?: string
+    tags: ReadonlyArray<string>
+    locationName?: string
+  }
+}): Promise<EventTranslationOutput | null> {
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set in Convex env")
+  const client = new Anthropic({ apiKey })
+
+  const userPrompt = [
+    `You are translating a published event listing from miami.community — Miami's AI-edited local paper — into Spanish.`,
+    `The EN copy is in our house voice: punchy, short, conversational, no headlinese. Reproduce that voice in Spanish, NOT a literal word-for-word translation.`,
+    ``,
+    `Hard rules:`,
+    `- Title: ≤ 60 chars. Active voice.`,
+    `- Description: 1–2 sentences, ≤ 300 chars. Concrete facts only.`,
+    `- Miami Spanish (Cuban / South-American influences). OK to mix in natural anglicisms.`,
+    `- Proper nouns stay in their original form (venue names, neighborhood names, person names).`,
+    `- Don't add facts. Don't drop facts. Don't invent dates or prices.`,
+    ``,
+    `Section: ${opts.event.sectionSlug ?? "—"}`,
+    `Tags: ${opts.event.tags.join(", ") || "(none)"}`,
+    opts.event.locationName ? `Venue: ${opts.event.locationName}` : "",
+    ``,
+    `=== EN ===`,
+    `Title: ${opts.event.title}`,
+    `Description: ${opts.event.description}`,
+    opts.event.heroCaption
+      ? `Hero caption: ${opts.event.heroCaption}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n")
+
+  const response = await client.messages.create({
+    model: opts.model,
+    max_tokens: 1024,
+    messages: [{ role: "user", content: userPrompt }],
+    tools: [TRANSLATE_EVENT_TOOL],
+    tool_choice: { type: "tool", name: "translate_event" },
+  })
+
+  const toolUse = response.content.find(
+    (block): block is Anthropic.ToolUseBlock => block.type === "tool_use",
+  )
+  if (!toolUse) return null
+  return validateEventTranslation(toolUse.input)
+}
+
 export async function generateTranslation(opts: {
   model: string
   article: {
@@ -752,4 +895,390 @@ export async function generateTranslation(opts: {
   )
   if (!toolUse) return null
   return validateTranslation(toolUse.input)
+}
+
+// =====================================================================
+// Daily widget content generation. One Opus call produces five entries
+// (one per widget kind) for the right rail. Cron fires once a day at
+// 04:00 ET; cost lands ~7-12¢ depending on output length.
+//
+// The prompt asks for verifiable facts only — if the model can't be
+// sure of something for a given kind, the field comes back null and
+// the widget falls through to its previous-day entry. Better empty than
+// fabricated.
+// =====================================================================
+
+export type WidgetEntry = {
+  kind: "fun-fact" | "on-this-day" | "landmark" | "animal-fact" | "quote"
+  title: string
+  body: string
+  attribution: string | null
+  imageHint: string | null
+}
+
+const widgetTool: Anthropic.Tool = {
+  name: "submit_widgets",
+  description:
+    "Submit one entry per widget kind. Set fields to null when you can't generate a verifiable entry for that kind — never fabricate.",
+  input_schema: {
+    type: "object",
+    properties: {
+      entries: {
+        type: "array",
+        description:
+          "One entry per widget kind. Skip a kind by omitting it; the previous day's entry will continue to render.",
+        items: {
+          type: "object",
+          properties: {
+            kind: {
+              type: "string",
+              enum: [
+                "fun-fact",
+                "on-this-day",
+                "landmark",
+                "animal-fact",
+                "quote",
+              ],
+            },
+            title: { type: "string", description: "Short label / heading" },
+            body: { type: "string", description: "1-3 sentences" },
+            attribution: {
+              type: ["string", "null"],
+              description:
+                "Speaker name for quotes; null otherwise.",
+            },
+            imageHint: {
+              type: ["string", "null"],
+              description:
+                "Wikimedia Commons search query for landmark + animal kinds; null otherwise.",
+            },
+          },
+          required: ["kind", "title", "body"],
+        },
+      },
+    },
+    required: ["entries"],
+  },
+}
+
+export async function generateWidgetBatch(opts: {
+  model: string
+  todayIso: string
+  monthName: string
+}): Promise<Array<WidgetEntry>> {
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set in Convex env")
+  const client = new Anthropic({ apiKey })
+
+  const prompt = [
+    `Generate one entry for each of these five widgets for miami.community's right rail. Today's date: ${opts.todayIso} (${opts.monthName}).`,
+    ``,
+    `1. fun-fact — A surprising, verifiably-true fact about Miami-Dade. ≤25 words. Title is a short hook ("Did you know?" / "Trivia"); body is the fact.`,
+    `2. on-this-day — A real historical event that happened in Miami-Dade on ${opts.todayIso.slice(5)} (month-day) in any year. Title: "YYYY · Short headline". Body: 1-2 sentences. If you don't know a verifiable event for this exact month-day, OMIT this kind from your output.`,
+    `3. landmark — One Miami-Dade landmark with a brief history note. Title: landmark name. Body: 2-3 sentences. imageHint: a Wikimedia Commons search query that would surface a photo (e.g. "Vizcaya Museum facade").`,
+    `4. animal-fact — A seasonal-aware note for ${opts.monthName}. Title: animal common name. Body: why it's relevant THIS month (nesting, migration, mating, visibility). imageHint: Wikimedia search query.`,
+    `5. quote — A real quote from a historical OR contemporary Miamian (writer, activist, athlete, politician, musician). Title: speaker's name. Body: the exact quote. attribution: speaker's name.`,
+    ``,
+    `Hard rules:`,
+    `- Never fabricate quotes, dates, or events. If you're not certain, omit the kind.`,
+    `- Vary picks across runs — landmarks and animals especially shouldn't repeat day-to-day.`,
+    `- Scope is Miami-Dade County and immediately adjacent (Broward, Monroe, the Keys, the Everglades).`,
+    `- Return strictly via the submit_widgets tool. No textual response.`,
+  ].join("\n")
+
+  const response = await client.messages.create({
+    model: opts.model,
+    max_tokens: 1500,
+    tools: [widgetTool],
+    tool_choice: { type: "tool", name: "submit_widgets" },
+    messages: [{ role: "user", content: prompt }],
+  })
+  const toolUse = response.content.find(
+    (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
+  )
+  if (!toolUse) return []
+  const input = toolUse.input as { entries?: Array<unknown> }
+  const entries: Array<WidgetEntry> = []
+  for (const raw of input.entries ?? []) {
+    if (!raw || typeof raw !== "object") continue
+    const r = raw as Record<string, unknown>
+    const kind = r.kind
+    if (
+      kind !== "fun-fact" &&
+      kind !== "on-this-day" &&
+      kind !== "landmark" &&
+      kind !== "animal-fact" &&
+      kind !== "quote"
+    )
+      continue
+    const title = typeof r.title === "string" ? r.title.trim() : ""
+    const body = typeof r.body === "string" ? r.body.trim() : ""
+    if (!title || !body) continue
+    entries.push({
+      kind,
+      title,
+      body,
+      attribution: typeof r.attribution === "string" ? r.attribution : null,
+      imageHint: typeof r.imageHint === "string" ? r.imageHint : null,
+    })
+  }
+  return entries
+}
+
+// =====================================================================
+// Merge verification — cheap Haiku call that confirms whether two
+// articles cover the same news event. Used by the post-publish merge
+// sweep to gate auto-merges so high-confidence-overlap pairs that are
+// actually distinct stories (e.g. two Marlins games against the same
+// opponent on consecutive days) don't get incorrectly fused.
+//
+// Cost: ~1¢ per verification. Run only after the cheap title/citation
+// pre-filter has already narrowed candidates to plausible pairs.
+// =====================================================================
+
+const verifyMergeTool: Anthropic.Tool = {
+  name: "verify_merge",
+  description:
+    "Decide whether two articles cover the SAME news event/incident/topic and should be merged into one canonical article.",
+  input_schema: {
+    type: "object",
+    properties: {
+      sameStory: {
+        type: "boolean",
+        description:
+          "True only if the two articles are about the same news event, incident, person, or specific topic. False for distinct events even when they share keywords or cite overlapping sources.",
+      },
+      reason: {
+        type: "string",
+        description: "One short sentence explaining the call.",
+      },
+    },
+    required: ["sameStory", "reason"],
+  },
+}
+
+export async function verifyMerge(opts: {
+  model: string
+  a: { title: string; dek: string; body: string }
+  b: { title: string; dek: string; body: string }
+}): Promise<{ sameStory: boolean; reason: string } | null> {
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set in Convex env")
+  const client = new Anthropic({ apiKey })
+  const prompt = [
+    `Two miami.community articles share enough surface signal (title or citations) that the merge sweep flagged them as a possible duplicate. Decide: are these the SAME news event, incident, or specific topic?`,
+    ``,
+    `ARTICLE A:`,
+    `Title: ${opts.a.title}`,
+    `Dek: ${opts.a.dek}`,
+    `Body: ${opts.a.body.slice(0, 800)}`,
+    ``,
+    `ARTICLE B:`,
+    `Title: ${opts.b.title}`,
+    `Dek: ${opts.b.dek}`,
+    `Body: ${opts.b.body.slice(0, 800)}`,
+    ``,
+    `Same news = same incident, same person being charged with the same thing, same vote, same opening/closing, same upcoming event. Different news = same beat, different specific event (two Marlins games against Orioles, two unrelated arrests in Homestead, two restaurant openings in Wynwood).`,
+    ``,
+    `Call \`verify_merge\` with your decision.`,
+  ].join("\n")
+  const response = await client.messages.create({
+    model: opts.model,
+    max_tokens: 400,
+    tools: [verifyMergeTool],
+    tool_choice: { type: "tool", name: "verify_merge" },
+    messages: [{ role: "user", content: prompt }],
+  })
+  const toolUse = response.content.find(
+    (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
+  )
+  if (!toolUse) return null
+  const input = toolUse.input as { sameStory?: unknown; reason?: unknown }
+  if (typeof input.sameStory !== "boolean") return null
+  return {
+    sameStory: input.sameStory,
+    reason: typeof input.reason === "string" ? input.reason : "",
+  }
+}
+
+// =====================================================================
+// Retroactive metric extraction. Daily pass over recently-published
+// articles — asks Opus to find verifiably-stated numbers that should
+// be promoted to first-class metrics, even if the mega-desk missed
+// them at draft time. Idempotent by slug; same article producing the
+// same number on a re-run upserts in place.
+//
+// Cost: one Opus call per pass with up to ~30 article bodies in
+// context. ~$0.10-0.20 daily.
+// =====================================================================
+
+export type ExtractMetricsArticle = {
+  /** Article slug — used to look up the citation set on the server. */
+  slug: string
+  title: string
+  dek: string
+  body: string
+  /** First citation publisher to enrich the LLM's grounding. */
+  primaryPublisher?: string
+}
+
+export type ExtractedMetric = {
+  slug: string
+  title: string
+  subtitle?: string
+  kind: "number" | "number-with-delta" | "line" | "bars" | "rank" | "compare"
+  data: unknown
+  unit?: string
+  relatedTags: Array<string>
+  relatedSectionSlugs: Array<string>
+  /** Article slug the number came from, so the caller can resolve
+   *  citations from that article's record server-side. */
+  fromArticleSlug: string
+}
+
+const extractMetricsTool: Anthropic.Tool = {
+  name: "submit_metrics",
+  description:
+    "Promote numbers stated in the provided articles to first-class miami.community metrics.",
+  input_schema: {
+    type: "object",
+    properties: {
+      metrics: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            slug: { type: "string" },
+            title: { type: "string" },
+            subtitle: { type: ["string", "null"] },
+            kind: {
+              type: "string",
+              enum: [
+                "number",
+                "number-with-delta",
+                "line",
+                "bars",
+                "rank",
+                "compare",
+              ],
+            },
+            data: { type: "object" },
+            unit: { type: ["string", "null"] },
+            relatedTags: { type: "array", items: { type: "string" } },
+            relatedSectionSlugs: {
+              type: "array",
+              items: { type: "string" },
+            },
+            fromArticleSlug: {
+              type: "string",
+              description:
+                "The slug of the article in this batch where the number appears. The server uses this to attach the right citations.",
+            },
+          },
+          required: [
+            "slug",
+            "title",
+            "kind",
+            "data",
+            "relatedTags",
+            "relatedSectionSlugs",
+            "fromArticleSlug",
+          ],
+        },
+      },
+    },
+    required: ["metrics"],
+  },
+}
+
+export async function extractMetricsFromArticles(opts: {
+  model: string
+  articles: ReadonlyArray<ExtractMetricsArticle>
+}): Promise<Array<ExtractedMetric>> {
+  if (opts.articles.length === 0) return []
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set in Convex env")
+  const client = new Anthropic({ apiKey })
+
+  const articlesText = opts.articles
+    .map((a) => {
+      const pub = a.primaryPublisher ? ` — ${a.primaryPublisher}` : ""
+      return `### [slug: ${a.slug}]${pub}\n${a.title}\n${a.dek}\n${a.body}`
+    })
+    .join("\n\n---\n\n")
+
+  const prompt = [
+    `Pass over recently-published miami.community articles and find numerical facts that deserve to be promoted to first-class Miami metrics. Each metric carries the source article's citations and renders as a homepage widget plus an inline embed in any article tagged with its relatedTags.`,
+    ``,
+    `RULES:`,
+    `- Only promote numbers EXPLICITLY stated in the article. Don't compute or estimate.`,
+    `- Locally relevant: Miami-Dade, Miami metro, South Florida, statewide for big-picture stats. Skip national figures unless the article is contextualizing them for Miami.`,
+    `- Stable slug (kebab-case, ≤80 chars) so future runs that find an updated value upsert in place. Examples: 'miami-dade-population', 'miami-median-rent', 'miami-cost-of-living-rank'.`,
+    `- Pick the right kind: 'number' for one value, 'number-with-delta' when the article gives a YoY/QoQ change, 'line' for a time series, 'bars' for categorical breakdown, 'rank' for ordinal positions on a list, 'compare' for two-sided splits.`,
+    `- Data shape MUST match the kind:`,
+    `  - number / number-with-delta: { value: number, delta?: { value: number, period: string } }`,
+    `  - line / bars: { points: [{ label: string, value: number }] }`,
+    `  - rank: { value: number, outOf: number, list: string }`,
+    `  - compare: { left: { label, value }, right: { label, value } }`,
+    `- Empty result is the default. Most articles produce 0 metrics. A typical eligible article: a census release, BLS report, NAR/Redfin price update, "Miami ranks #N" mention.`,
+    `- 'fromArticleSlug' MUST match one of the article slugs in this batch. Server uses it to attach citations.`,
+    ``,
+    `ARTICLES:`,
+    articlesText,
+    ``,
+    `Return via the submit_metrics tool. No textual response.`,
+  ].join("\n")
+
+  const response = await client.messages.create({
+    model: opts.model,
+    max_tokens: 4096,
+    tools: [extractMetricsTool],
+    tool_choice: { type: "tool", name: "submit_metrics" },
+    messages: [{ role: "user", content: prompt }],
+  })
+  const toolUse = response.content.find(
+    (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
+  )
+  if (!toolUse) return []
+  const input = toolUse.input as { metrics?: unknown }
+  if (!Array.isArray(input.metrics)) return []
+  const validSlugs = new Set(opts.articles.map((a) => a.slug))
+  const out: Array<ExtractedMetric> = []
+  for (const raw of input.metrics) {
+    if (!raw || typeof raw !== "object") continue
+    const r = raw as Record<string, unknown>
+    if (typeof r.slug !== "string" || !r.slug) continue
+    if (typeof r.title !== "string" || !r.title) continue
+    if (typeof r.fromArticleSlug !== "string") continue
+    if (!validSlugs.has(r.fromArticleSlug)) continue
+    if (
+      r.kind !== "number" &&
+      r.kind !== "number-with-delta" &&
+      r.kind !== "line" &&
+      r.kind !== "bars" &&
+      r.kind !== "rank" &&
+      r.kind !== "compare"
+    )
+      continue
+    if (!r.data || typeof r.data !== "object") continue
+    const relatedTags = Array.isArray(r.relatedTags)
+      ? r.relatedTags.filter((t): t is string => typeof t === "string")
+      : []
+    const relatedSectionSlugs = Array.isArray(r.relatedSectionSlugs)
+      ? r.relatedSectionSlugs.filter((t): t is string => typeof t === "string")
+      : []
+    out.push({
+      slug: r.slug.slice(0, 80),
+      title: r.title.slice(0, 80),
+      subtitle:
+        typeof r.subtitle === "string" ? r.subtitle.slice(0, 100) : undefined,
+      kind: r.kind,
+      data: r.data,
+      unit: typeof r.unit === "string" ? r.unit.slice(0, 32) : undefined,
+      relatedTags,
+      relatedSectionSlugs,
+      fromArticleSlug: r.fromArticleSlug,
+    })
+  }
+  return out
 }

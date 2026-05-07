@@ -3,7 +3,10 @@
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/libre-franklin";
 @import "@fontsource-variable/bodoni-moda";
-@import "@fontsource-variable/bodoni-moda/wght-italic.css";
+/* Bodoni Moda italic dropped — the only italic + Bodoni site is the
+   masthead tagline (currently empty), so loading the italic CSS bloats
+   first paint with no rendered benefit. Re-add the import if italics
+   land back into headline-styled copy. */
 /* Momo Signature (brand display) is loaded via <link> in src/routes/__root.tsx — Tailwind v4's preflight order makes @import url(...) of external stylesheets unreliable. */
 
 @custom-variant dark (&:is(.dark *));
@@ -54,6 +57,7 @@
 }
 
 :root {
+    color-scheme: light;
     --background: oklch(0.99 0.003 80);
     --foreground: oklch(0.18 0.01 49);
     --card: oklch(1 0 0);
@@ -89,6 +93,7 @@
 }
 
 .dark {
+    color-scheme: dark;
     --background: oklch(0.16 0.01 60);
     --foreground: oklch(0.96 0.005 80);
     --card: oklch(0.2 0.01 50);
@@ -127,7 +132,7 @@
         @apply border-border outline-ring/50;
     }
     body {
-        @apply bg-background text-foreground;
+        @apply bg-background text-foreground overflow-x-hidden;
         font-feature-settings: "ss01", "cv11";
     }
     /* Tiny CSS squircle on every <img>. corner-shape: squircle gives the
@@ -147,6 +152,16 @@
     }
     h1, h2, h3, h4 {
         @apply font-heading font-semibold tracking-tight;
+        text-wrap: balance;
+    }
+    /* Default body paragraphs to `text-wrap: pretty` so the renderer
+       optimises break points and avoids one-word orphans on the last
+       line. Per-element overrides win when a layout needs raw flow.
+       `balance` on headings (above) does the parallel job for short
+       multi-line titles. Modern Chromium / Safari only — older browsers
+       fall back to default wrap, no breakage. */
+    p {
+        text-wrap: pretty;
     }
     /* Bodoni Moda Variable defaults to semibold (600) wherever it's used —
        Tailwind weight utilities (font-bold, font-medium, etc.) still
@@ -155,20 +170,36 @@
         font-weight: 600;
     }
 
-    /* --- View transitions ------------------------------------------------ */
-    /* TanStack Router wraps SPA navigations in document.startViewTransition
-       when defaultViewTransition is on. Tune the default crossfade. */
-    ::view-transition-old(root),
-    ::view-transition-new(root) {
-        animation-duration: 220ms;
-        animation-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
+    /* --- Section-themed chrome ------------------------------------------
+       When the masthead OR footer carry `.themed-chrome` (set on section
+       routes) the section's accent color steps in for the standard
+       foreground tokens, so existing `text-foreground`,
+       `text-muted-foreground` and `border-border` consumers inside the
+       chrome pick up the section's voice automatically. The fg /
+       muted / faint values are set inline on the host element by
+       `sectionThemeStyle()`. Light + dark variants flip on the `.dark`
+       class. */
+    /* `@theme inline` compiles Tailwind classes against the underlying
+       `--muted`, `--foreground`, `--border` etc. — NOT the `--color-*`
+       aliases — so the overrides have to land on the raw vars to take
+       effect. `--foreground` → idle text, `--muted` → ghost-button
+       hover bg (`hover:bg-muted`) so search / mobile icons get a
+       themed -200 chip on hover, `--border` → top-row divider. */
+    .themed-chrome {
+        --foreground: var(--section-fg-light);
+        --muted-foreground: var(--section-fg-muted-light);
+        --border: var(--section-fg-faint-light);
+        --muted: var(--section-fg-faint-light);
+        --accent: var(--section-fg-faint-light);
+        --accent-foreground: var(--section-fg-light);
     }
-    /* Respect prefers-reduced-motion — disable the transition entirely. */
-    @media (prefers-reduced-motion: reduce) {
-        ::view-transition-old(root),
-        ::view-transition-new(root) {
-            animation: none;
-        }
+    .dark .themed-chrome {
+        --foreground: var(--section-fg-dark);
+        --muted-foreground: var(--section-fg-muted-dark);
+        --border: var(--section-fg-faint-dark);
+        --muted: var(--section-fg-faint-dark);
+        --accent: var(--section-fg-faint-dark);
+        --accent-foreground: var(--section-fg-dark);
     }
 }
 
@@ -179,6 +210,14 @@
        wherever a max-w-screen-* container was before. */
     .container-page {
         @apply mx-auto w-full px-4 sm:max-w-[628px] md:max-w-[760px] lg:max-w-[1024px] xl:max-w-[1288px];
+    }
+
+    /* Break out of the page container — used by the calendar week / month
+       views which want every pixel of horizontal space for the time grid.
+       Pairs with `overflow-x-hidden` on the body to avoid horizontal
+       scrollbars from sub-pixel rounding. */
+    .full-bleed {
+        @apply relative left-1/2 right-1/2 w-screen -mx-[50vw] px-4 md:px-6;
     }
 
     .prose-editorial {
@@ -244,7 +283,7 @@
 
     /* --- Kicker & meta ---------------------------------------------------- */
     .kicker {
-        @apply font-sans text-[0.7rem] font-bold tracking-[0.12em] uppercase;
+        @apply font-sans text-xs font-medium;
     }
     .meta {
         @apply font-sans text-sm text-muted-foreground tabular-nums;

@@ -1,6 +1,6 @@
+import type { Lang } from "@/lib/i18n/strings"
 import { useTranslation } from "@/lib/i18n/context"
 import { cn } from "@/lib/utils"
-import type { Lang } from "@/lib/i18n/strings"
 
 const LANGS: Array<{ code: Lang; labelKey: "lang.english" | "lang.spanish" }> = [
   { code: "en", labelKey: "lang.english" },
@@ -27,7 +27,7 @@ export function LanguageSwitcher({ className }: { className?: string }) {
             onClick={() => setLang(l.code)}
             aria-current={active ? "true" : undefined}
             className={cn(
-              "tracking-wider uppercase transition-colors hover:text-foreground",
+              "transition-colors hover:text-foreground",
               active
                 ? "font-bold text-foreground"
                 : "font-medium text-muted-foreground",

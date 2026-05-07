@@ -6,12 +6,13 @@ import { api } from "../../../convex/_generated/api"
 import { AuthorCard } from "@/components/editorial/author-card"
 import { BlockSeparator } from "@/components/editorial/block-separator"
 import { HeroSplit } from "@/components/editorial/hero-split"
-import { MostReadStrip } from "@/components/editorial/most-read-strip"
+import { TrendingStrip } from "@/components/editorial/trending-strip"
 import { PageHeader } from "@/components/editorial/page-header"
 import { SectionHeaderCell } from "@/components/editorial/section-header-cell"
 import { SidebarRail } from "@/components/editorial/sidebar-rail"
 import { StoryItem } from "@/components/editorial/story-item"
 import { XlRowList } from "@/components/editorial/xl-row-list"
+import { BannerAd } from "@/components/site/banner-ad"
 import { convexSuspenseQuery } from "@/lib/convex-suspense"
 
 export const Route = createFileRoute("/_site/author/$slug")({
@@ -57,7 +58,7 @@ function AuthorPage() {
   const longTail = articles.slice(8)
 
   return (
-    <div className="space-y-10">
+    <div className="flex flex-col gap-10">
       <PageHeader
         kicker={author.title ?? "Reporter"}
         title={author.name}
@@ -94,13 +95,15 @@ function AuthorPage() {
               <SectionHeaderCell title="About" className="mb-4" />
               <AuthorCard author={author} />
             </section>
-            <MostReadStrip
-              label={`Most Read by ${author.name.split(" ")[0]}`}
+            <TrendingStrip
+              label={`Trending by ${author.name.split(" ")[0]}`}
               articles={articles}
             />
           </SidebarRail>
         </section>
       )}
+
+      <BannerAd slot={`author-${slug}-mid`} className="pt-4" />
 
       {longTail.length > 0 ? (
         <section className="pt-10">
@@ -123,6 +126,8 @@ function AuthorPage() {
           </div>
         </section>
       ) : null}
+
+      <BannerAd slot={`author-${slug}-bottom`} className="pt-6" />
     </div>
   )
 }

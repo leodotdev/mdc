@@ -1,8 +1,10 @@
 import { Link } from "@tanstack/react-router"
 
+import { HeroCaption } from "./hero-caption"
 import { StoryItem } from "./story-item"
 import type { ArticleWithRelations } from "@/lib/article-types"
-import { proxiedImageUrl } from "@/lib/image-proxy"
+import { HeroImg } from "@/components/site/hero-img"
+import { useOpenArticleDrawer } from "@/lib/use-open-article-drawer"
 
 // The split lead from the homepage extracted into a reusable block —
 // image right (cols 6-12) + text col left (cols 1-5) on desktop, image
@@ -20,6 +22,7 @@ export function HeroSplit({
   subleads?: Array<ArticleWithRelations>
   showDek?: boolean
 }) {
+  const openInDrawer = useOpenArticleDrawer()
   const top = subleads[0]
   const bottom = subleads[1]
   return (
@@ -28,16 +31,22 @@ export function HeroSplit({
         <Link
           to="/article/$slug"
           params={{ slug: lead.slug }}
-          className="group/lead block self-start overflow-hidden rounded-[4px] md:col-span-7 md:col-start-6"
+          onClick={(e) => openInDrawer(lead.slug, e)}
+          className="group/lead block self-start [contain:paint] md:col-span-7 md:col-start-6"
         >
-          <img
-            src={proxiedImageUrl(lead.heroImage, { width: 1200 })}
-            alt=""
-            loading="eager"
-            className="aspect-[3/2] w-full object-cover transition-transform duration-200 ease-out group-hover/lead:scale-[1.01]"
+          <HeroImg
+            url={lead.heroImage}
+            width={1200}
+            priority
+            className="aspect-[3/2] w-full object-cover transition-transform duration-200 ease-out group-hover/lead:scale-[1.015]"
           />
           {lead.heroCaption ? (
-            <figcaption className="meta mt-2">{lead.heroCaption}</figcaption>
+            <figcaption className="mt-2">
+              <HeroCaption
+                caption={lead.heroCaption}
+                citations={lead.citations}
+              />
+            </figcaption>
           ) : null}
         </Link>
       ) : null}

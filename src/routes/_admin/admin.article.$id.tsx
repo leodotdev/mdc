@@ -6,11 +6,12 @@ import {
   useNavigate,
 } from "@tanstack/react-router"
 import { useConvex } from "convex/react"
-import { Image as ImageIcon, Loader2, Sparkles, X } from "lucide-react"
+import { Image as ImageIcon, Loader2, X } from "lucide-react"
 import { useEffect, useState } from "react"
 import { toast } from "sonner"
 
 import { api } from "../../../convex/_generated/api"
+import { NEIGHBORHOODS } from "../../../convex/lib/neighborhoods"
 import type { Id } from "../../../convex/_generated/dataModel"
 import { ArticleBody } from "@/components/editorial/article-body"
 import {
@@ -44,11 +45,9 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
-import { NEIGHBORHOODS } from "../../../convex/lib/neighborhoods"
-import { formatDateTime } from "@/lib/dates"
 import { proxiedImageUrl } from "@/lib/image-proxy"
 
-export const Route = createFileRoute("/_admin/admin/queue/$id")({
+export const Route = createFileRoute("/_admin/admin/article/$id")({
   component: QueueEditPage,
 })
 
@@ -83,7 +82,7 @@ function QueueEditPage() {
       setTags(article.tags.join(", "))
       setHeroImage(article.heroImage)
       setHeroCaption(article.heroCaption)
-      setSectionId(article.sectionId as string)
+      setSectionId(article.sectionId)
       setNeighborhoods(article.neighborhoods ?? [])
     }
   }, [article])
@@ -127,7 +126,7 @@ function QueueEditPage() {
       await convex.mutation(api.articles.publish, { id: articleId })
     },
     onSuccess: () => {
-      void navigate({ to: "/admin/queue" })
+      void navigate({ to: "/admin/published" })
     },
   })
 
@@ -136,52 +135,7 @@ function QueueEditPage() {
       await convex.mutation(api.articles.reject, { id: articleId })
     },
     onSuccess: () => {
-      void navigate({ to: "/admin/queue" })
-    },
-  })
-
-  // Re-run the desk against this single story: refreshes sources, asks the
-  // LLM for additive citations / related links / optional copy polish, and
-  // re-resolves the hero image when missing. Every change writes a row in
-  // the History panel below.
-  const enrich = useMutation({
-    mutationFn: async () => {
-      return await convex.action(api.agents.enrichStory, { articleId })
-    },
-    onSuccess: (result) => {
-      if (result.error) {
-        toast.error(`${result.deskName ?? "Desk"} enrichment failed`, {
-          description: result.error,
-        })
-        return
-      }
-      queryClient.invalidateQueries({
-        queryKey: convexQuery(api.articles.getById, { id: articleId })
-          .queryKey,
-      })
-      queryClient.invalidateQueries({
-        queryKey: convexQuery(api.articles.revisions, { articleId })
-          .queryKey,
-      })
-      if (!result.changed) {
-        toast(`${result.deskName} found nothing to add`, {
-          description: "No new citations, related links, or copy changes.",
-        })
-        return
-      }
-      const parts: Array<string> = []
-      if (result.citationsAdded) parts.push(`+${result.citationsAdded} citations`)
-      if (result.relatedAdded) parts.push(`+${result.relatedAdded} related`)
-      if (result.changedFields && result.changedFields.length > 0)
-        parts.push(`refreshed ${result.changedFields.join(", ")}`)
-      toast.success(`${result.deskName} enriched this story`, {
-        description: parts.join(" · ") || "Updated.",
-      })
-    },
-    onError: (err) => {
-      toast.error("Enrich failed", {
-        description: err instanceof Error ? err.message : String(err),
-      })
+      void navigate({ to: "/admin/published" })
     },
   })
 
@@ -191,9 +145,9 @@ function QueueEditPage() {
 
   return (
     <div className="grid gap-10 lg:grid-cols-2">
-      <section className="space-y-4">
-        <Link to="/admin/queue" className="meta hover:underline">
-          ← Back to queue
+      <section className="flex flex-col gap-4">
+        <Link to="/admin/published" className="meta hover:underline">
+          ← Back to published
         </Link>
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="title">Headline</Label>
@@ -285,10 +239,10 @@ function QueueEditPage() {
             <img
               src={proxiedImageUrl(heroImage, { width: 800 })}
               alt=""
-              className="aspect-[16/9] w-full rounded-[4px] border border-border object-cover"
+              className="aspect-[16/9] w-full rounded-lg border border-border object-cover"
             />
           ) : (
-            <div className="flex aspect-[16/9] w-full items-center justify-center rounded-[4px] border border-dashed border-border bg-muted/30 text-xs text-muted-foreground">
+            <div className="flex aspect-[16/9] w-full items-center justify-center rounded-lg border border-dashed border-border bg-muted/30 text-xs text-muted-foreground">
               No hero image
             </div>
           )}
@@ -329,19 +283,6 @@ function QueueEditPage() {
           >
             {saveDraft.isPending ? "Saving…" : "Save draft"}
           </Button>
-          <Button
-            variant="outline"
-            disabled={enrich.isPending}
-            onClick={() => enrich.mutate()}
-            title="Re-run the desk on this story — pulls fresh items, adds citations, links related, polishes copy if warranted, refreshes hero image. Tracked in the History panel below."
-          >
-            {enrich.isPending ? (
-              <Loader2 className="animate-spin" />
-            ) : (
-              <Sparkles />
-            )}
-            {enrich.isPending ? "Enriching…" : "Enrich"}
-          </Button>
           <AlertDialog>
             <AlertDialogTrigger
               render={
@@ -378,7 +319,7 @@ function QueueEditPage() {
 
         <div className="border-t pt-4">
           <h3 className="kicker mb-2">Sources cited</h3>
-          <ul className="space-y-1 text-sm">
+          <ul className="flex flex-col gap-1 text-sm">
             {article.citations.map((c, i) => (
               <li key={i}>
                 <a
@@ -397,22 +338,27 @@ function QueueEditPage() {
           </ul>
         </div>
 
-        <RevisionTimeline articleId={articleId} />
       </section>
 
-      <section className="space-y-3">
+      <section className="flex flex-col gap-3">
         <h3 className="kicker">Live preview</h3>
         <div className="rounded-md border bg-card p-6">
           <h1 className="display-md mb-2">{title || article.title}</h1>
-          <p className="font-editorial text-lg text-muted-foreground">
+          <p className="font-sans text-lg text-muted-foreground">
             {dek || article.dek}
           </p>
           {heroImage ? (
             <figure className="my-6">
               <img
-                src={heroImage}
+                src={proxiedImageUrl(heroImage, { width: 1200 })}
                 alt=""
                 className="aspect-[16/9] w-full object-cover"
+                onError={(e) => {
+                  const img = e.currentTarget
+                  if (img.src !== heroImage) {
+                    img.src = heroImage
+                  }
+                }}
               />
               {heroCaption ? (
                 <figcaption className="meta mt-2 text-sm">
@@ -430,97 +376,6 @@ function QueueEditPage() {
   )
 }
 
-// Per-article timeline. Lists revisions newest-first with provenance —
-// who changed it (desk slug or editor email), what kind of change, and a
-// concise summary line. Body diffs aren't stored, so this is a "what + when"
-// log rather than full version history.
-function RevisionTimeline({ articleId }: { articleId: Id<"articles"> }) {
-  const { data: revs } = useQuery(
-    convexQuery(api.articles.revisions, { articleId }),
-  )
-  if (!revs || revs.length === 0) {
-    return (
-      <div className="border-t pt-4">
-        <h3 className="kicker mb-2">History</h3>
-        <p className="meta text-sm">No history yet.</p>
-      </div>
-    )
-  }
-  return (
-    <div className="border-t pt-4">
-      <h3 className="kicker mb-3">History</h3>
-      <ol className="space-y-3 text-sm">
-        {revs.map((r) => {
-          const who =
-            r.editorEmail ?? (r.agentSlug ? `${r.agentSlug} desk` : "system")
-          const action = describeRevision(r)
-          return (
-            <li
-              key={r._id}
-              className="flex flex-col gap-0.5 border-l-2 border-foreground/20 pl-3"
-            >
-              <p className="font-mono text-xs text-muted-foreground tabular-nums">
-                {formatDateTime(r.at)} · {who}
-              </p>
-              <p>{action}</p>
-              {r.note ? (
-                <p className="font-editorial italic text-muted-foreground">
-                  &ldquo;{r.note}&rdquo;
-                </p>
-              ) : null}
-            </li>
-          )
-        })}
-      </ol>
-    </div>
-  )
-}
-
-function describeRevision(r: {
-  kind: string
-  changedFields?: Array<string>
-  citationsAdded?: number
-  sourceItemsAdded?: number
-  statusBefore?: string
-  statusAfter?: string
-}): string {
-  if (r.kind === "draft_created") {
-    return `Drafted with ${r.citationsAdded ?? 0} citations.`
-  }
-  if (r.kind === "agent_augmented") {
-    const parts: Array<string> = []
-    if (r.citationsAdded && r.citationsAdded > 0) {
-      parts.push(`+${r.citationsAdded} citations`)
-    }
-    if (r.sourceItemsAdded && r.sourceItemsAdded > 0) {
-      parts.push(`+${r.sourceItemsAdded} sources`)
-    }
-    if (r.changedFields && r.changedFields.length > 0) {
-      parts.push(`updated ${r.changedFields.join(", ")}`)
-    }
-    return `Desk merged this story (${parts.join(" · ") || "no change"}).`
-  }
-  if (r.kind === "agent_enriched") {
-    const parts: Array<string> = []
-    if (r.citationsAdded && r.citationsAdded > 0) {
-      parts.push(`+${r.citationsAdded} citations`)
-    }
-    if (r.sourceItemsAdded && r.sourceItemsAdded > 0) {
-      parts.push(`+${r.sourceItemsAdded} sources`)
-    }
-    if (r.changedFields && r.changedFields.length > 0) {
-      parts.push(`refreshed ${r.changedFields.join(", ")}`)
-    }
-    return `Desk enriched this story (${parts.join(" · ") || "no change"}).`
-  }
-  if (r.kind === "editor_edited" && r.changedFields) {
-    return `Editor edited ${r.changedFields.join(", ")}.`
-  }
-  if (r.kind === "status_changed") {
-    return `Status: ${r.statusBefore ?? "?"} → ${r.statusAfter ?? "?"}.`
-  }
-  return r.kind
-}
 
 // Hero image picker — fetches multiple OG candidates from cited sources +
 // Unsplash matches scoped to the headline + section, drops anything that
@@ -557,8 +412,6 @@ function HeroPicker({
   const [diagnostics, setDiagnostics] = useState<{
     sourcesScanned: number
     sourcesWithImage: number
-    unsplashEnabled: boolean
-    unsplashCount: number
     wikimediaCount: number
     totalCandidates: number
   } | null>(null)
@@ -600,9 +453,6 @@ function HeroPicker({
       queryClient.invalidateQueries({
         queryKey: convexQuery(api.articles.getById, { id: articleId }).queryKey,
       })
-      queryClient.invalidateQueries({
-        queryKey: convexQuery(api.articles.revisions, { articleId }).queryKey,
-      })
       toast.success("Hero image updated")
       setOpen(false)
     } catch (e) {
@@ -626,9 +476,6 @@ function HeroPicker({
       onClear()
       queryClient.invalidateQueries({
         queryKey: convexQuery(api.articles.getById, { id: articleId }).queryKey,
-      })
-      queryClient.invalidateQueries({
-        queryKey: convexQuery(api.articles.revisions, { articleId }).queryKey,
       })
       toast.success("Hero image cleared")
       setOpen(false)
@@ -713,38 +560,25 @@ function HeroPicker({
             Array.from({ length: 6 }).map((_, i) => (
               <div
                 key={i}
-                className="aspect-[16/10] animate-pulse rounded-[4px] bg-muted"
+                className="aspect-[16/10] animate-pulse rounded-lg bg-muted"
               />
             ))
           ) : candidates.length === 0 ||
             candidates.every((c) => broken.has(c.url)) ? (
-            <div className="col-span-full space-y-3 py-6 text-center">
+            <div className="flex flex-col gap-3 col-span-full py-6 text-center">
               <p className="meta text-sm">
                 {candidates.length === 0
                   ? "No alternative images found."
                   : "Every candidate failed to load in this browser."}
               </p>
               {diagnostics ? (
-                <ul className="meta mx-auto max-w-md space-y-0.5 text-left text-xs">
+                <ul className="flex flex-col gap-0.5 meta mx-auto max-w-md text-left text-xs">
                   <li>
                     Cited sources scanned:{" "}
                     <span className="font-mono tabular-nums">
                       {diagnostics.sourcesWithImage}/{diagnostics.sourcesScanned}
                     </span>{" "}
                     returned an image
-                  </li>
-                  <li>
-                    Unsplash:{" "}
-                    {diagnostics.unsplashEnabled ? (
-                      <span className="font-mono tabular-nums">
-                        {diagnostics.unsplashCount} matches
-                      </span>
-                    ) : (
-                      <span className="text-destructive">
-                        not configured (set <code>UNSPLASH_ACCESS_KEY</code>{" "}
-                        in Convex env)
-                      </span>
-                    )}
                   </li>
                   <li>
                     Wikimedia Commons:{" "}
@@ -759,7 +593,7 @@ function HeroPicker({
                   <summary className="meta cursor-pointer text-xs">
                     Failed URLs ({candidates.length})
                   </summary>
-                  <ul className="mt-2 space-y-1">
+                  <ul className="flex flex-col gap-1 mt-2">
                     {candidates.map((c) => (
                       <li key={c.url} className="text-xs break-all">
                         <a
@@ -851,7 +685,7 @@ function PickerTile({
       disabled={picking !== null || isCurrent}
       onClick={onPick}
       className={
-        "group relative flex flex-col gap-1 overflow-hidden rounded-[4px] border bg-card text-left transition-colors hover:border-primary disabled:opacity-50 " +
+        "group relative flex flex-col gap-1 transform-gpu overflow-clip rounded-lg border bg-card text-left transition-colors hover:border-primary disabled:opacity-50 " +
         (isCurrent ? "border-primary" : "border-border")
       }
     >
@@ -869,7 +703,7 @@ function PickerTile({
               onBroken()
             }
           }}
-          className="h-full w-full object-cover transition-transform duration-200 ease-out group-hover:scale-[1.02]"
+          className="h-full w-full object-cover"
         />
       </div>
       <div className="flex items-center justify-between gap-2 px-2 pb-2">
@@ -942,7 +776,7 @@ function SearchExternal({ articleId }: { articleId: Id<"articles"> }) {
     },
   ]
   return (
-    <div className="space-y-1.5">
+    <div className="flex flex-col gap-1.5">
       <p className="meta text-xs">Search elsewhere for "{query}"</p>
       <div className="flex flex-wrap justify-center gap-2">
         {links.map((l) => (

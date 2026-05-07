@@ -1,12 +1,14 @@
-import { Link, useNavigate } from "@tanstack/react-router"
+import { Link } from "@tanstack/react-router"
 import { cva } from "class-variance-authority"
 
 import { SectionBadge } from "./section-badge"
 import type { VariantProps } from "class-variance-authority"
 import type { ArticleWithRelations } from "@/lib/article-types"
 import { useTranslation } from "@/lib/i18n/context"
-import { proxiedImageUrl } from "@/lib/image-proxy"
+import { HeroImg } from "@/components/site/hero-img"
+import { relativeTime } from "@/lib/dates"
 import { localizedArticle } from "@/lib/localized-article"
+import { useOpenArticleDrawer } from "@/lib/use-open-article-drawer"
 import { cn } from "@/lib/utils"
 
 // Single editorial card. Replaces WapoStoryItem, StoryCard, GridStoryCard,
@@ -19,9 +21,11 @@ import { cn } from "@/lib/utils"
 //   imageAspect — image-top + framed only; ignored otherwise
 //   customKicker — overrides the section badge with a custom label/color
 //
-// Click behavior: cmd/ctrl/shift + click navigates to the full article
-// page; plain left-click opens the article drawer via the `?article=slug`
-// search param so the user stays in flow.
+// Click behavior: every left-click opens the article drawer via the
+// `?article=slug` search param. Middle / right click fall through to the
+// browser's "open in new tab" — that new tab loads the dedicated
+// `/article/$slug` route fresh, which is the only in-app way to reach
+// the route besides the drawer's "Open as full page" footer link.
 
 // Headline size scale used by every layout. Picks up the section accent
 // on hover via `group-hover/item:text-primary`.
@@ -88,20 +92,6 @@ const aspectClass = {
   "1/1": "aspect-square",
 } as const
 
-function useOpenInDrawer() {
-  const navigate = useNavigate()
-  return (slug: string, e: React.MouseEvent) => {
-    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return
-    e.preventDefault()
-    void navigate({
-      search: ((prev: Record<string, unknown>) => ({
-        ...prev,
-        article: slug,
-      })) as never,
-    })
-  }
-}
-
 export function StoryItem({
   article: rawArticle,
   layout = "image-top",
@@ -122,13 +112,33 @@ export function StoryItem({
     showDek ?? (sizeKey === "hero" || sizeKey === "feature" || sizeKey === "lead")
   const hasImage =
     showImage && !!article.heroImage && layout !== "text-only"
-  const openInDrawer = useOpenInDrawer()
+  const openInDrawer = useOpenArticleDrawer()
   const linkProps = {
     to: "/article/$slug" as const,
     params: { slug: article.slug },
     onClick: (e: React.MouseEvent) => openInDrawer(article.slug, e),
   }
 
+  // Kicker line: section badge (or custom kicker / nothing) + a relative
+  // time stamp in muted color, sized to match the kicker. The time stamp
+  // renders even when the section badge is suppressed (`showKicker={false}`,
+  // e.g. on section pages where the section name is redundant) — it's the
+  // only persistent piece of meta on those rows.
+  const kickerSizeCls = customKicker
+    ? "text-[0.7rem]"
+    : sizeKey === "hero" || sizeKey === "feature"
+      ? "text-sm"
+      : "text-xs"
+
+  // Section kicker policy: prefer the sub-section name (Heat, Politics,
+  // Marlins) when the article is filed under one — those carry more
+  // signal than the parent. When there's no sub-section, fall back to
+  // the top-level name (News, Food, Sports) so every story still has a
+  // label above the headline. Custom kickers (BREAKING / EXCLUSIVE)
+  // override either path. The badge itself reads `article.section`,
+  // which is already the leaf row from `hydrate()` — fall-back happens
+  // implicitly because top-level sections ARE the leaf when no
+  // sub-section was picked.
   const KickerNode = customKicker ? (
     <span
       className="kicker inline-flex items-center gap-1.5 text-[0.7rem]"
@@ -150,6 +160,26 @@ export function StoryItem({
     />
   ) : null
 
+  const timeStamp = article.publishedAt ?? article.createdAt
+  const TimeNode = timeStamp ? (
+    <span
+      className={cn(
+        "kicker text-muted-foreground font-normal",
+        kickerSizeCls,
+      )}
+    >
+      {relativeTime(timeStamp)}
+    </span>
+  ) : null
+
+  const KickerLine =
+    KickerNode || TimeNode ? (
+      <div className="flex flex-wrap items-baseline gap-x-2">
+        {KickerNode}
+        {TimeNode}
+      </div>
+    ) : null
+
   const Headline = (
     <Link {...linkProps}>
       <h3 className={titleVariants({ size })}>{article.title}</h3>
@@ -170,7 +200,7 @@ export function StoryItem({
 
   const Body = (
     <div className="flex flex-col gap-1.5">
-      {KickerNode}
+      {KickerLine}
       {Headline}
       {Dek}
     </div>
@@ -180,16 +210,15 @@ export function StoryItem({
   const ImageTop = hasImage ? (
     <Link
       {...linkProps}
-      className="block overflow-hidden rounded-[4px]"
+      className="block [contain:paint]"
       tabIndex={-1}
     >
-      <img
-        src={proxiedImageUrl(article.heroImage, { width: 800 })}
-        alt=""
-        loading="lazy"
+      <HeroImg
+        url={article.heroImage}
+        width={800}
         className={cn(
           aspectClass[imageAspect],
-          "w-full object-cover transition-transform duration-200 ease-out group-hover/item:scale-[1.015]",
+          "w-full object-cover",
         )}
       />
     </Link>
@@ -198,14 +227,13 @@ export function StoryItem({
   const ImageSide = hasImage ? (
     <Link
       {...linkProps}
-      className="block self-start overflow-hidden rounded-[4px]"
+      className="block self-start [contain:paint]"
       tabIndex={-1}
     >
-      <img
-        src={proxiedImageUrl(article.heroImage, { width: 800 })}
-        alt=""
-        loading="lazy"
-        className="aspect-[3/2] w-full object-cover transition-transform duration-200 ease-out group-hover/item:scale-[1.01]"
+      <HeroImg
+        url={article.heroImage}
+        width={800}
+        className="aspect-[3/2] w-full object-cover"
       />
     </Link>
   ) : null
@@ -213,14 +241,13 @@ export function StoryItem({
   const ImageThumb = hasImage ? (
     <Link
       {...linkProps}
-      className="block aspect-square h-20 w-28 shrink-0 overflow-hidden rounded-[4px]"
+      className="block aspect-square h-20 w-28 shrink-0 [contain:paint]"
       tabIndex={-1}
     >
-      <img
-        src={proxiedImageUrl(article.heroImage, { width: 240 })}
-        alt=""
-        loading="lazy"
-        className="h-full w-full object-cover transition-transform duration-200 ease-out group-hover/item:scale-[1.015]"
+      <HeroImg
+        url={article.heroImage}
+        width={240}
+        className="h-full w-full object-cover"
       />
     </Link>
   ) : null
@@ -239,23 +266,22 @@ export function StoryItem({
         {hasImage ? (
           <Link
             {...linkProps}
-            className="block overflow-hidden rounded-t-[4px] border-b border-foreground"
+            className="block [contain:paint]"
             aria-hidden="true"
             tabIndex={-1}
           >
-            <img
-              src={proxiedImageUrl(article.heroImage, { width: 800 })}
-              alt=""
-              loading="lazy"
+            <HeroImg
+              url={article.heroImage}
+              width={800}
               className={cn(
                 aspectClass[imageAspect],
-                "w-full object-cover transition-transform duration-200 ease-out group-hover/item:scale-[1.015]",
+                "w-full object-cover",
               )}
             />
           </Link>
         ) : null}
         <div className="flex flex-1 flex-col gap-2 p-5">
-          {KickerNode}
+          {KickerLine}
           {Headline}
           {Dek}
         </div>
@@ -271,14 +297,15 @@ export function StoryItem({
         {hasImage ? (
           <Link
             {...linkProps}
-            className="block overflow-hidden rounded-[4px]"
+            className="block [contain:paint]"
             tabIndex={-1}
           >
-            <img
-              src={proxiedImageUrl(article.heroImage, { width: 1200 })}
+            <HeroImg
+              url={article.heroImage}
+              width={1200}
               alt={article.heroCaption ?? ""}
-              loading="eager"
-              className="aspect-[16/9] w-full object-cover transition-transform duration-200 ease-out group-hover/item:scale-[1.01]"
+              priority
+              className="aspect-[16/9] w-full object-cover transition-transform duration-200 ease-out group-hover/item:scale-[1.015]"
             />
           </Link>
         ) : null}
@@ -290,7 +317,7 @@ export function StoryItem({
               : "border-l-4 border-foreground pl-5 md:pl-6",
           )}
         >
-          {KickerNode}
+          {KickerLine}
           {Headline}
           {article.dek ? (
             <p className="font-sans text-base font-normal text-muted-foreground">

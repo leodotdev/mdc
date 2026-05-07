@@ -1,6 +1,6 @@
 import { convexQuery } from "@convex-dev/react-query"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { createFileRoute } from "@tanstack/react-router"
+import { Link, createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useConvex } from "convex/react"
 import { Check, Pencil, Plus, Trash2, X } from "lucide-react"
 import { useMemo, useState } from "react"
@@ -8,6 +8,7 @@ import { useMemo, useState } from "react"
 import { api } from "../../../convex/_generated/api"
 import type { Doc, Id } from "../../../convex/_generated/dataModel"
 import { TableLoadingRows } from "@/components/editorial/story-card-skeleton"
+import { EventImportanceGauge } from "@/components/editorial/importance-gauge"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -43,8 +44,6 @@ import {
 } from "@/lib/event-helpers"
 import { proxiedImageUrl } from "@/lib/image-proxy"
 import { runOnAll, useBulkSelection } from "@/lib/use-bulk-selection"
-import { EVENT_KINDS, eventKindLabel } from "../../../convex/lib/eventKinds"
-import type { EventKindSlug } from "../../../convex/lib/eventKinds"
 
 export const Route = createFileRoute("/_admin/admin/events")({
   component: EventsAdminPage,
@@ -53,8 +52,8 @@ export const Route = createFileRoute("/_admin/admin/events")({
 function EventsAdminPage() {
   const convex = useConvex()
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const [createOpen, setCreateOpen] = useState(false)
-  const [editing, setEditing] = useState<Doc<"events"> | null>(null)
 
   const { data } = useQuery(
     convexQuery(api.events.adminList, { pastDays: 7 }),
@@ -106,10 +105,10 @@ function EventsAdminPage() {
   })
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="font-heading text-3xl font-semibold tracking-[-0.02em]">
+          <h1 className="font-sans text-3xl font-semibold tracking-[-0.02em]">
             Events
           </h1>
           <p className="meta mt-1">
@@ -165,7 +164,7 @@ function EventsAdminPage() {
 
       {data && data.length === 0 ? (
         <div className="rounded-md border bg-card p-6">
-          <p className="font-editorial">No events yet.</p>
+          <p className="font-sans">No events yet.</p>
           <p className="meta mt-1">
             Add one with the "New event" button, or wait for a desk run to
             extract events from sources.
@@ -184,16 +183,17 @@ function EventsAdminPage() {
                   />
                 </TableHead>
                 <TableHead>Event</TableHead>
-                <TableHead className="hidden md:table-cell">Kind</TableHead>
+                <TableHead className="hidden md:table-cell">Section</TableHead>
                 <TableHead className="hidden md:table-cell">When</TableHead>
                 <TableHead className="hidden lg:table-cell">Where</TableHead>
+                <TableHead className="hidden md:table-cell">Importance</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {data === undefined ? (
-                <TableLoadingRows rows={6} cols={7} />
+                <TableLoadingRows rows={6} cols={8} />
               ) : (
                 data.map((e) => {
                   const id = e._id as string
@@ -211,7 +211,10 @@ function EventsAdminPage() {
                           )
                         )
                           return
-                        setEditing(e)
+                        void navigate({
+                          to: "/admin/events/$id",
+                          params: { id: e._id },
+                        })
                       }}
                     >
                       <TableCell>
@@ -224,15 +227,22 @@ function EventsAdminPage() {
                       <TableCell className="max-w-md whitespace-normal">
                         <div className="font-medium">{e.title}</div>
                         {e.description ? (
-                          <div className="font-editorial text-sm text-muted-foreground">
+                          <div className="font-sans text-sm text-muted-foreground">
                             {e.description}
                           </div>
                         ) : null}
                       </TableCell>
                       <TableCell className="hidden md:table-cell text-xs">
-                        <Badge variant="outline" className="text-[0.65rem]">
-                          {eventKindLabel(e.kind)}
-                        </Badge>
+                        {e.section ? (
+                          <span
+                            className="kicker text-[0.65rem]"
+                            style={{ color: e.section.accentColor }}
+                          >
+                            {e.section.name}
+                          </span>
+                        ) : (
+                          <span className="meta">—</span>
+                        )}
                       </TableCell>
                       <TableCell className="hidden md:table-cell tabular-nums text-xs">
                         <div>{formatEventShortDate(e.startsAt)}</div>
@@ -241,11 +251,14 @@ function EventsAdminPage() {
                         </div>
                       </TableCell>
                       <TableCell className="hidden lg:table-cell text-xs">
-                        {[e.locationName, e.neighborhood]
+                        {[e.locationName, e.neighborhoods?.[0]]
                           .filter(Boolean)
                           .join(" · ") || (
                           <span className="meta">—</span>
                         )}
+                      </TableCell>
+                      <TableCell className="hidden md:table-cell">
+                        <EventImportanceGauge event={e} />
                       </TableCell>
                       <TableCell>
                         <StatusBadge status={e.status} />
@@ -274,7 +287,12 @@ function EventsAdminPage() {
                             variant="ghost"
                             aria-label="Edit"
                             title="Edit"
-                            onClick={() => setEditing(e)}
+                            render={
+                              <Link
+                                to="/admin/events/$id"
+                                params={{ id: e._id }}
+                              />
+                            }
                           >
                             <Pencil />
                           </Button>
@@ -299,25 +317,6 @@ function EventsAdminPage() {
         </div>
       )}
 
-      <Dialog
-        open={editing !== null}
-        onOpenChange={(open) => {
-          if (!open) setEditing(null)
-        }}
-      >
-        <DialogContent className="sm:max-w-2xl">
-          {editing ? (
-            <EventForm
-              sections={sections.data ?? []}
-              initial={editing}
-              onClose={() => {
-                setEditing(null)
-                refetch()
-              }}
-            />
-          ) : null}
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }
@@ -383,20 +382,19 @@ function EventForm({
   )
   const [allDay, setAllDay] = useState(initial?.allDay ?? false)
   const [locationName, setLocationName] = useState(initial?.locationName ?? "")
-  const [neighborhood, setNeighborhood] = useState(initial?.neighborhood ?? "")
+  // Single-input neighborhood for now; persisted as a one-element
+  // `neighborhoods` array to match the new schema.
+  const [neighborhood, setNeighborhood] = useState(
+    initial?.neighborhoods?.[0] ?? "",
+  )
   const [locationAddress, setLocationAddress] = useState(
     initial?.locationAddress ?? "",
   )
   const [url, setUrl] = useState(initial?.url ?? "")
-  const [imageUrl, setImageUrl] = useState(initial?.imageUrl ?? "")
+  const [heroImage, setHeroImage] = useState(initial?.heroImage ?? "")
   const [price, setPrice] = useState(initial?.price ?? "")
   const [sectionId, setSectionId] = useState<string>(
-    (initial?.sectionId as string | undefined) ??
-      (sections.find((s) => s.slug === "things-to-do")?._id as string) ??
-      "",
-  )
-  const [kind, setKind] = useState<EventKindSlug>(
-    (initial?.kind as EventKindSlug | undefined) ?? "general",
+    (initial?.sectionId as string | undefined) ?? "",
   )
   const [submitting, setSubmitting] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -409,6 +407,10 @@ function EventForm({
       setErr("Title and a valid start time are required.")
       return
     }
+    if (!sectionId) {
+      setErr("Pick a section — every event needs one (like articles do).")
+      return
+    }
     const endsAt = fromLocalDateTime(endsAtStr) ?? undefined
     if (endsAt != null && endsAt <= startsAt) {
       setErr("End time must be after start time.")
@@ -416,31 +418,30 @@ function EventForm({
     }
     setSubmitting(true)
     try {
-      const payload = {
+      const neighborhoodTrim = neighborhood.trim()
+      const updatePayload = {
         title: title.trim(),
         description: description.trim(),
         startsAt,
         endsAt,
         allDay,
-        kind,
         locationName: locationName.trim() || undefined,
-        neighborhood: neighborhood.trim() || undefined,
+        neighborhoods: neighborhoodTrim ? [neighborhoodTrim] : undefined,
         locationAddress: locationAddress.trim() || undefined,
         url: url.trim() || undefined,
-        imageUrl: imageUrl.trim() || undefined,
+        heroImage: heroImage.trim() || undefined,
+        heroSource: heroImage.trim() ? ("source" as const) : undefined,
         price: price.trim() || undefined,
-        sectionId: sectionId
-          ? (sectionId as Id<"sections">)
-          : undefined,
+        sectionId: sectionId as Id<"sections">,
       }
       if (isEdit && initial) {
         await convex.mutation(api.events.update, {
           id: initial._id,
-          patch: payload,
+          patch: updatePayload,
         })
       } else {
         await convex.mutation(api.events.create, {
-          event: payload,
+          event: updatePayload,
           status: "approved",
         })
       }
@@ -480,27 +481,6 @@ function EventForm({
             value={description}
             onChange={(e) => setDescription(e.target.value)}
           />
-        </div>
-
-        <div className="grid gap-1.5">
-          <Label htmlFor="ev-kind">Kind</Label>
-          <Select
-            value={kind}
-            onValueChange={(v) =>
-              setKind((v as EventKindSlug | null) ?? "general")
-            }
-          >
-            <SelectTrigger id="ev-kind">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {EVENT_KINDS.map((k) => (
-                <SelectItem key={k.slug} value={k.slug}>
-                  {k.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
         </div>
 
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -587,19 +567,19 @@ function EventForm({
         </div>
 
         <div className="grid gap-1.5">
-          <Label htmlFor="ev-image">Image URL</Label>
+          <Label htmlFor="ev-image">Hero image URL</Label>
           <Input
             id="ev-image"
             type="url"
-            value={imageUrl}
-            onChange={(e) => setImageUrl(e.target.value)}
+            value={heroImage}
+            onChange={(e) => setHeroImage(e.target.value)}
             placeholder="https://…/poster.jpg"
           />
-          {imageUrl ? (
+          {heroImage ? (
             <img
-              src={proxiedImageUrl(imageUrl, { width: 240 })}
+              src={proxiedImageUrl(heroImage, { width: 240 })}
               alt=""
-              className="mt-1 aspect-square w-24 rounded-[4px] object-cover"
+              className="mt-1 aspect-square w-24 object-cover"
             />
           ) : null}
         </div>

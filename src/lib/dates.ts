@@ -37,6 +37,26 @@ export function relativeTime(ts: number): string {
   return `${d}d ago`
 }
 
+// "Future" relative — "in 12m", "in 2h", "due now" / "overdue 5m" when
+// the predicted moment has passed (cron will fire on next tick). Used by
+// the dashboard's Next-run column.
+export function formatNextRun(ts: number): string {
+  const diff = ts - Date.now()
+  if (diff <= 0) {
+    const overdueMin = Math.round(-diff / 60_000)
+    if (overdueMin < 5) return "any moment"
+    if (overdueMin < 60) return `overdue ${overdueMin}m`
+    const overdueHours = Math.round(overdueMin / 60)
+    return `overdue ${overdueHours}h`
+  }
+  const m = Math.round(diff / 60_000)
+  if (m < 60) return `in ${m}m`
+  const h = Math.round(m / 60)
+  if (h < 24) return `in ${h}h`
+  const d = Math.round(h / 24)
+  return `in ${d}d`
+}
+
 export function todayInMiami(): string {
   return new Intl.DateTimeFormat("en-US", {
     weekday: "long",

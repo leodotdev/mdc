@@ -1,8 +1,61 @@
 import { v } from "convex/values"
+import { internal } from "./_generated/api"
 import { mutation, query } from "./_generated/server"
 import { buildSearchableText } from "./articles"
 import { requireEditor } from "./lib/guard"
 import { linkRelated } from "./lib/storyArcs"
+import type { Id } from "./_generated/dataModel"
+import type { QueryCtx } from "./_generated/server"
+
+// Extract a YouTube or Vimeo video id from the first matching citation.
+// Returns undefined when no citation is a video URL — the article stays
+// "article" media type, with the hero image as its lead.
+//
+// YouTube formats supported:
+//   https://www.youtube.com/watch?v=ID
+//   https://youtu.be/ID
+//   https://www.youtube.com/shorts/ID
+// Vimeo: https://vimeo.com/ID
+function videoEmbedFrom(
+  citations: ReadonlyArray<{ url: string }>,
+): { provider: "youtube" | "vimeo"; id: string } | undefined {
+  for (const c of citations) {
+    const yt = extractYouTubeId(c.url)
+    if (yt) return { provider: "youtube", id: yt }
+    const vimeo = extractVimeoId(c.url)
+    if (vimeo) return { provider: "vimeo", id: vimeo }
+  }
+  return undefined
+}
+
+function extractYouTubeId(url: string): string | undefined {
+  try {
+    const u = new URL(url)
+    const host = u.hostname.replace(/^www\./, "")
+    if (host === "youtu.be") {
+      return u.pathname.slice(1).split("/")[0] || undefined
+    }
+    if (host !== "youtube.com" && host !== "m.youtube.com") return undefined
+    const watch = u.searchParams.get("v")
+    if (watch) return watch
+    const shortsMatch = u.pathname.match(/^\/shorts\/([^/]+)/)
+    if (shortsMatch) return shortsMatch[1]
+    return undefined
+  } catch {
+    return undefined
+  }
+}
+
+function extractVimeoId(url: string): string | undefined {
+  try {
+    const u = new URL(url)
+    if (u.hostname.replace(/^www\./, "") !== "vimeo.com") return undefined
+    const m = u.pathname.match(/^\/(\d+)/)
+    return m ? m[1] : undefined
+  } catch {
+    return undefined
+  }
+}
 
 export const list = query({
   args: {},
@@ -34,43 +87,6 @@ export const getBySlug = query({
       ctx.db.get(agent.authorId),
     ])
     return { ...agent, section, author }
-  },
-})
-
-// Pick the desk that should own a given article — used by the per-story
-// enrichment action so the editor doesn't have to select a desk manually.
-// Strategy: prefer the desk that originally drafted it (article.agentSlug),
-// fall back to any enabled desk that primaries the article's section, then
-// any enabled desk whose section is a parent of the article's section.
-// Returns null when no desk is appropriate (rare — e.g. orphaned section).
-export const deskForArticle = query({
-  args: { articleId: v.id("articles") },
-  handler: async (ctx, { articleId }) => {
-    const article = await ctx.db.get(articleId)
-    if (!article) return null
-    if (article.agentSlug) {
-      const named = await ctx.db
-        .query("agents")
-        .withIndex("by_slug", (q) => q.eq("slug", article.agentSlug!))
-        .unique()
-      if (named) return named
-    }
-    const direct = await ctx.db
-      .query("agents")
-      .withIndex("by_section", (q) => q.eq("sectionId", article.sectionId))
-      .collect()
-    const enabledDirect = direct.find((a) => a.enabled) ?? direct[0]
-    if (enabledDirect) return enabledDirect
-    // Fall back to the parent section's desk (sub-section pieces inherit).
-    const section = await ctx.db.get(article.sectionId)
-    if (section?.parentId) {
-      const parentDesks = await ctx.db
-        .query("agents")
-        .withIndex("by_section", (q) => q.eq("sectionId", section.parentId!))
-        .collect()
-      return parentDesks.find((a) => a.enabled) ?? parentDesks[0] ?? null
-    }
-    return null
   },
 })
 
@@ -152,10 +168,16 @@ export const appendLog = mutation({
 export const finishRun = mutation({
   args: {
     runId: v.id("agentRuns"),
-    status: v.union(v.literal("succeeded"), v.literal("failed")),
+    status: v.union(
+      v.literal("succeeded"),
+      v.literal("failed"),
+      v.literal("skipped"),
+    ),
     itemsConsidered: v.number(),
     draftsCreated: v.number(),
     errorMessage: v.optional(v.string()),
+    /** Why this run was skipped (e.g. "budget-cap"). */
+    skippedReason: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await ctx.db.patch(args.runId, {
@@ -164,17 +186,36 @@ export const finishRun = mutation({
       itemsConsidered: args.itemsConsidered,
       draftsCreated: args.draftsCreated,
       errorMessage: args.errorMessage,
+      skippedReason: args.skippedReason,
     })
   },
 })
 
 // ---------- ingestion + selection ----------
 
+// Expand an agent's section to the set of section IDs it "owns" — the
+// agent's primary section plus every direct child. Lets a desk like the
+// Science desk pull sources tagged Science, Climate, OR Nature without
+// having to add `science` to every existing source.
+async function sectionTreeFor(
+  ctx: QueryCtx,
+  sectionId: Id<"sections">,
+): Promise<Set<string>> {
+  const owned = new Set<string>([sectionId])
+  const children = await ctx.db
+    .query("sections")
+    .withIndex("by_parent", (q) => q.eq("parentId", sectionId))
+    .collect()
+  for (const c of children) owned.add(c._id)
+  return owned
+}
+
 export const enabledSourcesForAgent = query({
   args: { agentId: v.id("agents") },
   handler: async (ctx, { agentId }) => {
     const agent = await ctx.db.get(agentId)
     if (!agent) return []
+    const owned = await sectionTreeFor(ctx, agent.sectionId)
     const all = await ctx.db
       .query("sources")
       .withIndex("by_enabled", (q) => q.eq("enabled", true))
@@ -182,7 +223,7 @@ export const enabledSourcesForAgent = query({
     return all
       .filter((s) =>
         s.sectionIds.some(
-          (sectionId) => sectionId === agent.sectionId,
+          (sectionId) => owned.has(sectionId),
         ),
       )
       .map((s) => ({
@@ -204,12 +245,13 @@ export const unconsumedItemsForAgent = query({
   handler: async (ctx, { agentId, sinceMs, limit }) => {
     const agent = await ctx.db.get(agentId)
     if (!agent) return []
+    const owned = await sectionTreeFor(ctx, agent.sectionId)
     const sourcesForSection = await ctx.db.query("sources").collect()
     const ourSourceIds = new Set(
       sourcesForSection
         .filter((s) =>
           s.sectionIds.some(
-            (sectionId) => sectionId === agent.sectionId,
+            (sectionId) => owned.has(sectionId),
           ),
         )
         .map((s) => s._id),
@@ -230,6 +272,49 @@ export const unconsumedItemsForAgent = query({
       }),
     )
     return withSource
+  },
+})
+
+// Mega-desk variant — pull every unconsumed item across every enabled
+// source, irrespective of section. The mega-desk decides routing
+// itself in the LLM call, so this query just supplies the firehose
+// (capped at `limit`).
+//
+// The index orders by `fetchedAt` desc (which is when WE fetched the
+// source), but we re-sort by `publishedAt` desc in memory before
+// slicing — the system should prefer items the original outlet
+// published most recently, not items WE happened to fetch most
+// recently. The over-fetch (limit * 4) gives the re-sort enough
+// material to surface fresh items even when a source dumps an old
+// batch on its first fetch.
+export const unconsumedItemsAll = query({
+  args: {
+    sinceMs: v.number(),
+    limit: v.number(),
+  },
+  handler: async (ctx, { sinceMs, limit }) => {
+    const enabledSourceIds = new Set(
+      (await ctx.db.query("sources").collect())
+        .filter((s) => s.enabled)
+        .map((s) => s._id),
+    )
+    const items = await ctx.db
+      .query("ingestedItems")
+      .withIndex("by_consumed_fetched", (q) => q.eq("consumed", false))
+      .order("desc")
+      .take(limit * 4)
+    const filtered = items
+      .filter((i) => enabledSourceIds.has(i.sourceId) && i.fetchedAt >= sinceMs)
+      .sort(
+        (a, b) =>
+          (b.publishedAt ?? b.fetchedAt) - (a.publishedAt ?? a.fetchedAt),
+      )
+    return await Promise.all(
+      filtered.slice(0, limit).map(async (i) => {
+        const src = await ctx.db.get(i.sourceId)
+        return { item: i, sourceName: src?.name ?? "(unknown)" }
+      }),
+    )
   },
 })
 
@@ -292,11 +377,28 @@ export const insertDraft = mutation({
       suffix += 1
       slug = `${article.slug}-${suffix}`
     }
+
+    // Self-publish — every desk-drafted article goes live immediately.
+    // Subsequent desk runs augment in place via `articles.augmentArticle`
+    // (citations + content refresh) and the merge sweep folds across-run
+    // duplicates. No editor review. The tradeoff vs an approval gate:
+    // occasional weak copy ships; the dedup, merge, voice re-roll, and
+    // hero watchdog crons backfill quality out-of-band without blocking
+    // the news cycle.
+    const now = Date.now()
+    // Detect a video-native draft: the lead citation is a YouTube /
+    // Vimeo URL. Stamp mediaType + videoEmbed so the article-page
+    // template can render the player as the lead instead of the hero
+    // image. Falls back to "article" when no video citation is found.
+    const videoEmbed = videoEmbedFrom(article.citations)
     const articleId = await ctx.db.insert("articles", {
       ...article,
       slug,
-      status: "pending_review",
-      createdAt: Date.now(),
+      status: "published",
+      publishedAt: article.publishedAt ?? now,
+      createdAt: now,
+      mediaType: videoEmbed ? "video" : undefined,
+      videoEmbed,
       relatedArticleIds: relatedIds ?? [],
       searchableText: buildSearchableText({
         title: article.title,
@@ -310,16 +412,11 @@ export const insertDraft = mutation({
     if (relatedIds && relatedIds.length > 0) {
       await linkRelated(ctx, articleId, relatedIds, article.title)
     }
-    // Seed the article's revision timeline.
-    await ctx.db.insert("articleRevisions", {
-      articleId,
-      at: Date.now(),
-      kind: "draft_created",
-      agentSlug: article.agentSlug,
-      agentRunId: article.agentRunId,
-      citationsAdded: article.citations.length,
-      sourceItemsAdded: article.derivedFromItems.length,
-    })
+    await ctx.scheduler.runAfter(
+      60_000,
+      internal.articles.translateArticleAction,
+      { articleId, lang: "es" },
+    )
     return articleId
   },
 })

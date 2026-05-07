@@ -1,33 +1,33 @@
-import { Check, Link as LinkIcon, Mail, Share2, X } from "lucide-react"
-import { useEffect, useRef, useState } from "react"
+import { Check, Link as LinkIcon, Mail, Share2 } from "lucide-react"
+import { useState } from "react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
-import { cn } from "@/lib/utils"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 
-// Single Share button that expands inline into a row of platform icons.
-// Click the trigger → row animates open. Pressing Esc, clicking outside,
-// or hitting any platform closes it. Copy-link toasts a confirmation
-// instead of opening a new tab.
-//
-// All share intents are computed lazily after hydration so we get the
-// canonical absolute URL from `window.location` rather than relying on
-// a server-rendered base. Title is passed in so platforms that accept
-// pre-filled text (X, Bluesky, Threads, email) get the actual headline.
+// Single Share dropdown — ghost trigger to sit flush in the story
+// layout's meta strip alongside the date (and `<AddToCalendar>` on
+// events). Items are rendered as platform intents that open in a new
+// tab; "Copy link" lives at the bottom of the menu and toasts a
+// confirmation. Currently-active URL is read lazily on click so the
+// trigger can render server-side without a `window` reference.
 
 type Platform = {
   key: string
   label: string
   intent: (url: string, title: string) => string
-  // Both lucide icons and our inline brand SVGs satisfy this — they all
-  // accept the standard SVG props and render <svg>.
   Icon: React.ComponentType<React.SVGProps<SVGSVGElement>>
 }
 
-// Tiny brand-style SVGs for X, Facebook, LinkedIn, Bluesky, and Threads.
-// Lucide doesn't ship pixel-faithful brand marks (the `Twitter` glyph is
-// the old bird, etc.), so we inline minimal versions here. They're built
-// to match the lucide icon button frame at size-4.
+// Lucide doesn't ship pixel-faithful brand marks for X / Facebook /
+// LinkedIn / Bluesky / Threads — we inline minimal versions sized to
+// match the lucide icons used elsewhere in the menu (size-4).
 function XIcon(props: React.SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden {...props}>
@@ -55,7 +55,7 @@ function LinkedInIcon(props: React.SVGProps<SVGSVGElement>) {
 function BlueskyIcon(props: React.SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden {...props}>
-      <path d="M6.5 3.5c2.95 2.2 6.13 6.65 7.3 9.04.43.88.65 1.32.92 1.32s.49-.44.92-1.32c1.17-2.39 4.35-6.84 7.3-9.04 2.13-1.6 5.56-2.83 5.56 1.05 0 .77-.44 6.5-.7 7.43-.9 3.23-4.2 4.05-7.13 3.55 5.13.87 6.43 3.77 3.6 6.66-5.36 5.5-7.7-1.38-8.3-3.14-.1-.32-.16-.47-.16-.34 0-.13-.05.02-.16.34-.6 1.76-2.94 8.64-8.3 3.14-2.83-2.89-1.53-5.78 3.6-6.66-2.93.5-6.23-.32-7.13-3.55C-.5 11.05-1 5.32-1 4.55c0-3.88 3.43-2.65 5.56-1.05Z" transform="translate(0)" />
+      <path d="M6.5 3.5c2.95 2.2 6.13 6.65 7.3 9.04.43.88.65 1.32.92 1.32s.49-.44.92-1.32c1.17-2.39 4.35-6.84 7.3-9.04 2.13-1.6 5.56-2.83 5.56 1.05 0 .77-.44 6.5-.7 7.43-.9 3.23-4.2 4.05-7.13 3.55 5.13.87 6.43 3.77 3.6 6.66-5.36 5.5-7.7-1.38-8.3-3.14-.1-.32-.16-.47-.16-.34 0-.13-.05.02-.16.34-.6 1.76-2.94 8.64-8.3 3.14-2.83-2.89-1.53-5.78 3.6-6.66-2.93.5-6.23-.32-7.13-3.55C-.5 11.05-1 5.32-1 4.55c0-3.88 3.43-2.65 5.56-1.05Z" />
     </svg>
   )
 }
@@ -71,42 +71,42 @@ function ThreadsIcon(props: React.SVGProps<SVGSVGElement>) {
 const PLATFORMS: Array<Platform> = [
   {
     key: "x",
-    label: "Share on X",
+    label: "X",
     intent: (url, title) =>
       `https://twitter.com/intent/tweet?text=${encodeURIComponent(title)}&url=${encodeURIComponent(url)}`,
     Icon: XIcon,
   },
   {
     key: "facebook",
-    label: "Share on Facebook",
+    label: "Facebook",
     intent: (url) =>
       `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(url)}`,
     Icon: FacebookIcon,
   },
   {
     key: "linkedin",
-    label: "Share on LinkedIn",
+    label: "LinkedIn",
     intent: (url) =>
       `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(url)}`,
     Icon: LinkedInIcon,
   },
   {
     key: "bluesky",
-    label: "Share on Bluesky",
+    label: "Bluesky",
     intent: (url, title) =>
       `https://bsky.app/intent/compose?text=${encodeURIComponent(`${title} ${url}`)}`,
     Icon: BlueskyIcon,
   },
   {
     key: "threads",
-    label: "Share on Threads",
+    label: "Threads",
     intent: (url, title) =>
       `https://www.threads.net/intent/post?text=${encodeURIComponent(`${title} ${url}`)}`,
     Icon: ThreadsIcon,
   },
   {
     key: "email",
-    label: "Share via email",
+    label: "Email",
     intent: (url, title) =>
       `mailto:?subject=${encodeURIComponent(title)}&body=${encodeURIComponent(url)}`,
     Icon: Mail,
@@ -114,31 +114,7 @@ const PLATFORMS: Array<Platform> = [
 ]
 
 export function ShareWidget({ title }: { title: string }) {
-  const [open, setOpen] = useState(false)
   const [copied, setCopied] = useState(false)
-  const containerRef = useRef<HTMLDivElement>(null)
-
-  // Close on outside click + Esc — feels like every other expanding control.
-  useEffect(() => {
-    if (!open) return
-    const onClick = (e: MouseEvent) => {
-      if (
-        containerRef.current &&
-        !containerRef.current.contains(e.target as Node)
-      ) {
-        setOpen(false)
-      }
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false)
-    }
-    document.addEventListener("mousedown", onClick)
-    document.addEventListener("keydown", onKey)
-    return () => {
-      document.removeEventListener("mousedown", onClick)
-      document.removeEventListener("keydown", onKey)
-    }
-  }, [open])
 
   const currentUrl = () =>
     typeof window !== "undefined" ? window.location.href : ""
@@ -156,63 +132,42 @@ export function ShareWidget({ title }: { title: string }) {
   }
 
   return (
-    <div
-      ref={containerRef}
-      role="group"
-      aria-label="Share this story"
-      className="my-8 flex items-center gap-2"
-    >
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        aria-controls="share-options"
-        className="gap-2"
-      >
-        {open ? <X className="size-4" /> : <Share2 className="size-4" />}
-        <span>{open ? "Close" : "Share"}</span>
-      </Button>
-
-      <div
-        id="share-options"
-        className={cn(
-          "flex items-center gap-1 overflow-hidden transition-[max-width,opacity] duration-300 ease-out",
-          open ? "max-w-[400px] opacity-100" : "max-w-0 opacity-0",
-        )}
-        aria-hidden={!open}
-      >
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button variant="ghost" size="sm" aria-label="Share">
+            <Share2 className="size-4" />
+            Share
+          </Button>
+        }
+      />
+      <DropdownMenuContent align="start" className="w-48">
         {PLATFORMS.map(({ key, label, intent, Icon }) => (
-          <a
+          <DropdownMenuItem
             key={key}
-            href={open ? intent(currentUrl(), title) : "#"}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label={label}
-            title={label}
-            tabIndex={open ? 0 : -1}
-            onClick={() => setOpen(false)}
-            className="inline-flex size-9 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            className="cursor-pointer"
+            render={
+              <a
+                href={intent(currentUrl(), title)}
+                target="_blank"
+                rel="noopener noreferrer"
+              />
+            }
           >
             <Icon className="size-4" />
-          </a>
+            {label}
+          </DropdownMenuItem>
         ))}
-        <button
-          type="button"
-          aria-label="Copy link"
-          title="Copy link"
-          tabIndex={open ? 0 : -1}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          className="cursor-pointer"
+          closeOnClick={false}
           onClick={() => void onCopy()}
-          className="inline-flex size-9 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
-          {copied ? (
-            <Check className="size-4 text-foreground" />
-          ) : (
-            <LinkIcon className="size-4" />
-          )}
-        </button>
-      </div>
-    </div>
+          {copied ? <Check className="size-4" /> : <LinkIcon className="size-4" />}
+          {copied ? "Copied" : "Copy link"}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }

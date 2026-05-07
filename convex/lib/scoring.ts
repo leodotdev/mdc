@@ -14,13 +14,23 @@ import type { Doc } from "../_generated/dataModel"
 // - WEIGHT_BREADTH × derivedFromItems.length    — cross-coverage signal
 // - WEIGHT_DEPTH   × citations.length           — distinct cited URLs
 // - HALF_LIFE_HOURS controls the recency decay  — older stories fade
+// - FRESHNESS_FLOOR_HOURS: stories younger than this get full credit;
+//   older stories decay as usual. Keeps the lead slot from sticking
+//   to a high-breadth piece for a full day when fresher news lands.
 export const WEIGHT_BREADTH = 1.5
 export const WEIGHT_DEPTH = 1.0
-export const HALF_LIFE_HOURS = 24
+// 6h half-life: a 6h-old story has 50% recency, a 12h-old has 33%,
+// a 20h-old has 23%. Tightened from 24h so a fresh 1-source story
+// can outrank a 20h, 4-source story in the lead slot.
+export const HALF_LIFE_HOURS = 6
+const FRESHNESS_FLOOR_HOURS = 1
 
 export function recencyFactor(ts: number, now: number): number {
   const ageHours = Math.max(0, (now - ts) / 3_600_000)
-  return 1 / (1 + ageHours / HALF_LIFE_HOURS)
+  // Stories within the freshness floor get full credit so a 12-min-
+  // old breaking item doesn't get penalized vs a 60-min-old one.
+  if (ageHours <= FRESHNESS_FLOOR_HOURS) return 1
+  return 1 / (1 + (ageHours - FRESHNESS_FLOOR_HOURS) / HALF_LIFE_HOURS)
 }
 
 // Structural shape importance scoring needs — works for both server-side
@@ -55,4 +65,43 @@ export function compareByImportance(
   const ta = a.publishedAt ?? a.createdAt
   const tb = b.publishedAt ?? b.createdAt
   return tb - ta
+}
+
+// =====================================================================
+// Event importance — different signals than articles. Events are
+// time-based, so the strongest signal is "how soon" (proximity to
+// startsAt), with depth (citations) and visual richness (hero image)
+// as secondary boosts. Used to render the same gauge in admin tables.
+// =====================================================================
+export type ScorableEvent = {
+  startsAt: number
+  citations?: ReadonlyArray<unknown>
+  derivedFromItems?: ReadonlyArray<unknown>
+  heroImage?: string
+  imageUrl?: string
+}
+
+// Time-to-event proximity. Peaks at 1.0 when the event is happening now,
+// decays smoothly out to ~0.05 at 30 days. Past events drop fast.
+function eventProximityFactor(startsAt: number, now: number): number {
+  const deltaHours = (startsAt - now) / 3_600_000
+  if (deltaHours < -24) return 0 // already over
+  if (deltaHours < 0) return 0.6 // happening / just-past — still hot
+  // Half-life of 7 days for upcoming.
+  return 1 / (1 + deltaHours / (24 * 7))
+}
+
+export function eventImportanceScore(
+  event: ScorableEvent,
+  now: number,
+): number {
+  const proximity = eventProximityFactor(event.startsAt, now)
+  const depth = (event.citations?.length ?? 0) * WEIGHT_DEPTH
+  const breadth = (event.derivedFromItems?.length ?? 0) * WEIGHT_BREADTH
+  const visual = event.heroImage || event.imageUrl ? 1 : 0
+  // Same baseline shape as articles so the gauge readings feel comparable.
+  const base = breadth + depth + visual
+  // Bias toward proximity — a same-day event with one citation should
+  // outrank a month-out event with five.
+  return base * proximity + proximity * 2
 }

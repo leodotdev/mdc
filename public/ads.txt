@@ -1,0 +1,9 @@
+# ads.txt — authorized digital sellers for miami.community.
+# Replace the placeholder below with your AdSense publisher ID
+# (`ca-pub-XXXXXXXXXXXXXXXX`) once approved. Until then this file
+# exists so AdSense + crawlers find a syntactically-valid response
+# rather than a 404.
+#
+# Format: <domain>, <publisher-id>, <relationship>, <certification-id>
+# AdSense's certification-id is the constant f08c47fec0942fa0.
+google.com, pub-PLACEHOLDER, DIRECT, f08c47fec0942fa0

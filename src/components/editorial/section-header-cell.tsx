@@ -5,9 +5,9 @@ import { cn } from "@/lib/utils"
 // THE section header. Used everywhere a block on the page needs a label
 // — homepage section blocks (News, Business, Arts & Culture), Most Read,
 // More Top Stories, the events page, the right-rail subsections, the
-// dashboard activity blocks. Always: 3px accent rule on top, uppercase
-// tracked kicker below, optional right-side affordance (a `More →` link
-// to a section, or any custom node).
+// dashboard activity blocks. Always: 3px accent rule on top, plain-case
+// kicker below, optional right-side affordance (a `More →` link to a
+// section, or any custom node).
 //
 // One pattern, used everywhere — so the page reads as a single paper.
 // The `accent` prop tints both the rule and the kicker; pass the
@@ -21,7 +21,7 @@ export function SectionHeaderCell({
   right,
   className,
 }: {
-  title: string
+  title: React.ReactNode
   subtitle?: string
   accent?: string
   moreHref?: "/section/$slug"
@@ -37,12 +37,12 @@ export function SectionHeaderCell({
     <Link
       to={moreHref}
       params={moreParams}
-      className="meta tracking-wider uppercase hover:underline"
+      className="meta hover:underline"
     >
       More →
     </Link>
   ) : subtitle ? (
-    <span className="meta tracking-wider uppercase">{subtitle}</span>
+    <span className="meta">{subtitle}</span>
   ) : null
   return (
     <div className={cn("flex flex-col", className)}>
@@ -53,7 +53,7 @@ export function SectionHeaderCell({
       />
       <div className="flex items-baseline justify-between py-2.5">
         <h2
-          className="font-sans text-sm font-bold tracking-[0.18em] uppercase"
+          className="font-sans text-base font-semibold"
           style={{ color: accentColor }}
         >
           {title}

@@ -1,8 +1,10 @@
 import { Link } from "@tanstack/react-router"
 
+import { HeroCaption } from "./hero-caption"
 import { StoryItem } from "./story-item"
 import type { ArticleWithRelations } from "@/lib/article-types"
-import { proxiedImageUrl } from "@/lib/image-proxy"
+import { HeroImg } from "@/components/site/hero-img"
+import { useOpenArticleDrawer } from "@/lib/use-open-article-drawer"
 
 // Stacked "table" rows from the homepage's main column extracted as a
 // reusable block. Each row is text 5 cols (left) + image 7 cols (right);
@@ -18,6 +20,7 @@ export function XlRowList({
   articles: Array<ArticleWithRelations>
   showDek?: boolean
 }) {
+  const openInDrawer = useOpenArticleDrawer()
   return (
     <div className="flex flex-col">
       {articles.map((a, i) => (
@@ -33,16 +36,21 @@ export function XlRowList({
               <Link
                 to="/article/$slug"
                 params={{ slug: a.slug }}
-                className="group/xl block self-start overflow-hidden rounded-[4px] md:col-span-7 md:col-start-6"
+                onClick={(e) => openInDrawer(a.slug, e)}
+                className="group/xl block self-start [contain:paint] md:col-span-7 md:col-start-6"
               >
-                <img
-                  src={proxiedImageUrl(a.heroImage, { width: 1000 })}
-                  alt=""
-                  loading="lazy"
-                  className="aspect-[3/2] w-full object-cover transition-transform duration-200 ease-out group-hover/xl:scale-[1.01]"
+                <HeroImg
+                  url={a.heroImage}
+                  width={1000}
+                  className="aspect-[3/2] w-full object-cover transition-transform duration-200 ease-out group-hover/xl:scale-[1.015]"
                 />
                 {a.heroCaption ? (
-                  <figcaption className="meta mt-2">{a.heroCaption}</figcaption>
+                  <figcaption className="mt-2">
+                    <HeroCaption
+                      caption={a.heroCaption}
+                      citations={a.citations}
+                    />
+                  </figcaption>
                 ) : null}
               </Link>
               <div className="flex flex-col md:col-span-5 md:col-start-1 md:row-start-1">

@@ -2,16 +2,24 @@ import { Link } from "@tanstack/react-router"
 import { ExternalLink, MapPin } from "lucide-react"
 
 import type { EventWithSection } from "@/lib/event-helpers"
+import { useTranslation } from "@/lib/i18n/context"
 import { formatEventTime } from "@/lib/event-helpers"
-import { proxiedImageUrl } from "@/lib/image-proxy"
+import { localizedEvent } from "@/lib/localized-event"
+import { HeroImg } from "@/components/site/hero-img"
+import { useOpenArticleDrawer } from "@/lib/use-open-article-drawer"
 
 // Compact event row used in list views (homepage right column, /events list,
-// admin queue rendering). Section-tinted kicker, time + location meta line,
+// neighborhood + section page rails). Section-tinted kicker, time + location meta line,
 // optional external link if the event has a canonical URL.
-export function EventListItem({ event }: { event: EventWithSection }) {
-  const location = [event.locationName, event.neighborhood]
+export function EventListItem({ event: rawEvent }: { event: EventWithSection }) {
+  const { lang } = useTranslation()
+  const event = localizedEvent(rawEvent, lang)
+  const openInDrawer = useOpenArticleDrawer()
+  const heroImage = event.heroImage
+  const neighborhoodLabel = event.neighborhoods?.[0]
+  const location = [event.locationName, neighborhoodLabel]
     .filter(Boolean)
-    .join(" · ")
+    .join(", ")
   const Body = (
     <div className="flex min-w-0 flex-1 flex-col gap-1.5">
       {event.section ? (
@@ -23,7 +31,20 @@ export function EventListItem({ event }: { event: EventWithSection }) {
         </span>
       ) : null}
       <h3 className="font-heading text-base font-semibold leading-snug tracking-[-0.01em] text-balance md:text-lg">
-        {event.url ? (
+        {event.slug ? (
+          <Link
+            to="."
+            search={
+              ((prev: Record<string, unknown>) => ({
+                ...prev,
+                event: event.slug,
+              })) as never
+            }
+            className="hover:text-primary"
+          >
+            {event.title}
+          </Link>
+        ) : event.url ? (
           <a
             href={event.url}
             target="_blank"
@@ -58,7 +79,8 @@ export function EventListItem({ event }: { event: EventWithSection }) {
         <Link
           to="/article/$slug"
           params={{ slug: event.article.slug }}
-          className="meta inline-flex items-center gap-1 text-xs uppercase tracking-wider text-foreground transition-colors hover:text-primary hover:underline"
+          onClick={(e) => openInDrawer(event.article!.slug, e)}
+          className="meta inline-flex items-center gap-1 text-xs text-foreground transition-colors hover:text-primary hover:underline"
         >
           Read the story →
         </Link>
@@ -68,23 +90,38 @@ export function EventListItem({ event }: { event: EventWithSection }) {
   return (
     <article id={`event-${event._id}`} className="group/event flex gap-3">
       {Body}
-      {event.imageUrl ? (
-        <div className="w-20 shrink-0 overflow-hidden rounded-[4px] md:w-24">
-          {event.url ? (
+      {heroImage ? (
+        <div className="w-14 shrink-0 [contain:paint] md:w-16">
+          {event.slug ? (
+            <Link
+              to="."
+              search={
+                ((prev: Record<string, unknown>) => ({
+                  ...prev,
+                  event: event.slug,
+                })) as never
+              }
+              tabIndex={-1}
+            >
+              <HeroImg
+                url={heroImage}
+                width={240}
+                className="aspect-[9/16] w-full object-cover transition-transform duration-200 ease-out group-hover/event:scale-[1.015]"
+              />
+            </Link>
+          ) : event.url ? (
             <a href={event.url} target="_blank" rel="noreferrer" tabIndex={-1}>
-              <img
-                src={event.imageUrl}
-                alt=""
-                loading="lazy"
-                className="aspect-square w-full object-cover transition-transform duration-200 ease-out group-hover/event:scale-[1.01]"
+              <HeroImg
+                url={heroImage}
+                width={240}
+                className="aspect-[9/16] w-full object-cover"
               />
             </a>
           ) : (
-            <img
-              src={proxiedImageUrl(event.imageUrl, { width: 240 })}
-              alt=""
-              loading="lazy"
-              className="aspect-square w-full object-cover"
+            <HeroImg
+              url={heroImage}
+              width={240}
+              className="aspect-[9/16] w-full object-cover"
             />
           )}
         </div>

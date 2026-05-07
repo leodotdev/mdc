@@ -1,8 +1,13 @@
 import { Link } from "@tanstack/react-router"
 import type { Section } from "@/lib/article-types"
 
-// Section kicker: name in uppercase tracked-out type, tinted with the
-// section's accent color. Plain — no leading dot.
+// Section kicker: name in the parent (trunk) section's accent color.
+// Sub-sections take the parent's color so a row reads as belonging to
+// a single beat (Marlins/Heat/Dolphins → Sports red, Politics/Business
+// → News blue) instead of fragmenting visually into team palettes.
+// Top-level sections fall back to their own color via `parentAccentColor`,
+// which `hydrate()` populates with the parent's color or the leaf's
+// own color when there's no parent.
 export function SectionBadge({
   section,
   asLink = true,
@@ -15,12 +20,15 @@ export function SectionBadge({
   if (!section) return null
   const sizeCls =
     size === "xs"
-      ? "text-[0.65rem] tracking-[0.14em]"
+      ? "text-[0.7rem]"
       : size === "md"
-        ? "text-xs tracking-[0.14em]"
-        : "text-[0.7rem] tracking-[0.12em]"
+        ? "text-sm"
+        : "text-xs"
   const className = `kicker ${sizeCls}`
-  const style = { color: section.accentColor }
+  const sectionWithParent = section
+  const color =
+    sectionWithParent.parentAccentColor ?? section.accentColor
+  const style = { color }
 
   if (!asLink) {
     return (

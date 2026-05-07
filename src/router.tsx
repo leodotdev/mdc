@@ -30,7 +30,6 @@ export function getRouter() {
     defaultPreload: "intent",
     defaultPreloadStaleTime: 0,
     scrollRestoration: true,
-    defaultViewTransition: true,
     Wrap: ({ children }) => (
       <ConvexAuthProvider client={convexQueryClient.convexClient}>
         {children}

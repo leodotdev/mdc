@@ -118,6 +118,115 @@ export function todayKey(): string {
 }
 
 // =====================================================================
+// Time-range presets — power the /events subnav. Each range collapses
+// into a single { startMs, endMs } window in UTC. Saturday/Sunday land
+// fixed regardless of the user's local timezone (precision is days, not
+// minutes; close enough for a calendar feed).
+// =====================================================================
+
+export type EventRange = "today" | "weekend" | "nextWeekend"
+
+const ONE_DAY_MS = 24 * 3_600_000
+
+function startOfTodayUTC(): number {
+  const now = new Date()
+  return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+}
+
+// Days until the next Saturday (0 if today IS Saturday).
+function daysToSaturday(fromUtcMs: number): number {
+  const dow = new Date(fromUtcMs).getUTCDay() // 0=Sun…6=Sat
+  return (6 - dow + 7) % 7
+}
+
+export function rangeWindow(range: EventRange): {
+  startMs: number
+  endMs: number
+} {
+  const today = startOfTodayUTC()
+  if (range === "today") {
+    return { startMs: today, endMs: today + ONE_DAY_MS }
+  }
+  if (range === "weekend") {
+    // Closest upcoming Sat 00:00 → Sun 23:59. If today is Sat or Sun,
+    // anchor on the current Saturday.
+    const dow = new Date(today).getUTCDay()
+    const offset = dow === 0 ? -1 : dow === 6 ? 0 : daysToSaturday(today)
+    const sat = today + offset * ONE_DAY_MS
+    return { startMs: sat, endMs: sat + 2 * ONE_DAY_MS }
+  }
+  // nextWeekend — Saturday after the upcoming "this weekend".
+  const dow = new Date(today).getUTCDay()
+  const thisSatOffset = dow === 0 ? -1 : dow === 6 ? 0 : daysToSaturday(today)
+  const nextSat = today + (thisSatOffset + 7) * ONE_DAY_MS
+  return { startMs: nextSat, endMs: nextSat + 2 * ONE_DAY_MS }
+}
+
+// Map a YYYY-MM-DD `day` back to whichever range chip contains it (or
+// null when the chevron-stepped day falls outside every preset window).
+export function rangeForDay(day: string | undefined): EventRange | null {
+  if (!day) return null
+  const ts = new Date(`${day}T00:00:00Z`).getTime()
+  const ranges: Array<EventRange> = ["today", "weekend", "nextWeekend"]
+  for (const r of ranges) {
+    const { startMs, endMs } = rangeWindow(r)
+    if (ts >= startMs && ts < endMs) return r
+  }
+  return null
+}
+
+// "Today" or "Sat May 9 – Sun May 10".
+export function formatRangeLabel(range: EventRange): string {
+  const { startMs, endMs } = rangeWindow(range)
+  if (range === "today") return "Today"
+  const start = new Date(startMs)
+  const end = new Date(endMs - ONE_DAY_MS)
+  const fmt = (d: Date) =>
+    new Intl.DateTimeFormat("en-US", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      timeZone: "UTC",
+    }).format(d)
+  return `${fmt(start)} – ${fmt(end)}`
+}
+
+/**
+ * Bucket events by Miami day, expanding multi-day events so they appear
+ * on every day they touch. A festival from Mar 8–10 shows in Mar 8, Mar
+ * 9, AND Mar 10's bucket, sorted within each by start time. Events
+ * without an `endsAt` (or with end ≤ start) bucket only into start day.
+ *
+ * Cap the per-event walk at 7 days so a corrupted multi-week range
+ * can't blow up the bucket map.
+ */
+export function bucketEventsByDay<T extends { startsAt: number; endsAt?: number }>(
+  events: ReadonlyArray<T>,
+): Map<string, Array<T>> {
+  const map = new Map<string, Array<T>>()
+  const ONE_DAY = 24 * 3_600_000
+  for (const e of events) {
+    const start = e.startsAt
+    const end = e.endsAt && e.endsAt > e.startsAt ? e.endsAt : e.startsAt
+    const lastDay = Math.min(end, start + 6 * ONE_DAY)
+    let cursor = start
+    const seen = new Set<string>()
+    while (cursor <= lastDay) {
+      const k = dayKey(cursor)
+      if (!seen.has(k)) {
+        const list = map.get(k) ?? []
+        list.push(e)
+        map.set(k, list)
+        seen.add(k)
+      }
+      cursor += ONE_DAY
+    }
+  }
+  for (const list of map.values()) list.sort((a, b) => a.startsAt - b.startsAt)
+  return map
+}
+
+// =====================================================================
 // Week-view helpers — used by the horizontal-scrolling calendar to
 // align days into Sunday→Saturday columns and to label each week.
 // All boundaries are computed in UTC for stable SSR + a quick client

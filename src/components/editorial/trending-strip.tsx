@@ -4,19 +4,22 @@ import { SectionHeaderCell } from "./section-header-cell"
 import type { ArticleWithRelations } from "@/lib/article-types"
 import { useTranslation } from "@/lib/i18n/context"
 import { localizedArticle } from "@/lib/localized-article"
+import { useOpenArticleDrawer } from "@/lib/use-open-article-drawer"
 
-// Most Read strip — generalized from the homepage so section / tag /
-// author pages can drop their own scoped "most read" block. Renders a
-// label on its own row and 4 tiles below with serif numerals + sans
-// headlines, separated by light vertical hairlines on desktop.
-export function MostReadStrip({
-  label = "Most Read",
+// Trending strip — generalized from the homepage so section / tag /
+// author pages can drop their own scoped block. Renders a label on its
+// own row and 4 tiles below with serif numerals + sans headlines,
+// separated by light vertical hairlines on desktop. Ranking is based on
+// our internal importance score, not view counts (we don't track those).
+export function TrendingStrip({
+  label = "Trending",
   articles,
 }: {
   label?: string
   articles: Array<ArticleWithRelations>
 }) {
   const { lang } = useTranslation()
+  const openInDrawer = useOpenArticleDrawer()
   if (articles.length === 0) return null
   const items = articles.slice(0, 4).map((a) => localizedArticle(a, lang))
   return (
@@ -37,6 +40,7 @@ export function MostReadStrip({
             <Link
               to="/article/$slug"
               params={{ slug: a.slug }}
+              onClick={(e) => openInDrawer(a.slug, e)}
               className="font-sans text-sm leading-snug text-foreground transition-colors hover:text-primary md:text-base"
             >
               {a.title}

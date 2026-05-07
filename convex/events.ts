@@ -1,48 +1,137 @@
 import { v } from "convex/values"
 
+import { api, internal } from "./_generated/api"
 import {
+  action,
+  internalAction,
   internalMutation,
   mutation,
   query,
 } from "./_generated/server"
+import { cleanTags } from "./agents"
+import { attachParentAccent } from "./articles"
 import { requireEditor } from "./lib/guard"
-import type { Doc } from "./_generated/dataModel"
-import type { QueryCtx } from "./_generated/server"
+import { estimatedCallCents } from "./lib/budget"
+import { generateEventTranslation } from "./lib/llm"
+import { findHeroCandidates } from "./lib/media"
+import { filterNeighborhoodSlugs } from "./lib/neighborhoods"
+import type { HeroCandidate, HeroFinderDiagnostics } from "./lib/media"
+import type { Doc, Id } from "./_generated/dataModel"
+import type { MutationCtx, QueryCtx } from "./_generated/server"
 
-const kindValidator = v.union(
-  v.literal("general"),
-  v.literal("meeting"),
-  v.literal("notice"),
-  v.literal("holiday"),
-  v.literal("deal"),
+const heroSourceValidator = v.union(
+  v.literal("source"),
+  v.literal("unsplash"),
+  v.literal("wikimedia"),
+  v.literal("none"),
 )
+
+const citationValidator = v.object({
+  url: v.string(),
+  title: v.string(),
+  publisher: v.optional(v.string()),
+  fetchedAt: v.number(),
+  snippet: v.optional(v.string()),
+})
 
 // Hard ceiling on candidate scans for time-windowed queries — bounds query
 // work even if the volume balloons.
 const SCAN_CAP = 500
 
+// Maximal write shape from `insertExtracted`. Mirrors articles in the
+// fields it accepts (slug, sectionId, tags, hero triplet, citations,
+// related links). All fields except title/description/startsAt/allDay
+// are optional so the LLM can omit pieces it didn't extract.
 const eventInputValidator = v.object({
+  slug: v.optional(v.string()),
   title: v.string(),
   description: v.string(),
   startsAt: v.number(),
   endsAt: v.optional(v.number()),
   allDay: v.boolean(),
-  kind: v.optional(kindValidator),
   locationName: v.optional(v.string()),
   locationAddress: v.optional(v.string()),
-  neighborhood: v.optional(v.string()),
+  neighborhoods: v.optional(v.array(v.string())),
   url: v.optional(v.string()),
-  imageUrl: v.optional(v.string()),
+  heroImage: v.optional(v.string()),
+  heroCaption: v.optional(v.string()),
+  heroSource: v.optional(heroSourceValidator),
   price: v.optional(v.string()),
   sectionId: v.optional(v.id("sections")),
-  articleId: v.optional(v.id("articles")),
+  tags: v.optional(v.array(v.string())),
+  relatedArticleIds: v.optional(v.array(v.id("articles"))),
+  relatedEventIds: v.optional(v.array(v.id("events"))),
+  citations: v.optional(v.array(citationValidator)),
 })
 
+// ───────── Helpers ─────────
+
+function slugify(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80)
+}
+
+// Day-stamped tail prevents same-titled events from colliding (e.g. weekly
+// markets). Only added when needed — base slug wins when free.
+async function uniqueSlug(
+  ctx: { db: MutationCtx["db"] },
+  base: string,
+  startsAt: number,
+  excludeId?: Id<"events">,
+): Promise<string> {
+  const root = slugify(base) || "event"
+  const existing = await ctx.db
+    .query("events")
+    .withIndex("by_slug", (q) => q.eq("slug", root))
+    .first()
+  if (!existing || existing._id === excludeId) return root
+  const day = new Date(startsAt).toISOString().slice(0, 10)
+  const dated = `${root}-${day}`.slice(0, 80)
+  const datedHit = await ctx.db
+    .query("events")
+    .withIndex("by_slug", (q) => q.eq("slug", dated))
+    .first()
+  if (!datedHit || datedHit._id === excludeId) return dated
+  // Final tiebreaker: append a short random suffix.
+  const suffix = Math.random().toString(36).slice(2, 6)
+  return `${root}-${suffix}`.slice(0, 80)
+}
+
+function buildSearchableText(
+  title: string,
+  description: string,
+  tags: ReadonlyArray<string> = [],
+): string {
+  return [title, description, tags.join(" ")].filter(Boolean).join(" ")
+}
+
+// Cheap djb2 hash of an event's EN copy. Stored as
+// `translations.es.sourceHash` so we can detect EN drift and flag the
+// row for re-translation. Mirrors articles.articleSourceHash.
+function eventSourceHash(event: {
+  title: string
+  description: string
+}): string {
+  const s = `${event.title}|${event.description}`
+  let h = 5381
+  for (let i = 0; i < s.length; i += 1) h = ((h << 5) + h + s.charCodeAt(i)) | 0
+  return (h >>> 0).toString(16)
+}
+
 async function hydrate(ctx: QueryCtx, event: Doc<"events">) {
-  const section = event.sectionId ? await ctx.db.get(event.sectionId) : null
-  const article = event.articleId ? await ctx.db.get(event.articleId) : null
-  // Only surface published linked articles publicly so unpublished drafts
-  // can't leak through the events feed.
+  const rawSection = event.sectionId
+    ? await ctx.db.get(event.sectionId)
+    : null
+  const section = await attachParentAccent(ctx, rawSection)
+  // Surface the first related article publicly when it's published — events
+  // can link to multiple stories via relatedArticleIds[], but the public
+  // shape exposes one (the canonical "related story") for convenience.
+  // Older code using `event.article` keeps working.
+  const firstRelatedId = event.relatedArticleIds?.[0]
+  const article = firstRelatedId ? await ctx.db.get(firstRelatedId) : null
   const publishedArticle =
     article && article.status === "published"
       ? { _id: article._id, slug: article.slug, title: article.title }
@@ -54,15 +143,52 @@ async function hydrate(ctx: QueryCtx, event: Doc<"events">) {
 
 /**
  * Approved events between [startsAt, endsAt). Used by the public /events page
- * for month-grid + list views. Optional `kind` filter narrows to one type.
+ * for week / list / month views. Optional `sectionSlug` narrows to one
+ * section — the same axis section pages use.
  */
+/**
+ * Full-text search across approved events. Uses the `by_searchable`
+ * index on `searchableText` (title + description + tags). Caller can
+ * narrow to a single section via `sectionSlug`. Returns up to `limit`
+ * hydrated events ordered by relevance.
+ */
+export const search = query({
+  args: {
+    query: v.string(),
+    sectionSlug: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, { query: q, sectionSlug, limit }) => {
+    const trimmed = q.trim()
+    if (trimmed.length < 2) return []
+    const cap = Math.min(Math.max(limit ?? 20, 1), 60)
+    let sectionId: Id<"sections"> | null = null
+    if (sectionSlug) {
+      const section = await ctx.db
+        .query("sections")
+        .withIndex("by_slug", (qx) => qx.eq("slug", sectionSlug))
+        .first()
+      if (!section) return []
+      sectionId = section._id
+    }
+    const events = await ctx.db
+      .query("events")
+      .withSearchIndex("by_searchable", (qx) => {
+        const base = qx.search("searchableText", trimmed).eq("status", "approved")
+        return sectionId ? base.eq("sectionId", sectionId) : base
+      })
+      .take(cap)
+    return await Promise.all(events.map((e) => hydrate(ctx, e)))
+  },
+})
+
 export const inRange = query({
   args: {
     rangeStart: v.number(),
     rangeEnd: v.number(),
-    kind: v.optional(kindValidator),
+    sectionSlug: v.optional(v.string()),
   },
-  handler: async (ctx, { rangeStart, rangeEnd, kind }) => {
+  handler: async (ctx, { rangeStart, rangeEnd, sectionSlug }) => {
     const events = await ctx.db
       .query("events")
       .withIndex("by_status_starts", (q) =>
@@ -73,9 +199,15 @@ export const inRange = query({
       )
       .order("asc")
       .take(SCAN_CAP)
-    const filtered = kind
-      ? events.filter((e) => (e.kind ?? "general") === kind)
-      : events
+    let filtered = events
+    if (sectionSlug) {
+      const section = await ctx.db
+        .query("sections")
+        .withIndex("by_slug", (q) => q.eq("slug", sectionSlug))
+        .first()
+      if (!section) return []
+      filtered = filtered.filter((e) => e.sectionId === section._id)
+    }
     return await Promise.all(filtered.map((e) => hydrate(ctx, e)))
   },
 })
@@ -84,6 +216,32 @@ export const inRange = query({
  * Approved upcoming events. Used by the homepage right column + event
  * widget previews. Default lookahead 14 days, cap 10 results.
  */
+// Approved upcoming events tagged with a given neighborhood slug. Used
+// by the per-neighborhood landing page's right rail. Same scan-then-
+// filter as articles.listByNeighborhood since events.neighborhoods is an
+// array (Convex doesn't index array fields).
+export const byNeighborhood = query({
+  args: { slug: v.string(), limit: v.number() },
+  handler: async (ctx, { slug, limit }) => {
+    const now = Date.now()
+    const horizon = now + 60 * 24 * 3_600_000
+    const upcoming = await ctx.db
+      .query("events")
+      .withIndex("by_status_starts", (q) =>
+        q
+          .eq("status", "approved")
+          .gte("startsAt", now)
+          .lt("startsAt", horizon),
+      )
+      .order("asc")
+      .take(200)
+    const matches = upcoming.filter((e) =>
+      (e.neighborhoods ?? []).includes(slug),
+    )
+    return await Promise.all(matches.slice(0, limit).map((e) => hydrate(ctx, e)))
+  },
+})
+
 export const upcoming = query({
   args: {
     limit: v.optional(v.number()),
@@ -103,6 +261,80 @@ export const upcoming = query({
   },
 })
 
+/**
+ * "More events from this section" — used by the public event detail page.
+ * Returns upcoming approved events in the same section, excluding the
+ * current event. Mirrors articles.moreFromSection but for events.
+ */
+export const moreInSection = query({
+  args: {
+    sectionSlug: v.string(),
+    excludeId: v.id("events"),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, { sectionSlug, excludeId, limit }) => {
+    const section = await ctx.db
+      .query("sections")
+      .withIndex("by_slug", (q) => q.eq("slug", sectionSlug))
+      .first()
+    if (!section) return { section: null, events: [] }
+    const now = Date.now()
+    const horizon = now + 60 * 24 * 3_600_000 // 60-day window
+    const events = await ctx.db
+      .query("events")
+      .withIndex("by_section_starts", (q) =>
+        q
+          .eq("sectionId", section._id)
+          .eq("status", "approved")
+          .gte("startsAt", now)
+          .lt("startsAt", horizon),
+      )
+      .order("asc")
+      .take((limit ?? 5) + 1)
+    const filtered = events
+      .filter((e) => e._id !== excludeId)
+      .slice(0, limit ?? 5)
+    return {
+      section: await attachParentAccent(ctx, section),
+      events: await Promise.all(filtered.map((e) => hydrate(ctx, e))),
+    }
+  },
+})
+
+/**
+ * Approved upcoming events filed under a section (resolved by slug). Used
+ * by `section/$slug` to render an events strip alongside that section's
+ * articles. `food` shows food events; `business` shows business events; etc.
+ */
+export const upcomingBySectionSlug = query({
+  args: {
+    sectionSlug: v.string(),
+    limit: v.optional(v.number()),
+    days: v.optional(v.number()),
+  },
+  handler: async (ctx, { sectionSlug, limit, days }) => {
+    const section = await ctx.db
+      .query("sections")
+      .withIndex("by_slug", (q) => q.eq("slug", sectionSlug))
+      .first()
+    if (!section) return []
+    const now = Date.now()
+    const horizon = now + (days ?? 30) * 24 * 3_600_000
+    const events = await ctx.db
+      .query("events")
+      .withIndex("by_section_starts", (q) =>
+        q
+          .eq("sectionId", section._id)
+          .eq("status", "approved")
+          .gte("startsAt", now)
+          .lt("startsAt", horizon),
+      )
+      .order("asc")
+      .take(limit ?? 8)
+    return await Promise.all(events.map((e) => hydrate(ctx, e)))
+  },
+})
+
 export const get = query({
   args: { id: v.id("events") },
   handler: async (ctx, { id }) => {
@@ -112,18 +344,347 @@ export const get = query({
   },
 })
 
-// ───────── Editorial / admin ─────────
-
-export const reviewQueue = query({
+// Hourly creation volume for the last 24 hours — same shape as
+// articles.publishedSparkline24h. Used by the dashboard's Output card.
+// Buckets by `createdAt` (when the agent inserted the event) so the
+// sparkline reads as "system throughput" rather than "event calendar".
+//
+// Events don't have a status+createdAt composite index (only
+// status+startsAt), so we sort by Convex's automatic `_creationTime`
+// (which equals `createdAt` for these rows) and filter status
+// in-memory. The 200-row scan window is fine — the buckets only need
+// the last 24h.
+export const createdSparkline24h = query({
   args: {},
   handler: async (ctx) => {
-    await requireEditor(ctx)
-    const events = await ctx.db
+    const now = Date.now()
+    const since = now - 24 * 3_600_000
+    const events = await ctx.db.query("events").order("desc").take(200)
+    const buckets = new Array<number>(24).fill(0)
+    let total = 0
+    for (const e of events) {
+      if (e.status !== "approved") continue
+      const ts = e.createdAt
+      if (ts < since) continue
+      const hoursAgo = Math.floor((now - ts) / 3_600_000)
+      if (hoursAgo < 0 || hoursAgo > 23) continue
+      buckets[23 - hoursAgo] += 1
+      total += 1
+    }
+    return { buckets, total }
+  },
+})
+
+/**
+ * Public lookup by slug — counterpart to articles.getBySlug. Powers the
+ * `/event/$slug` detail page. Returns null for non-approved or missing.
+ */
+export const getBySlug = query({
+  args: { slug: v.string() },
+  handler: async (ctx, { slug }) => {
+    const event = await ctx.db
       .query("events")
-      .withIndex("by_status_starts", (q) => q.eq("status", "pending_review"))
-      .order("asc")
-      .collect()
-    return await Promise.all(events.map((e) => hydrate(ctx, e)))
+      .withIndex("by_slug", (q) => q.eq("slug", slug))
+      .first()
+    if (!event || event.status !== "approved") return null
+    return await hydrate(ctx, event)
+  },
+})
+
+// ───────── Translations (ES) ─────────
+
+/**
+ * Approved events whose ES translation is missing OR whose sourceHash no
+ * longer matches the current EN copy. Used by the dashboard "Translate
+ * events" button to drain stale rows. Mirrors articles.needingTranslation.
+ */
+export const needingTranslation = query({
+  args: { limit: v.optional(v.number()), scan: v.optional(v.number()) },
+  handler: async (ctx, { limit, scan }) => {
+    const cap = limit ?? 10
+    const scanCap = scan ?? 200
+    const all = await ctx.db
+      .query("events")
+      .withIndex("by_status_starts", (q) => q.eq("status", "approved"))
+      .order("desc")
+      .take(scanCap)
+    const stale: Array<{ _id: Id<"events">; title: string }> = []
+    for (const e of all) {
+      const hash = eventSourceHash({
+        title: e.title,
+        description: e.description,
+      })
+      const tr = e.translations?.es
+      if (!tr || tr.sourceHash !== hash) {
+        stale.push({ _id: e._id, title: e.title })
+      }
+      if (stale.length >= cap) break
+    }
+    return stale
+  },
+})
+
+/**
+ * Persist a translation. Internal — only translateEventAction calls this.
+ * Stamps `translatedAt` + `sourceHash` so future reads can tell whether
+ * the ES copy is still current.
+ */
+export const setTranslation = internalMutation({
+  args: {
+    eventId: v.id("events"),
+    lang: v.literal("es"),
+    translation: v.object({
+      title: v.string(),
+      description: v.string(),
+      heroCaption: v.optional(v.string()),
+    }),
+    sourceHash: v.string(),
+  },
+  handler: async (ctx, { eventId, lang, translation, sourceHash }) => {
+    const event = await ctx.db.get(eventId)
+    if (!event) return
+    const next = {
+      ...translation,
+      translatedAt: Date.now(),
+      sourceHash,
+    }
+    const translations = { ...(event.translations ?? {}), [lang]: next }
+    await ctx.db.patch(eventId, { translations })
+  },
+})
+
+/**
+ * Run the LLM, write the result. Internal action — invoked by setStatus
+ * via the scheduler when an event is approved, by translateEventNow for
+ * one-off backfills, and by bulkTranslateEvents to drain the backlog.
+ * Idempotent: short-circuits when the EN sourceHash already matches the
+ * stored ES translation.
+ */
+export const translateEventAction = internalAction({
+  args: { eventId: v.id("events"), lang: v.literal("es") },
+  handler: async (ctx, { eventId, lang }) => {
+    const event = await ctx.runQuery(api.events.getByIdAdmin, { id: eventId })
+    if (!event) return { translated: false }
+    if (event.status === "rejected" || event.status === "archived") {
+      return { translated: false }
+    }
+    const sourceHash = eventSourceHash({
+      title: event.title,
+      description: event.description,
+    })
+    if (event.translations?.es?.sourceHash === sourceHash) {
+      return { translated: false }
+    }
+    const reservation = await ctx.runMutation(internal.budget.reserve, {
+      estimatedCents: estimatedCallCents("claude-sonnet-4-6"),
+      label: "translateEvent",
+    })
+    if (!reservation.allowed) return { translated: false }
+    const result = await generateEventTranslation({
+      model: "claude-sonnet-4-6",
+      event: {
+        title: event.title,
+        description: event.description,
+        heroCaption: event.heroCaption,
+        sectionSlug: event.section?.slug,
+        tags: event.tags ?? [],
+        locationName: event.locationName,
+      },
+    })
+    if (!result) return { translated: false }
+    await ctx.runMutation(internal.events.setTranslation, {
+      eventId,
+      lang,
+      translation: {
+        title: result.title,
+        description: result.description,
+        heroCaption: result.heroCaption,
+      },
+      sourceHash,
+    })
+    return { translated: true }
+  },
+})
+
+/**
+ * Cron-fired backlog drain for events. Same purpose as the article
+ * counterpart: catches rows that slipped past the on-approve scheduler.
+ * No editor UI — translation must always be automatic.
+ */
+export const bulkTranslateEventsInternal = internalAction({
+  args: { maxEvents: v.optional(v.number()) },
+  handler: async (
+    ctx,
+    { maxEvents },
+  ): Promise<{
+    processed: number
+    translated: number
+    errors: number
+  }> => {
+    const cap = maxEvents ?? 10
+    const stale = await ctx.runQuery(api.events.needingTranslation, {
+      limit: cap,
+    })
+    let processed = 0
+    let translated = 0
+    let errors = 0
+    for (const s of stale) {
+      processed += 1
+      try {
+        const r = await ctx.runAction(
+          internal.events.translateEventAction,
+          { eventId: s._id, lang: "es" },
+        )
+        if (r.translated) translated += 1
+      } catch {
+        errors += 1
+      }
+    }
+    return { processed, translated, errors }
+  },
+})
+
+// Approved events in the last 24h that look weak. Same shape as the
+// article anomaly query — surfaces "look at this, it auto-published but
+// might be off" rows for the editor.
+export const recentAnomalies = query({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, { limit }) => {
+    const cap = limit ?? 12
+    const since = Date.now() - 24 * 3_600_000
+    const recent = await ctx.db
+      .query("events")
+      .withIndex("by_status_starts", (q) => q.eq("status", "approved"))
+      .order("desc")
+      .take(60)
+    const flagged: Array<{
+      _id: Doc<"events">["_id"]
+      slug?: string
+      title: string
+      sectionAccent?: string
+      sectionName?: string
+      heroImage?: string
+      reasons: Array<string>
+    }> = []
+    for (const e of recent) {
+      if (!e.publishedAt || e.publishedAt < since) continue
+      const reasons: Array<string> = []
+      if (e.title.length > 60) reasons.push(`title ${e.title.length} chars`)
+      if (e.description.length > 300) {
+        reasons.push(`description ${e.description.length} chars`)
+      }
+      if (!e.heroImage || e.heroSource === "none") reasons.push("no hero")
+      if ((e.citations ?? []).length < 1) reasons.push("uncited")
+      if (!e.locationName && !e.url) reasons.push("no venue or URL")
+      if (!e.sectionId) reasons.push("no section")
+      if (reasons.length === 0) continue
+      const section = e.sectionId ? await ctx.db.get(e.sectionId) : null
+      flagged.push({
+        _id: e._id,
+        slug: e.slug,
+        title: e.title,
+        sectionAccent: section?.accentColor,
+        sectionName: section?.name,
+        heroImage: e.heroImage,
+        reasons,
+      })
+      if (flagged.length >= cap) break
+    }
+    return flagged
+  },
+})
+
+// ───────── Editorial / admin ─────────
+
+/**
+ * Editor-only fetch by id, returning the event regardless of status. Used
+ * by the per-event admin editor (`/admin/events/$id`) so editors can view
+ * pending / archived / rejected events that the public `get` query hides.
+ */
+export const getByIdAdmin = query({
+  args: { id: v.id("events") },
+  handler: async (ctx, { id }) => {
+    await requireEditor(ctx)
+    const event = await ctx.db.get(id)
+    if (!event) return null
+    return await hydrate(ctx, event)
+  },
+})
+
+/**
+ * Find candidate hero images for an event. Mirrors articles.findHeroOptions:
+ * pulls every OG / twitter:image / inline image from each cited source page,
+ * plus Unsplash + Wikimedia matches. Fallback query uses event tags +
+ * section name (more searchable than the raw event title).
+ */
+export const findHeroOptions = action({
+  args: { eventId: v.id("events") },
+  handler: async (
+    ctx,
+    { eventId },
+  ): Promise<{
+    candidates: Array<HeroCandidate>
+    diagnostics: HeroFinderDiagnostics
+  }> => {
+    const event = await ctx.runQuery(api.events.getByIdAdmin, { id: eventId })
+    if (!event) {
+      return {
+        candidates: [],
+        diagnostics: {
+          sourcesScanned: 0,
+          sourcesWithImage: 0,
+          wikimediaCount: 0,
+          totalCandidates: 0,
+        },
+      }
+    }
+    const sectionLabel = event.section?.name ?? "Miami"
+    const tagsForQuery = (event.tags ?? [])
+      .filter((t) => t.length > 2)
+      .slice(0, 2)
+      .map((t) => t.replace(/-/g, " "))
+    const queryParts = [...tagsForQuery, sectionLabel].filter(Boolean)
+    const fallbackQuery = queryParts.join(" ") || `Miami ${sectionLabel}`
+    // Cited URLs first, then the event's own canonical URL as a final
+    // fallback page to scrape for OG images.
+    const citationUrls = [
+      ...(event.citations ?? []).map((c) => c.url),
+      ...(event.url ? [event.url] : []),
+    ]
+    return await findHeroCandidates({
+      citationUrls,
+      fallbackQuery,
+      excludeUrl: event.heroImage,
+    })
+  },
+})
+
+/**
+ * Apply an editor-picked hero image. Mirrors articles.setHero. Pass
+ * heroImage undefined to clear the hero entirely.
+ */
+export const setHero = mutation({
+  args: {
+    eventId: v.id("events"),
+    heroImage: v.optional(v.string()),
+    heroCaption: v.optional(v.string()),
+    heroSource: v.optional(heroSourceValidator),
+  },
+  handler: async (ctx, { eventId, heroImage, heroCaption, heroSource }) => {
+    await requireEditor(ctx)
+    const event = await ctx.db.get(eventId)
+    if (!event) return { changed: false }
+    const same =
+      heroImage === event.heroImage &&
+      heroCaption === event.heroCaption &&
+      heroSource === event.heroSource
+    if (same) return { changed: false }
+    await ctx.db.patch(eventId, {
+      heroImage,
+      heroCaption,
+      heroSource: heroSource ?? (heroImage ? "source" : "none"),
+    })
+    return { changed: true }
   },
 })
 
@@ -151,19 +712,44 @@ export const create = mutation({
     event: eventInputValidator,
     status: v.optional(
       v.union(
+        v.literal("draft"),
         v.literal("pending_review"),
         v.literal("approved"),
+        v.literal("archived"),
         v.literal("rejected"),
       ),
     ),
   },
   handler: async (ctx, { event, status }) => {
     await requireEditor(ctx)
-    return await ctx.db.insert("events", {
+    const slug = await uniqueSlug(
+      ctx,
+      event.slug || event.title,
+      event.startsAt,
+    )
+    const finalStatus = status ?? "approved"
+    const tags = cleanTags(event.tags ?? [])
+    const neighborhoods = filterNeighborhoodSlugs(event.neighborhoods ?? [])
+    const id = await ctx.db.insert("events", {
       ...event,
-      status: status ?? "approved",
+      slug,
+      tags,
+      neighborhoods,
+      searchableText: buildSearchableText(event.title, event.description, tags),
+      status: finalStatus,
+      publishedAt: finalStatus === "approved" ? Date.now() : undefined,
       createdAt: Date.now(),
     })
+    // Schedule auto-translation (60s debounce) when the event is created
+    // straight into approved status — same pattern as articles.publish.
+    if (finalStatus === "approved") {
+      await ctx.scheduler.runAfter(
+        60_000,
+        internal.events.translateEventAction,
+        { eventId: id, lang: "es" },
+      )
+    }
+    return id
   },
 })
 
@@ -176,15 +762,18 @@ export const update = mutation({
       startsAt: v.optional(v.number()),
       endsAt: v.optional(v.number()),
       allDay: v.optional(v.boolean()),
-      kind: v.optional(kindValidator),
       locationName: v.optional(v.string()),
       locationAddress: v.optional(v.string()),
-      neighborhood: v.optional(v.string()),
+      neighborhoods: v.optional(v.array(v.string())),
       url: v.optional(v.string()),
-      imageUrl: v.optional(v.string()),
+      heroImage: v.optional(v.string()),
+      heroCaption: v.optional(v.string()),
+      heroSource: v.optional(heroSourceValidator),
       price: v.optional(v.string()),
       sectionId: v.optional(v.id("sections")),
-      articleId: v.optional(v.id("articles")),
+      tags: v.optional(v.array(v.string())),
+      relatedArticleIds: v.optional(v.array(v.id("articles"))),
+      relatedEventIds: v.optional(v.array(v.id("events"))),
     }),
   },
   handler: async (ctx, { id, patch }) => {
@@ -193,7 +782,29 @@ export const update = mutation({
     for (const [key, value] of Object.entries(patch)) {
       if (value !== undefined) cleaned[key] = value
     }
-    if (Object.keys(cleaned).length > 0) await ctx.db.patch(id, cleaned)
+    if (cleaned.neighborhoods) {
+      cleaned.neighborhoods = filterNeighborhoodSlugs(
+        cleaned.neighborhoods as Array<string>,
+      )
+    }
+    if (cleaned.tags !== undefined) {
+      cleaned.tags = cleanTags(cleaned.tags as Array<string>)
+    }
+    if (Object.keys(cleaned).length === 0) return
+    const existing = await ctx.db.get(id)
+    if (!existing) return
+    // Refresh searchableText whenever any of its inputs changed.
+    const titleChanged = cleaned.title !== undefined
+    const descriptionChanged = cleaned.description !== undefined
+    const tagsChanged = cleaned.tags !== undefined
+    if (titleChanged || descriptionChanged || tagsChanged) {
+      cleaned.searchableText = buildSearchableText(
+        (cleaned.title as string | undefined) ?? existing.title,
+        (cleaned.description as string | undefined) ?? existing.description,
+        (cleaned.tags as Array<string> | undefined) ?? existing.tags ?? [],
+      )
+    }
+    await ctx.db.patch(id, cleaned)
   },
 })
 
@@ -201,14 +812,36 @@ export const setStatus = mutation({
   args: {
     id: v.id("events"),
     status: v.union(
+      v.literal("draft"),
       v.literal("pending_review"),
       v.literal("approved"),
+      v.literal("archived"),
       v.literal("rejected"),
     ),
   },
   handler: async (ctx, { id, status }) => {
     await requireEditor(ctx)
-    await ctx.db.patch(id, { status })
+    const existing = await ctx.db.get(id)
+    if (!existing) return
+    if (existing.status === status) return
+    const patch: Record<string, unknown> = { status }
+    // Stamp publishedAt the first time an event flips to approved, mirroring
+    // how articles stamp publishedAt on first publish.
+    if (status === "approved" && !existing.publishedAt) {
+      patch.publishedAt = Date.now()
+    }
+    await ctx.db.patch(id, patch)
+    // Schedule auto-translation when the event flips to approved, with the
+    // same 60s debounce as articles.publish. The action itself short-
+    // circuits via sourceHash when EN hasn't changed since the last run,
+    // so re-approves of unchanged events cost nothing.
+    if (status === "approved" && existing.status !== "approved") {
+      await ctx.scheduler.runAfter(
+        60_000,
+        internal.events.translateEventAction,
+        { eventId: id, lang: "es" },
+      )
+    }
   },
 })
 
@@ -220,62 +853,11 @@ export const remove = mutation({
   },
 })
 
-// Future-facing events for a desk's section that the agent could enrich.
-// Used by the bulk enrich pass to find events missing imageUrl, missing
-// articleId, or that have a stale stub description.
-export const futureForAgent = query({
-  args: {
-    agentId: v.id("agents"),
-    limit: v.optional(v.number()),
-  },
-  handler: async (ctx, { agentId, limit }) => {
-    const agent = await ctx.db.get(agentId)
-    if (!agent) return []
-    const cap = limit ?? 30
-    const all = await ctx.db
-      .query("events")
-      .withIndex("by_starts", (q) => q.gte("startsAt", Date.now()))
-      .order("asc")
-      .take(cap * 4)
-    return all
-      .filter((e) => e.sectionId === agent.sectionId)
-      .slice(0, cap)
-  },
-})
 
-// Apply enrichment to an existing event. Additive — only fills missing
-// fields by default (imageUrl, articleId), but can also replace when an
-// editor explicitly invokes it. Internal so only desk actions can call it.
-export const enrichEvent = internalMutation({
-  args: {
-    id: v.id("events"),
-    patch: v.object({
-      imageUrl: v.optional(v.string()),
-      articleId: v.optional(v.id("articles")),
-      neighborhood: v.optional(v.string()),
-      locationAddress: v.optional(v.string()),
-    }),
-  },
-  handler: async (ctx, { id, patch }) => {
-    const event = await ctx.db.get(id)
-    if (!event) return { changed: false }
-    if (event.status === "rejected") return { changed: false }
-    const updates: Record<string, unknown> = {}
-    if (patch.imageUrl && !event.imageUrl) updates.imageUrl = patch.imageUrl
-    if (patch.articleId && !event.articleId) updates.articleId = patch.articleId
-    if (patch.neighborhood && !event.neighborhood)
-      updates.neighborhood = patch.neighborhood
-    if (patch.locationAddress && !event.locationAddress)
-      updates.locationAddress = patch.locationAddress
-    if (Object.keys(updates).length === 0) return { changed: false }
-    await ctx.db.patch(id, updates)
-    return { changed: true, changedFields: Object.keys(updates) }
-  },
-})
-
-// Insert pending events extracted by a desk's LLM. Internal — only callable
-// from desk actions, never from the public client. Always lands in
-// `pending_review` for editor approval.
+// Insert events extracted by a desk's LLM. Internal — only callable from
+// desk actions, never from the public client. Auto-approves on insert
+// (mirrors articles.insertDraft). Quality issues are caught after the
+// fact via `events.recentAnomalies` on the admin dashboard.
 export const insertExtracted = internalMutation({
   args: {
     event: eventInputValidator,
@@ -284,13 +866,36 @@ export const insertExtracted = internalMutation({
     derivedFromItems: v.array(v.id("ingestedItems")),
   },
   handler: async (ctx, { event, agentSlug, agentRunId, derivedFromItems }) => {
-    return await ctx.db.insert("events", {
+    const slug = await uniqueSlug(
+      ctx,
+      event.slug || event.title,
+      event.startsAt,
+    )
+    const tags = cleanTags(event.tags ?? [])
+    const neighborhoods = filterNeighborhoodSlugs(event.neighborhoods ?? [])
+
+    // Self-approve — every desk-extracted event goes live immediately.
+    // Same trust-the-pipeline tradeoff as articles. Re-runs that
+    // extract the same event fold via the dedup pass.
+    const now = Date.now()
+    const id = await ctx.db.insert("events", {
       ...event,
-      status: "pending_review",
+      slug,
+      tags,
+      neighborhoods,
+      searchableText: buildSearchableText(event.title, event.description, tags),
+      status: "approved",
+      publishedAt: now,
       agentSlug,
       agentRunId,
       derivedFromItems,
-      createdAt: Date.now(),
+      createdAt: now,
     })
+    await ctx.scheduler.runAfter(
+      60_000,
+      internal.events.translateEventAction,
+      { eventId: id, lang: "es" },
+    )
+    return id
   },
 })

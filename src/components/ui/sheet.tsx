@@ -65,6 +65,7 @@ function SheetContent({
                 variant="ghost"
                 className="absolute top-4 end-4"
                 size="icon-sm"
+                aria-label="Close"
               />
             }
           >

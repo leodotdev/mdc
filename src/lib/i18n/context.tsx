@@ -38,6 +38,11 @@ export function LangProvider({ children }: { children: React.ReactNode }) {
     setLangState(next)
     localStorage.setItem(STORAGE_KEY, next)
     document.documentElement.lang = next
+    // Cookie alongside localStorage so a future SSR pass can read the
+    // preference and emit the right `lang` attribute on the server-
+    // rendered HTML (Google + non-JS clients). 1-year expiry; Lax so it
+    // ships on top-level navigations.
+    document.cookie = `${STORAGE_KEY}=${next};max-age=${60 * 60 * 24 * 365};path=/;SameSite=Lax`
   }, [])
 
   const t: Translator = useCallback(
@@ -69,7 +74,7 @@ export function useTranslation(): LangContextValue {
       setLang: () => {},
       hydrated: false,
       t: (key, vars) =>
-        interpolate(STRINGS[DEFAULT_LANG][key] ?? (key as string), vars),
+        interpolate(STRINGS[DEFAULT_LANG][key] ?? (key), vars),
     }
   }
   return ctx

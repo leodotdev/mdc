@@ -1,43 +1,70 @@
 import { getAuthUserId } from "@convex-dev/auth/server"
 import { v } from "convex/values"
 import { api, internal } from "./_generated/api"
-import { action } from "./_generated/server"
+import { action, internalAction } from "./_generated/server"
 import {  fetchItems } from "./lib/adapters"
-import { generateDrafts, generateEnrichment } from "./lib/llm"
+import { fetchDataMetrics } from "./lib/dataAdapters"
+import { estimatedCallCents } from "./lib/budget"
+import { generateDrafts } from "./lib/llm"
 import { resolveHero } from "./lib/media"
 import { filterNeighborhoodSlugs } from "./lib/neighborhoods"
 import type {SourceForAdapter} from "./lib/adapters";
 import type { DraftItem, RelatedCandidate } from "./lib/llm"
 import type { Id } from "./_generated/dataModel"
-import type { ActionCtx } from "./_generated/server"
 import type { FunctionReturnType } from "convex/server"
-
-type RelatedPool = FunctionReturnType<typeof api.articles.recentForLinking>
-type EnrichableArticle = FunctionReturnType<
-  typeof api.articles.enrichableForAgent
->[number]
 
 type Candidates = FunctionReturnType<
   typeof api.agentsData.unconsumedItemsForAgent
 >
 
-// Single editorial model across every desk. The agents table still has a
-// `model` column for future per-desk overrides, but for now the runtime
-// always uses Opus 4.7 — most capable model in the current Claude family.
-const DEFAULT_MODEL = "claude-opus-4-7"
+// Model tiering for the $20/month budget:
+//   - Drafts: Sonnet 4.6 across the board (~$0.014/draft). Investigations
+//     desk overrides via `agent.model` to opt up to Opus for the
+//     hardest-to-write copy.
+//   - Translation: Sonnet 4.6 (overridden in articles.ts / events.ts).
+// Per-desk overrides are honored from the `agents.model` column when set;
+// blank/missing → DEFAULT_MODEL.
+const DEFAULT_MODEL = "claude-sonnet-4-6"
 
 // Tags that add no signal (every story is local to Miami-Dade by definition).
 // Stripped from every draft before insert so they never reach the public site
 // even if the LLM ignores the prompt instruction.
+// Stored in canonical (post-`normalizeTag`) form so the lookup is a
+// simple `Set.has` after the input is normalized.
 const REDUNDANT_TAGS = new Set([
   "miami",
   "miami-dade",
   "miamidade",
-  "miami dade",
 ])
 
-function cleanTags(tags: ReadonlyArray<string>): Array<string> {
-  return tags.filter((t) => !REDUNDANT_TAGS.has(t.toLowerCase().trim()))
+// Canonical tag form: lowercase, hyphen-separated, no leading/trailing
+// or repeated hyphens, no other punctuation. Applied at every write
+// path so the tag set stays consistent across the schema regardless of
+// what the LLM emits or what an editor types into the form. Empty
+// inputs return "".
+export function normalizeTag(input: string): string {
+  return input
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+}
+
+// Apply `normalizeTag` to every entry, drop empties + duplicates +
+// known-redundant terms (Miami-Dade etc. — covered by the section
+// metadata, no need to tag every story with them).
+export function cleanTags(tags: ReadonlyArray<string>): Array<string> {
+  const seen = new Set<string>()
+  const out: Array<string> = []
+  for (const raw of tags) {
+    const t = normalizeTag(raw)
+    if (!t) continue
+    if (REDUNDANT_TAGS.has(t)) continue
+    if (seen.has(t)) continue
+    seen.add(t)
+    out.push(t)
+  }
+  return out
 }
 
 // Stories ship as exactly one paragraph. If the LLM ignores the prompt
@@ -70,24 +97,35 @@ function hostname(url: string): string {
   }
 }
 
-export const runDesk = action({
-  args: { agentSlug: v.string() },
+// Internal version — no auth check. Called by:
+//   - The public `runDesk` action (after editor auth check), and
+//   - The cron tick that fires every few hours.
+// The cron path runs without an authenticated user, so the auth check
+// lives one layer up in the public wrapper instead of here.
+export const runDeskInternal = internalAction({
+  args: {
+    agentSlug: v.string(),
+    // Optional override for the desk's `lookbackHours`. The 30-day
+    // backfill uses this to widen the window without mutating the
+    // agent row. Falls back to `agent.lookbackHours` when omitted.
+    lookbackHoursOverride: v.optional(v.number()),
+  },
   handler: async (
     ctx,
-    { agentSlug },
+    { agentSlug, lookbackHoursOverride },
   ): Promise<{
     runId: Id<"agentRuns">
     itemsConsidered: number
     draftsCreated: number
     error?: string
   }> => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) throw new Error("Unauthenticated")
 
     const agent = await ctx.runQuery(api.agentsData.getBySlug, {
       slug: agentSlug,
     })
     if (!agent) throw new Error(`Agent "${agentSlug}" not found`)
+    const effectiveLookbackHours =
+      lookbackHoursOverride ?? agent.lookbackHours
 
     const runId = await ctx.runMutation(api.agentsData.startRun, {
       agentId: agent._id,
@@ -135,7 +173,7 @@ export const runDesk = action({
       }
 
       // 2. Pull unconsumed items
-      const sinceMs = Date.now() - agent.lookbackHours * 60 * 60 * 1000
+      const sinceMs = Date.now() - effectiveLookbackHours * 60 * 60 * 1000
       const candidates: Candidates = await ctx.runQuery(
         api.agentsData.unconsumedItemsForAgent,
         {
@@ -147,7 +185,14 @@ export const runDesk = action({
       itemsConsidered = candidates.length
       await log(`Selected ${candidates.length} unconsumed items`)
 
-      if (candidates.length === 0) {
+      // Skip the LLM call when there's too little to draft from. One or two
+      // items rarely yield a story worth the round-trip; the items stay
+      // unconsumed for the next run when more accumulate.
+      const MIN_CANDIDATES_FOR_DRAFT = 3
+      if (candidates.length < MIN_CANDIDATES_FOR_DRAFT) {
+        await log(
+          `Skipped LLM call — ${candidates.length} candidates is below the ${MIN_CANDIDATES_FOR_DRAFT}-item threshold`,
+        )
         await ctx.runMutation(api.agentsData.finishRun, {
           runId,
           status: "succeeded",
@@ -201,15 +246,41 @@ export const runDesk = action({
         }),
       )
 
-      await log(`Calling ${DEFAULT_MODEL}`)
+      const model = agent.model && agent.model.length > 0
+        ? agent.model
+        : DEFAULT_MODEL
+
+      // Daily budget gate. Bails the desk when the day's cap is hit so
+      // the system stays within ~$20/month even on burst-y news days.
+      const reservation = await ctx.runMutation(internal.budget.reserve, {
+        estimatedCents: estimatedCallCents(model),
+        label: `runDesk:${agent.slug}`,
+      })
+      if (!reservation.allowed) {
+        await log(
+          `Skipped LLM call — daily budget hit (${reservation.centsSpent}¢ / ${reservation.capCents}¢)`,
+        )
+        await ctx.runMutation(api.agentsData.finishRun, {
+          runId,
+          status: "succeeded",
+          itemsConsidered,
+          draftsCreated,
+        })
+        return { runId, itemsConsidered, draftsCreated }
+      }
+
+      await log(`Calling ${model} (${reservation.centsSpent}¢ today)`)
       const { drafts, events } = await generateDrafts({
         systemPrompt: agent.systemPrompt,
-        model: DEFAULT_MODEL,
+        model,
         items: draftItems,
         maxDrafts: agent.maxDraftsPerRun,
         relatedCandidates,
         sectionChoices,
       })
+      // Per-section runDeskInternal is the legacy fan-out path; mega
+      // desk handles metrics in its own section. Discarding the
+      // metrics array from this older call site is intentional.
       await log(
         `LLM returned ${drafts.length} drafts, ${events.length} events`,
       )
@@ -301,10 +372,10 @@ export const runDesk = action({
           neighborhoods: filterNeighborhoodSlugs(draft.neighborhoodSlugs ?? []),
           heroImage: hero.source !== "none" ? hero.url : undefined,
           heroCaption:
-            hero.source === "unsplash"
-              ? hero.caption
-              : hero.source === "source"
-                ? `Image: ${hostname(citations[0].url)}`
+            hero.source === "source"
+              ? `Image: ${hostname(citations[0].url)}`
+              : hero.source === "wikimedia"
+                ? hero.caption
                 : undefined,
           heroSource: hero.source,
           citations,
@@ -340,9 +411,14 @@ export const runDesk = action({
         await log(`Drafted "${draft.title}"`)
       }
 
-      // 5. Insert extracted events (pending_review). Strict gate: drop any
-      // event whose ISO start time can't be parsed or whose citations don't
-      // resolve to a real source item.
+      // 5. Insert extracted events — auto-approved on the way in, same
+      // policy as articles. Strict gate: drop any event whose ISO start
+      // time can't be parsed or whose citations don't resolve to a real
+      // source item. Quality issues are caught after the fact via
+      // `events.recentAnomalies` on the admin dashboard, mirroring the
+      // article anomaly flow. Events carry the same data shape as
+      // articles: slug, sectionId, tags, citations, neighborhoods, hero
+      // triplet, related links.
       let eventsCreated = 0
       for (const ev of events) {
         const validIndices = ev.citationItemIndices.filter(
@@ -354,40 +430,78 @@ export const runDesk = action({
         const endsAt = ev.endsAtIso
           ? new Date(ev.endsAtIso).getTime()
           : undefined
-        const linkedArticleId =
+        const directDraftLink =
           ev.relatedDraftIndex !== undefined
             ? draftToArticleId.get(ev.relatedDraftIndex)
             : undefined
+        const llmRelated = (ev.relatedArticleIndices ?? [])
+          .filter((i) => i >= 0 && i < relatedPool.length)
+          .map((i) => relatedPool[i]._id)
+        const relatedArticleIds = Array.from(
+          new Set<Id<"articles">>(
+            [
+              ...(directDraftLink ? [directDraftLink] : []),
+              ...llmRelated,
+            ],
+          ),
+        )
         const sourceItemIds = validIndices.map(
           (i) => candidates[i].item._id,
         )
+        const citedCandidates = validIndices.map((i) => candidates[i])
+        const eventCitations = citedCandidates.map((c) => ({
+          url: c.item.url,
+          title: c.item.title,
+          publisher: c.sourceName,
+          fetchedAt: c.item.fetchedAt,
+          snippet: c.item.snippet,
+        }))
         // Resolve a hero image: prefer OG image from the citation source,
-        // then the event's own URL, then Unsplash fallback. Mirrors how
-        // articles get hero images so events read as visually rich.
+        // then the event's own URL, then Unsplash fallback. Same pipeline
+        // as articles so events read as visually rich.
         const eventCitationUrls = [
           ...(ev.url ? [ev.url] : []),
           ...validIndices.map((i) => candidates[i].item.url),
         ]
         const eventHero = await resolveHero(
           eventCitationUrls,
-          `Miami ${ev.kind} ${ev.title}`,
+          `Miami ${ev.title}`,
         )
+        // Resolve the LLM's per-event section pick from the desk's allowed
+        // tree (same map as drafts). Falls back to the desk's primary.
+        const eventSectionId =
+          (ev.sectionSlug
+            ? sectionIdBySlug.get(ev.sectionSlug)
+            : undefined) ?? agent.sectionId
         try {
           await ctx.runMutation(internal.events.insertExtracted, {
             event: {
+              slug: slugify(ev.suggestedSlug || ev.title),
               title: ev.title,
               description: ev.description,
-              kind: ev.kind,
               startsAt,
               endsAt: Number.isFinite(endsAt) ? endsAt : undefined,
               allDay: ev.allDay,
               locationName: ev.locationName,
-              neighborhood: ev.neighborhood,
+              neighborhoods: filterNeighborhoodSlugs(
+                ev.neighborhoodSlugs ?? [],
+              ),
               url: ev.url,
               price: ev.price,
-              imageUrl:
+              heroImage:
                 eventHero.source !== "none" ? eventHero.url : undefined,
-              articleId: linkedArticleId,
+              heroSource: eventHero.source,
+              heroCaption:
+                eventHero.source === "source"
+                  ? `Image: ${hostname(eventCitations[0]?.url ?? "")}`
+                  : eventHero.source === "wikimedia"
+                    ? eventHero.caption
+                    : undefined,
+              sectionId: eventSectionId,
+              tags: cleanTags(ev.tags ?? []),
+              relatedArticleIds:
+                relatedArticleIds.length > 0 ? relatedArticleIds : undefined,
+              citations: eventCitations,
             },
             agentSlug: agent.slug,
             agentRunId: runId,
@@ -426,272 +540,197 @@ export const runDesk = action({
   },
 })
 
-// Run one article through the enrichment pipeline: ask the LLM for
-// additive citations / related links / optional copy polish, re-resolve
-// the hero image when missing, then apply via the enrichArticle mutation
-// (which also writes the revision row). Returns whether any field
-// changed so the caller can tally results. Re-used by both the bulk
-// `enrichDesk` action and the per-story `enrichStory` action so they
-// stay in lock-step.
-async function enrichOneArticle(
-  ctx: ActionCtx,
-  args: {
-    agent: { slug: string; systemPrompt: string }
-    article: EnrichableArticle
-    runId: Id<"agentRuns">
-    candidatePool: Candidates
-    relatedPool: RelatedPool
-    log: (line: string) => Promise<unknown>
-  },
-): Promise<{
-  changed: boolean
-  changedFields?: Array<string>
-  citationsAdded?: number
-  relatedAdded?: number
-}> {
-  const { agent, article, runId, candidatePool, relatedPool, log } = args
-
-  // Drop any items already cited / consumed by this article, then send
-  // the rest to the LLM as new-item candidates. Cap at 12 to keep prompt
-  // size bounded.
-  const articleSourceIds = new Set(
-    article.derivedFromItems.map((id) => id as string),
-  )
-  const articleCitationUrls = new Set(article.citations.map((c) => c.url))
-  const newItemCandidates = candidatePool
-    .filter(
-      (c) =>
-        !articleSourceIds.has(c.item._id as string) &&
-        !articleCitationUrls.has(c.item.url),
-    )
-    .slice(0, 12)
-  const draftItems: Array<DraftItem> = newItemCandidates.map((c, idx) => ({
-    index: idx,
-    source: c.sourceName,
-    url: c.item.url,
-    title: c.item.title,
-    publishedAt: c.item.publishedAt
-      ? new Date(c.item.publishedAt).toISOString().slice(0, 10)
-      : undefined,
-    body: (c.item.body ?? c.item.snippet ?? "").slice(0, 2000),
-  }))
-
-  // Drop the article itself + anything already linked.
-  const existingRelated = new Set(
-    (article.relatedArticleIds ?? []).map((id) => id as string),
-  )
-  const filteredRelated = relatedPool
-    .filter(
-      (r) =>
-        (r._id as string) !== (article._id as string) &&
-        !existingRelated.has(r._id as string),
-    )
-    .slice(0, 12)
-  const relatedCandidates: Array<RelatedCandidate> = filteredRelated.map(
-    (a, idx) => ({
-      index: idx,
-      section: a.section?.name ?? "—",
-      title: a.title,
-      dek: a.dek,
-      publishedAt: a.publishedAt
-        ? new Date(a.publishedAt).toISOString().slice(0, 10)
-        : undefined,
-    }),
-  )
-
-  // Re-resolve hero if missing — independent of the LLM call.
-  let heroPatch: {
-    heroImage?: string
-    heroCaption?: string
-    heroSource?: "source" | "unsplash" | "none"
-  } = {}
-  if (!article.heroImage || article.heroSource === "none") {
-    const newHero = await resolveHero(
-      article.citations.map((c) => c.url),
-      article.title,
-    )
-    if (newHero.source !== "none") {
-      heroPatch = {
-        heroImage: newHero.url,
-        heroSource: newHero.source,
-        heroCaption:
-          newHero.source === "unsplash"
-            ? newHero.caption
-            : `Image: ${hostname(article.citations[0]?.url ?? "")}`,
-      }
-    }
-  }
-
-  // Skip the LLM call entirely when there's nothing for it to consider.
-  // The hero re-resolution still runs above.
-  const hasAnyCandidates =
-    draftItems.length > 0 || relatedCandidates.length > 0
-  const llmPatch: {
-    title?: string
-    dek?: string
-    body?: string
-    tags?: Array<string>
-    neighborhoods?: Array<string>
-  } = {}
-  let citationsToAdd: typeof article.citations = []
-  let sourceItemsToAdd: Array<Id<"ingestedItems">> = []
-  let relatedToAdd: Array<Id<"articles">> = []
-  let note: string | undefined
-
-  if (hasAnyCandidates) {
-    try {
-      const result = await generateEnrichment({
-        systemPrompt: agent.systemPrompt,
-        model: DEFAULT_MODEL,
-        article: {
-          title: article.title,
-          dek: article.dek,
-          body: article.body,
-          tags: article.tags,
-          sectionSlug: article.section?.slug ?? "",
-          citations: article.citations,
-          neighborhoodSlugs: article.neighborhoods,
-        },
-        newItems: draftItems,
-        relatedCandidates,
-      })
-      if (result) {
-        if (result.title) llmPatch.title = result.title
-        if (result.dek) llmPatch.dek = result.dek
-        if (result.body) llmPatch.body = toSingleParagraph(result.body)
-        if (result.tags) llmPatch.tags = cleanTags(result.tags)
-        if (result.neighborhoodSlugs)
-          llmPatch.neighborhoods = filterNeighborhoodSlugs(
-            result.neighborhoodSlugs,
-          )
-        note = result.rewriteJustification
-
-        const validCiteIndices = result.citationItemIndicesToAdd.filter(
-          (i) => i >= 0 && i < newItemCandidates.length,
-        )
-        const cited = validCiteIndices.map((i) => newItemCandidates[i])
-        citationsToAdd = cited.map((c) => ({
-          url: c.item.url,
-          title: c.item.title,
-          publisher: c.sourceName,
-          fetchedAt: c.item.fetchedAt,
-          snippet: c.item.snippet,
-        }))
-        sourceItemsToAdd = cited.map((c) => c.item._id)
-
-        const validRelatedIndices = result.relatedArticleIndicesToLink.filter(
-          (i) => i >= 0 && i < filteredRelated.length,
-        )
-        relatedToAdd = validRelatedIndices.map(
-          (i) => filteredRelated[i]._id,
-        )
-      }
-    } catch (e) {
-      await log(
-        `Enrichment LLM failed for "${article.title}": ${
-          e instanceof Error ? e.message : String(e)
-        }`,
-      )
-    }
-  }
-
-  const applied = await ctx.runMutation(api.articles.enrichArticle, {
-    articleId: article._id,
-    patch: { ...llmPatch, ...heroPatch },
-    newCitations: citationsToAdd,
-    newSourceItems: sourceItemsToAdd,
-    newRelatedIds: relatedToAdd,
-    agentSlug: agent.slug,
-    agentRunId: runId,
-    note,
-  })
-  if (applied.changed) {
-    await log(
-      `Enriched "${article.title}" — fields: ${
-        (applied.changedFields ?? []).join(", ") || "(none)"
-      }; +${applied.citationsAdded ?? 0} citations, +${
-        applied.relatedAdded ?? 0
-      } related`,
-    )
-    // Mark the items we cited as consumed so runDesk doesn't pick them
-    // up again as candidates for fresh drafts.
-    if (sourceItemsToAdd.length > 0) {
-      await ctx.runMutation(api.agentsData.markItemsConsumed, {
-        itemIds: sourceItemsToAdd,
-      })
-    }
-  }
-  return {
-    changed: applied.changed,
-    changedFields: applied.changedFields,
-    citationsAdded: applied.citationsAdded,
-    relatedAdded: applied.relatedAdded,
-  }
-}
-
-// =====================================================================
-// Bulk-enrichment pass — operates on QUEUED (pending_review) + PUBLISHED
-// articles filed under this desk's section, plus future events. For
-// each piece, the LLM is asked to: append new citations, link related
-// stories, polish copy when warranted, and refresh metadata. Hero
-// images are re-resolved server-side when missing. Every change writes
-// a row in articleRevisions so the timeline shows what the desk touched
-// and why. Rejected/archived items are skipped (intentional removals).
-// =====================================================================
-export const enrichDesk = action({
-  args: {
-    agentSlug: v.string(),
-    maxArticles: v.optional(v.number()),
-  },
+// Public action — editor-triggered "Run all" / "Run desk" button. Wraps
+// the internal action so the cron path can call without auth.
+export const runDesk = action({
+  args: { agentSlug: v.string() },
   handler: async (
     ctx,
-    { agentSlug, maxArticles },
+    { agentSlug },
   ): Promise<{
     runId: Id<"agentRuns">
-    articlesScanned: number
-    articlesEnriched: number
-    eventsEnriched: number
+    itemsConsidered: number
+    draftsCreated: number
     error?: string
   }> => {
     const userId = await getAuthUserId(ctx)
     if (!userId) throw new Error("Unauthenticated")
-
-    const agent = await ctx.runQuery(api.agentsData.getBySlug, {
-      slug: agentSlug,
+    return await ctx.runAction(internal.agents.runDeskInternal, {
+      agentSlug,
     })
-    if (!agent) throw new Error(`Agent "${agentSlug}" not found`)
+  },
+})
 
-    const cap = maxArticles ?? 8
+// ============================================================================
+// Mega-desk — single agent that handles every section in one pass.
+//
+// One agent slug ("miami-desk") replaces the per-section desk fan-out.
+// Pipeline: refresh every enabled source → pull the firehose of unconsumed
+// items (capped) → call Opus once with every section as a routing choice.
+// The LLM decides which items are noise (skipped silently), which become
+// drafts, which become events, and which section each lands in.
+//
+// Cost shape: ~one Opus call per cron tick. Item cap (`MEGA_MAX_ITEMS`)
+// keeps input tokens bounded so a single call stays under ~15¢ on a
+// busy day. Budget gate still applies — the action bails cleanly when
+// the cap is hit.
+//
+// No per-desk persona, no per-section voice rows. Voice lives in the
+// system prompt and the section pick steers tone via section description.
+// ============================================================================
+
+const MEGA_DESK_SLUG = "miami-desk"
+// Item firehose cap. 100 means more freshness gets considered each
+// run, especially during news bursts when a single source can dump
+// 30+ items at once. Opus handles the larger input fine; the budget
+// gate catches if cost spikes.
+const MEGA_MAX_ITEMS = 100
+// Drafts per run. 20 means the system can publish a meaningful chunk
+// each hour during busy windows; quiet hours still produce 0-3.
+const MEGA_MAX_DRAFTS = 20
+// Lookback window. 12h forces focus on truly recent items — anything
+// older that wasn't drafted on a previous run probably wasn't going
+// to be drafted anyway.
+const MEGA_DEFAULT_LOOKBACK_HOURS = 12
+
+const MEGA_SYSTEM_PROMPT = `You are the editorial brain of miami.community — the AI-edited local paper for Miami-Dade.
+
+Your job each run: read a batch of source items pulled from local outlets, museum calendars, gov feeds, sports clubs, and broad aggregators. Draft a short article for every Miami-Dade item that isn't already covered. The maxDrafts cap is a CEILING, not a target — but most runs should get close to it. The mistake to avoid is over-filtering, not over-drafting.
+
+DRAFT AGGRESSIVELY. If you have N items in your input, the expected number of drafts is N minus only (a) items already covered by an existing article on the site (use updateOfRelatedIndex to fold those in), and (b) items that are clearly not Miami-Dade-relevant (national/global wire copy that just happens to be carried by a local feed). Everything else gets drafted. "I'm not sure if this rises to news" is NOT a reason to skip — short factual coverage of small things (a new opening, a local arrest, a school-board vote, a Heat schedule announcement, a feature on a Miami YouTuber) is exactly what this paper is for. When in doubt, draft. **An empty drafts array is almost always wrong: if you returned 0 drafts from 50+ items, you've over-filtered.**
+
+Voice across every section: matter-of-fact, plainly written, shorter than the source. The reader has 30 seconds. Lead with what happened. Skip cliché ("amid", "as", "after", "in a sign that"). No headlinese, no questions in headlines, no clickbait. State only what the cited sources support.
+
+You will be told what sections exist and which one each draft should file under. Pick the most specific section that fits. Tone shifts subtly by section (urgent for breaking news, sensory for food, even-handed for politics) but voice stays one — the smart-friend register, no AI tells, no PR speak.
+
+Beyond drafts and events, you also surface FIRST-CLASS METRICS — numerical or statistical artifacts about Miami that deserve their own widget on the homepage and inline embeds in articles. Use the \`metrics\` tool field for these. Only promote a number when:
+- The cited source EXPLICITLY states it (never compute, estimate, or aggregate across sources)
+- It's locally relevant (Miami-Dade, Miami metro, South Florida, sometimes statewide)
+- It's a number a reader might actually want to see — population counts, median home prices, unemployment rates, ranking-list mentions, demographic breakdowns, climate readings, attendance figures
+- A stable slug captures it (so re-runs that find updated values upsert in place: 'miami-dade-population', 'miami-median-home-price', 'miami-cost-of-living-rank')
+
+Pick the right \`kind\`: number for one value, number-with-delta when source gives YoY/QoQ change, line/bars for time series, rank for "Miami ranks #N out of M", compare for two-sided splits. Always cite — every metric carries its source items.
+
+Most runs will produce 0 metrics. That's fine. A typical eligible source: a census release, BLS report, NAR/Redfin price update, a "Miami ranks #X" mention in any wire story.`
+
+// Internal mega-desk run. Idempotent enough to call from a cron tick or
+// the editor's "Run desk" button. Returns a small summary so the caller
+// can toast / log without re-querying.
+export const runMegaDeskInternal = internalAction({
+  args: {
+    lookbackHoursOverride: v.optional(v.number()),
+  },
+  handler: async (
+    ctx,
+    { lookbackHoursOverride },
+  ): Promise<{
+    runId: Id<"agentRuns"> | null
+    itemsConsidered: number
+    draftsCreated: number
+    eventsCreated: number
+    error?: string
+  }> => {
+    const agent = await ctx.runQuery(api.agentsData.getBySlug, {
+      slug: MEGA_DESK_SLUG,
+    })
+    if (!agent) {
+      throw new Error(
+        `Mega desk "${MEGA_DESK_SLUG}" not found — run seed:seedMegaDesk to install it.`,
+      )
+    }
+
+    const lookbackHours =
+      lookbackHoursOverride ?? agent.lookbackHours ?? MEGA_DEFAULT_LOOKBACK_HOURS
+
     const runId = await ctx.runMutation(api.agentsData.startRun, {
       agentId: agent._id,
     })
     const log = (line: string) =>
       ctx.runMutation(api.agentsData.appendLog, { runId, line })
 
-    let articlesScanned = 0
-    let articlesEnriched = 0
-    let eventsEnriched = 0
+    let itemsConsidered = 0
+    let draftsCreated = 0
+    let eventsCreated = 0
 
     try {
-      // 1. Refresh source feeds first so the LLM sees the freshest items.
-      const sources = await ctx.runQuery(
-        api.agentsData.enabledSourcesForAgent,
-        { agentId: agent._id },
+      // 1. Refresh every enabled source — but skip sources whose last
+      //    fetch is younger than their pollIntervalMinutes (defaults to
+      //    60). The mega-desk runs every 30 min; without this gate it
+      //    would re-fetch every long-tail blog every tick, burning rate
+      //    limits and wall-clock time for items that didn't change.
+      const sources = await ctx.runQuery(internal.sourcesData.listInternal, {})
+      const allEnabled = sources.filter((s) => s.enabled)
+      const tickStart = Date.now()
+      const enabled = allEnabled.filter((s) => {
+        const interval = (s.pollIntervalMinutes ?? 60) * 60_000
+        // Force-fresh if never fetched, or last fetch failed.
+        if (!s.lastFetchedAt) return true
+        if (s.lastFetchStatus === "error") return true
+        return tickStart - s.lastFetchedAt >= interval
+      })
+      const skippedFresh = allEnabled.length - enabled.length
+      await log(
+        `Refreshing ${enabled.length} of ${allEnabled.length} sources` +
+          (skippedFresh > 0
+            ? ` (${skippedFresh} skipped — fresh within their poll interval)`
+            : ""),
       )
-      await log(`Refreshing ${sources.length} sources`)
-      for (const src of sources) {
+      for (const src of enabled) {
+        // `data` sources bypass the article pipeline entirely — they
+        // emit metric records straight into the metrics table. The
+        // mega-desk LLM never sees them, so they don't compete with
+        // article items for the input budget. Failures are recorded
+        // on the source row the same way as article-source errors.
+        if (src.type === "data") {
+          try {
+            const dataMetrics = await fetchDataMetrics({ url: src.url })
+            for (const m of dataMetrics) {
+              await ctx.runMutation(internal.metrics.upsertFromAgent, {
+                slug: m.slug,
+                title: m.title,
+                subtitle: m.subtitle,
+                kind: m.kind,
+                data: m.data,
+                unit: m.unit,
+                citations: m.citations,
+                relatedTags: m.relatedTags,
+                relatedSectionSlugs: m.relatedSectionSlugs,
+              })
+            }
+            await ctx.runMutation(api.sourcesData.recordFetch, {
+              sourceId: src._id,
+              items: [],
+              status: "ok",
+            })
+            await log(
+              `[${src.name}] data adapter upserted ${dataMetrics.length} metrics`,
+            )
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err)
+            await ctx.runMutation(api.sourcesData.recordFetch, {
+              sourceId: src._id,
+              items: [],
+              status: "error",
+              error: msg,
+            })
+            await log(`[${src.name}] FAILED: ${msg}`)
+          }
+          continue
+        }
         try {
-          const adapterInput: SourceForAdapter = {
+          const items = await fetchItems({
             type: src.type,
             url: src.url,
             config: src.config,
-          }
-          const items = await fetchItems(adapterInput)
-          await ctx.runMutation(api.sourcesData.recordFetch, {
+          })
+          const result = await ctx.runMutation(api.sourcesData.recordFetch, {
             sourceId: src._id,
             items,
             status: "ok",
           })
+          await log(
+            `[${src.name}] fetched ${items.length}, new ${result.inserted}`,
+          )
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err)
           await ctx.runMutation(api.sourcesData.recordFetch, {
@@ -704,281 +743,470 @@ export const enrichDesk = action({
         }
       }
 
-      // 2. Pull recently-published articles to enrich, oldest-first so the
-      // pieces with the longest accrual window get processed before fresh
-      // ones (which are unlikely to have new follow-up coverage yet).
-      const articles = await ctx.runQuery(
-        api.articles.enrichableForAgent,
-        { agentId: agent._id, limit: cap },
+      // 2. Pull the firehose — every unconsumed item across every source,
+      //    capped to keep Opus input bounded.
+      const sinceMs = Date.now() - lookbackHours * 3_600_000
+      const candidates = await ctx.runQuery(
+        api.agentsData.unconsumedItemsAll,
+        { sinceMs, limit: MEGA_MAX_ITEMS },
       )
-      articlesScanned = articles.length
-      const queued = articles.filter((a) => a.status === "pending_review").length
-      const published = articles.length - queued
-      await log(
-        `Found ${articles.length} articles to scan (${published} published, ${queued} queued)`,
-      )
-
-      // 3. Pre-fetch a shared candidate pool of recent items + related
-      // articles. Each per-article LLM call narrows it locally.
-      const sinceMs = Date.now() - agent.lookbackHours * 60 * 60 * 1000
-      const candidatePool = await ctx.runQuery(
-        api.agentsData.unconsumedItemsForAgent,
-        {
-          agentId: agent._id,
-          sinceMs,
-          limit: agent.maxItemsPerRun * 2,
-        },
-      )
-      const relatedPool = await ctx.runQuery(api.articles.recentForLinking, {
-        sectionId: agent.sectionId,
-        limit: 25,
-        lookbackHours: 720, // 30 days — broader than runDesk's 14
-      })
-
-      // 4. Per-article enrichment loop.
-      for (const article of articles) {
-        const enriched = await enrichOneArticle(ctx, {
-          agent,
-          article,
-          runId,
-          candidatePool,
-          relatedPool,
-          log,
-        })
-        if (enriched.changed) articlesEnriched += 1
+      itemsConsidered = candidates.length
+      await log(`Selected ${candidates.length} unconsumed items`)
+      // Sample of what's actually in the candidate pool — surfaces
+      // whether items are local Miami stories or generic feed noise.
+      // Bounded log lines so we don't blow up the run record.
+      const sample = candidates
+        .slice(0, 5)
+        .map((c, i) => `  ${i + 1}. [${c.sourceName}] ${c.item.title.slice(0, 100)}`)
+        .join("\n")
+      if (sample) {
+        await log(`Top candidates:\n${sample}`)
       }
 
-      // 5. Future-event enrichment: re-resolve missing imageUrls.
-      const events = await ctx.runQuery(api.events.futureForAgent, {
-        agentId: agent._id,
-        limit: 30,
-      })
-      for (const ev of events) {
-        if (ev.imageUrl) continue
-        const fallbackUrls = ev.url ? [ev.url] : []
-        const hero = await resolveHero(
-          fallbackUrls,
-          `Miami ${ev.kind ?? "event"} ${ev.title}`,
+      const MIN_CANDIDATES = 3
+      if (candidates.length < MIN_CANDIDATES) {
+        await log(
+          `Skipped LLM call — ${candidates.length} candidates below ${MIN_CANDIDATES}-item threshold`,
         )
-        if (hero.source === "none") continue
-        const r = await ctx.runMutation(internal.events.enrichEvent, {
-          id: ev._id,
-          patch: { imageUrl: hero.url },
+        await ctx.runMutation(api.agentsData.finishRun, {
+          runId,
+          status: "succeeded",
+          itemsConsidered,
+          draftsCreated,
         })
-        if (r.changed) eventsEnriched += 1
+        return { runId, itemsConsidered, draftsCreated, eventsCreated }
       }
-      if (eventsEnriched > 0) {
-        await log(`Enriched ${eventsEnriched} events with images`)
+
+      // 3. Build prompt items, related-pool, full section list.
+      const draftItems: Array<DraftItem> = candidates.map((c, idx) => ({
+        index: idx,
+        source: c.sourceName,
+        url: c.item.url,
+        title: c.item.title,
+        publishedAt: c.item.publishedAt
+          ? new Date(c.item.publishedAt).toISOString().slice(0, 10)
+          : undefined,
+        body: (c.item.body ?? c.item.snippet ?? "").slice(0, 3000),
+      }))
+
+      // Every section is a routing choice — both top-level and children
+      // so the mega-desk can land directly in the most specific bucket
+      // (e.g. food vs the broader news, or marlins vs sports).
+      const allSections = await ctx.runQuery(api.sections.list, {})
+      const sectionIdBySlug = new Map<string, Id<"sections">>()
+      for (const s of allSections) sectionIdBySlug.set(s.slug, s._id)
+      const sectionChoices = allSections.map((s) => ({
+        slug: s.slug,
+        name: s.name,
+        description: s.description,
+      }))
+
+      // Related pool spans all sections too — the mega-desk needs to
+      // dedupe against the whole catalog, not one beat.
+      const relatedPool = await ctx.runQuery(api.articles.recentForLinking, {
+        limit: 25,
+        lookbackHours: 336,
+      })
+      const relatedCandidates: Array<RelatedCandidate> = relatedPool.map(
+        (a, idx) => ({
+          index: idx,
+          section: a.section?.name ?? "—",
+          title: a.title,
+          dek: a.dek,
+          publishedAt: a.publishedAt
+            ? new Date(a.publishedAt).toISOString().slice(0, 10)
+            : undefined,
+        }),
+      )
+
+      // 4. Budget gate. Opus is ~7-15¢ per call depending on item count;
+      //    we estimate from the model name.
+      const model = agent.model
+      const reservation = await ctx.runMutation(internal.budget.reserve, {
+        estimatedCents: estimatedCallCents(model),
+        label: `runMegaDesk`,
+      })
+      if (!reservation.allowed) {
+        await log(
+          `Skipped LLM call — daily budget hit (${reservation.centsSpent}¢ / ${reservation.capCents}¢)`,
+        )
+        await ctx.runMutation(api.agentsData.finishRun, {
+          runId,
+          status: "skipped",
+          itemsConsidered,
+          draftsCreated,
+          skippedReason: "budget-cap",
+        })
+        return { runId, itemsConsidered, draftsCreated, eventsCreated }
+      }
+
+      // Metric catalog — passed to the LLM so it can drop
+      // `[[metric:slug]]` tokens into draft bodies whose tags overlap.
+      const metricCatalogRows = await ctx.runQuery(api.metrics.list, {
+        limit: 24,
+      })
+      const metricCatalog = metricCatalogRows.map((m) => ({
+        slug: m.slug,
+        title: m.title,
+        unit: m.unit,
+        relatedTags: m.relatedTags,
+      }))
+
+      await log(`Calling ${model} (${reservation.centsSpent}¢ today)`)
+      const { drafts, events, metrics, rawDraftCount } = await generateDrafts({
+        systemPrompt: MEGA_SYSTEM_PROMPT,
+        model,
+        items: draftItems,
+        maxDrafts: MEGA_MAX_DRAFTS,
+        relatedCandidates,
+        sectionChoices,
+        metricCatalog,
+      })
+      const dropped = rawDraftCount - drafts.length
+      await log(
+        `LLM returned ${drafts.length} drafts (${rawDraftCount} raw, ${dropped} dropped in validation), ${events.length} events, ${metrics.length} metrics`,
+      )
+
+      // 5. Insert drafts (same dedup-via-augment + hero-resolve flow as
+      //    runDeskInternal). No author IDs — bylines moved to "From sources"
+      //    in the article header per the rip-and-replace plan.
+      const draftToArticleId = new Map<number, Id<"articles">>()
+      let draftIndex = -1
+      for (const draft of drafts) {
+        draftIndex += 1
+        const validIndices = draft.citationItemIndices.filter(
+          (i) => i >= 0 && i < candidates.length,
+        )
+        if (validIndices.length === 0) {
+          await log(`Skipped draft "${draft.title}" — no valid citations`)
+          continue
+        }
+        const citedCandidates = validIndices.map((i) => candidates[i])
+        const citations = citedCandidates.map((c) => ({
+          url: c.item.url,
+          title: c.item.title,
+          publisher: c.sourceName,
+          fetchedAt: c.item.fetchedAt,
+          snippet: c.item.snippet,
+        }))
+
+        if (
+          draft.updateOfRelatedIndex !== undefined &&
+          draft.updateOfRelatedIndex >= 0 &&
+          draft.updateOfRelatedIndex < relatedPool.length
+        ) {
+          const target = relatedPool[draft.updateOfRelatedIndex]
+          const result = await ctx.runMutation(api.articles.augmentArticle, {
+            articleId: target._id,
+            newCitations: citations,
+            newSourceItems: citedCandidates.map((c) => c.item._id),
+            patch: {
+              title: draft.title,
+              dek: draft.dek,
+              body: toSingleParagraph(draft.body),
+            },
+            agentSlug: MEGA_DESK_SLUG,
+            agentRunId: runId,
+          })
+          if (result.merged) {
+            await ctx.runMutation(api.agentsData.markItemsConsumed, {
+              itemIds: citedCandidates.map((c) => c.item._id),
+            })
+            await log(
+              `Augmented "${target.title}" (+${result.citationsAdded} citations${
+                result.contentUpdated ? ", content refreshed" : ""
+              })`,
+            )
+            continue
+          }
+        }
+
+        const hero = await resolveHero(
+          citations.map((c) => c.url),
+          draft.title,
+        )
+
+        // Section pick falls back to "news" for any draft the LLM doesn't
+        // route — every site has a news section by convention.
+        const fallbackSectionId =
+          sectionIdBySlug.get("news") ?? allSections[0]?._id
+        if (!fallbackSectionId) {
+          throw new Error("No sections configured — cannot insert draft")
+        }
+        const chosenSectionId =
+          (draft.sectionSlug
+            ? sectionIdBySlug.get(draft.sectionSlug)
+            : undefined) ?? fallbackSectionId
+
+        const article = {
+          slug: slugify(draft.suggestedSlug || draft.title),
+          title: draft.title,
+          dek: draft.dek,
+          body: toSingleParagraph(draft.body),
+          sectionId: chosenSectionId,
+          tags: cleanTags(draft.tags),
+          neighborhoods: filterNeighborhoodSlugs(draft.neighborhoodSlugs ?? []),
+          heroImage: hero.source !== "none" ? hero.url : undefined,
+          heroCaption:
+            hero.source === "source"
+              ? `Image: ${hostname(citations[0].url)}`
+              : hero.source === "wikimedia"
+                ? hero.caption
+                : undefined,
+          heroSource: hero.source,
+          citations,
+          agentSlug: MEGA_DESK_SLUG,
+          agentRunId: runId,
+          derivedFromItems: citedCandidates.map((c) => c.item._id),
+          publishedAt:
+            citedCandidates
+              .map((c) => c.item.publishedAt)
+              .filter((d): d is number => d != null)
+              .sort((a, b) => b - a)[0] ?? undefined,
+        }
+
+        const relatedIds = (draft.relatedArticleIndices ?? [])
+          .filter((i) => i >= 0 && i < relatedPool.length)
+          .map((i) => relatedPool[i]._id)
+
+        const articleId: Id<"articles"> = await ctx.runMutation(
+          api.agentsData.insertDraft,
+          {
+            article,
+            authorIds: [],
+            relatedIds: relatedIds.length > 0 ? relatedIds : undefined,
+          },
+        )
+        draftToArticleId.set(draftIndex, articleId)
+
+        await ctx.runMutation(api.agentsData.markItemsConsumed, {
+          itemIds: citedCandidates.map((c) => c.item._id),
+        })
+        draftsCreated += 1
+        await log(`Drafted "${draft.title}"`)
+      }
+
+      // 6. Insert events — same flow as runDeskInternal, just with
+      //    section pick falling back to things-to-do.
+      const fallbackEventSectionId =
+        sectionIdBySlug.get("things-to-do") ?? allSections[0]?._id
+      for (const ev of events) {
+        const validIndices = ev.citationItemIndices.filter(
+          (i) => i >= 0 && i < candidates.length,
+        )
+        if (validIndices.length === 0) continue
+        const startsAt = new Date(ev.startsAtIso).getTime()
+        if (Number.isNaN(startsAt)) continue
+        const endsAt = ev.endsAtIso
+          ? new Date(ev.endsAtIso).getTime()
+          : undefined
+        const directDraftLink =
+          ev.relatedDraftIndex !== undefined
+            ? draftToArticleId.get(ev.relatedDraftIndex)
+            : undefined
+        const llmRelated = (ev.relatedArticleIndices ?? [])
+          .filter((i) => i >= 0 && i < relatedPool.length)
+          .map((i) => relatedPool[i]._id)
+        const relatedArticleIds = Array.from(
+          new Set<Id<"articles">>(
+            [
+              ...(directDraftLink ? [directDraftLink] : []),
+              ...llmRelated,
+            ],
+          ),
+        )
+        const sourceItemIds = validIndices.map((i) => candidates[i].item._id)
+        const citedCandidates = validIndices.map((i) => candidates[i])
+        const eventCitations = citedCandidates.map((c) => ({
+          url: c.item.url,
+          title: c.item.title,
+          publisher: c.sourceName,
+          fetchedAt: c.item.fetchedAt,
+          snippet: c.item.snippet,
+        }))
+        const eventCitationUrls = [
+          ...(ev.url ? [ev.url] : []),
+          ...validIndices.map((i) => candidates[i].item.url),
+        ]
+        const eventHero = await resolveHero(
+          eventCitationUrls,
+          `Miami ${ev.title}`,
+        )
+        const eventSectionId =
+          (ev.sectionSlug
+            ? sectionIdBySlug.get(ev.sectionSlug)
+            : undefined) ?? fallbackEventSectionId
+        if (!eventSectionId) continue
+        try {
+          await ctx.runMutation(internal.events.insertExtracted, {
+            event: {
+              slug: slugify(ev.suggestedSlug || ev.title),
+              title: ev.title,
+              description: ev.description,
+              startsAt,
+              endsAt: Number.isFinite(endsAt) ? endsAt : undefined,
+              allDay: ev.allDay,
+              locationName: ev.locationName,
+              neighborhoods: filterNeighborhoodSlugs(
+                ev.neighborhoodSlugs ?? [],
+              ),
+              url: ev.url,
+              price: ev.price,
+              heroImage:
+                eventHero.source !== "none" ? eventHero.url : undefined,
+              heroSource: eventHero.source,
+              heroCaption:
+                eventHero.source === "source"
+                  ? `Image: ${hostname(eventCitations[0]?.url ?? "")}`
+                  : eventHero.source === "wikimedia"
+                    ? eventHero.caption
+                    : undefined,
+              sectionId: eventSectionId,
+              tags: cleanTags(ev.tags ?? []),
+              relatedArticleIds:
+                relatedArticleIds.length > 0 ? relatedArticleIds : undefined,
+              citations: eventCitations,
+            },
+            agentSlug: MEGA_DESK_SLUG,
+            agentRunId: runId,
+            derivedFromItems: sourceItemIds,
+          })
+          eventsCreated += 1
+        } catch (e) {
+          await log(
+            `Skipped event "${ev.title}": ${e instanceof Error ? e.message : String(e)}`,
+          )
+        }
+      }
+      if (eventsCreated > 0) {
+        await log(`Queued ${eventsCreated} events`)
+      }
+
+      // 7. Persist metrics — slug-keyed upsert. New numbers from this
+      // run replace prior values. Citations are mapped from
+      // candidate-item indices to URL/publisher records (same shape
+      // articles + events use). Skips metrics whose citationItemIndices
+      // resolve to zero candidates or whose data shape fails the
+      // schema's `v.any()` validator at insert time.
+      let metricsCreated = 0
+      for (const metric of metrics) {
+        const validIndices = metric.citationItemIndices.filter(
+          (i) => i >= 0 && i < candidates.length,
+        )
+        if (validIndices.length === 0) continue
+        const citedCandidates = validIndices.map((i) => candidates[i])
+        const citations = citedCandidates.map((c) => ({
+          url: c.item.url,
+          title: c.item.title,
+          publisher: c.sourceName,
+          fetchedAt: c.item.fetchedAt,
+        }))
+        try {
+          await ctx.runMutation(internal.metrics.upsertFromAgent, {
+            slug: metric.slug,
+            title: metric.title,
+            subtitle: metric.subtitle,
+            kind: metric.kind,
+            data: metric.data,
+            unit: metric.unit,
+            citations,
+            relatedTags: metric.relatedTags,
+            relatedSectionSlugs: metric.relatedSectionSlugs,
+          })
+          metricsCreated += 1
+        } catch (err) {
+          await log(
+            `Skipped metric "${metric.slug}": ${err instanceof Error ? err.message : String(err)}`,
+          )
+        }
+      }
+      if (metricsCreated > 0) {
+        await log(`Recorded ${metricsCreated} metrics`)
       }
 
       await ctx.runMutation(api.agentsData.finishRun, {
         runId,
         status: "succeeded",
-        itemsConsidered: articlesScanned,
-        draftsCreated: articlesEnriched,
+        itemsConsidered,
+        draftsCreated,
       })
-      return {
-        runId,
-        articlesScanned,
-        articlesEnriched,
-        eventsEnriched,
-      }
+      return { runId, itemsConsidered, draftsCreated, eventsCreated }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       await log(`FAILED: ${msg}`)
       await ctx.runMutation(api.agentsData.finishRun, {
         runId,
         status: "failed",
-        itemsConsidered: articlesScanned,
-        draftsCreated: articlesEnriched,
+        itemsConsidered,
+        draftsCreated,
         errorMessage: msg,
       })
       return {
         runId,
-        articlesScanned,
-        articlesEnriched,
-        eventsEnriched,
+        itemsConsidered,
+        draftsCreated,
+        eventsCreated,
         error: msg,
       }
     }
   },
 })
 
-// =====================================================================
-// Per-story enrichment — same pipeline as enrichDesk, scoped to a single
-// article. Picks the right desk via agentsData.deskForArticle (prefers
-// the desk that drafted the piece, falls back to the section's primary
-// desk). Surfaced in the admin queue editor so editors can refresh a
-// specific story on demand instead of waiting for a bulk pass.
-// =====================================================================
-export const enrichStory = action({
-  args: { articleId: v.id("articles") },
+// Public mega-desk action — editor-triggered "Run desk" button.
+export const runMegaDesk = action({
+  args: {},
   handler: async (
     ctx,
-    { articleId },
   ): Promise<{
-    runId?: Id<"agentRuns">
-    deskName?: string
-    changed: boolean
-    changedFields?: Array<string>
-    citationsAdded?: number
-    relatedAdded?: number
+    runId: Id<"agentRuns"> | null
+    itemsConsidered: number
+    draftsCreated: number
+    eventsCreated: number
     error?: string
   }> => {
     const userId = await getAuthUserId(ctx)
     if (!userId) throw new Error("Unauthenticated")
+    return await ctx.runAction(internal.agents.runMegaDeskInternal, {})
+  },
+})
 
-    const article = await ctx.runQuery(api.articles.getById, { id: articleId })
-    if (!article) throw new Error("Article not found")
-    if (article.status === "rejected" || article.status === "archived") {
-      throw new Error(`Cannot enrich ${article.status} article`)
-    }
-
-    const desk = await ctx.runQuery(api.agentsData.deskForArticle, {
-      articleId,
-    })
-    if (!desk) throw new Error("No desk found for this article's section")
-
-    const runId = await ctx.runMutation(api.agentsData.startRun, {
-      agentId: desk._id,
-    })
-    const log = (line: string) =>
-      ctx.runMutation(api.agentsData.appendLog, { runId, line })
-
-    try {
-      // 1. Refresh sources so the LLM sees freshest items for this desk.
-      const sources = await ctx.runQuery(
-        api.agentsData.enabledSourcesForAgent,
-        { agentId: desk._id },
-      )
-      await log(`Refreshing ${sources.length} sources before enrichment`)
-      for (const src of sources) {
-        try {
-          const adapterInput: SourceForAdapter = {
-            type: src.type,
-            url: src.url,
-            config: src.config,
-          }
-          const items = await fetchItems(adapterInput)
-          await ctx.runMutation(api.sourcesData.recordFetch, {
-            sourceId: src._id,
-            items,
-            status: "ok",
-          })
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err)
-          await ctx.runMutation(api.sourcesData.recordFetch, {
-            sourceId: src._id,
-            items: [],
-            status: "error",
-            error: msg,
-          })
-          await log(`[${src.name}] FAILED: ${msg}`)
-        }
-      }
-
-      // 2. Pull a candidate pool + related pool, then run the same helper
-      // the bulk pass uses so behavior stays in lock-step.
-      const sinceMs = Date.now() - desk.lookbackHours * 60 * 60 * 1000
-      const candidatePool = await ctx.runQuery(
-        api.agentsData.unconsumedItemsForAgent,
-        {
-          agentId: desk._id,
-          sinceMs,
-          limit: desk.maxItemsPerRun * 2,
-        },
-      )
-      const relatedPool = await ctx.runQuery(api.articles.recentForLinking, {
-        sectionId: desk.sectionId,
-        limit: 25,
-        lookbackHours: 720,
-      })
-
-      const result = await enrichOneArticle(ctx, {
-        agent: desk,
-        article,
-        runId,
-        candidatePool,
-        relatedPool,
-        log,
-      })
-
-      await ctx.runMutation(api.agentsData.finishRun, {
-        runId,
-        status: "succeeded",
-        itemsConsidered: candidatePool.length,
-        draftsCreated: result.changed ? 1 : 0,
-      })
-      return {
-        runId,
-        deskName: desk.name,
-        changed: result.changed,
-        changedFields: result.changedFields,
-        citationsAdded: result.citationsAdded,
-        relatedAdded: result.relatedAdded,
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      await log(`FAILED: ${msg}`)
-      await ctx.runMutation(api.agentsData.finishRun, {
-        runId,
-        status: "failed",
-        itemsConsidered: 0,
-        draftsCreated: 0,
-        errorMessage: msg,
-      })
-      return { runId, deskName: desk.name, changed: false, error: msg }
+// Cron tick — every 4 hours. Replaces `cronRunAllDesks`.
+export const cronRunMegaDesk = internalAction({
+  args: {},
+  handler: async (ctx): Promise<{ summary: string }> => {
+    const r = await ctx.runAction(internal.agents.runMegaDeskInternal, {})
+    if (r.error) return { summary: `mega-desk: ERROR ${r.error}` }
+    return {
+      summary: `mega-desk: ${r.draftsCreated} drafts, ${r.eventsCreated} events from ${r.itemsConsidered} items`,
     }
   },
 })
 
-// =====================================================================
-// Bulk voice refresh — drain the backlog of stories drafted under the
-// old (longer) prompt by re-rolling them through the current voice
-// rules. Each call processes up to `maxStories` (default 10) bloated
-// stories — the editor's "Re-roll voice" button on the dashboard kicks
-// this and reports how many remain. Re-uses `enrichStory` per story
-// so each gets its own run record and revision row.
-// =====================================================================
-export const bulkRefreshVoice = action({
-  args: { maxStories: v.optional(v.number()) },
+// Mega-desk backfill — widens lookback to N days for one run.
+export const megaBackfill = action({
+  args: { days: v.optional(v.number()) },
   handler: async (
     ctx,
-    { maxStories },
+    { days },
   ): Promise<{
-    processed: number
-    changed: number
-    skipped: number
-    errors: number
+    days: number
+    draftsCreated: number
+    eventsCreated: number
+    itemsConsidered: number
+    error?: string
   }> => {
     const userId = await getAuthUserId(ctx)
     if (!userId) throw new Error("Unauthenticated")
-
-    const cap = maxStories ?? 10
-    const candidates = await ctx.runQuery(
-      api.articles.needingVoiceRefresh,
-      { limit: cap, scan: 200 },
-    )
-    let processed = 0
-    let changed = 0
-    let skipped = 0
-    let errors = 0
-    for (const c of candidates) {
-      processed += 1
-      try {
-        const r = await ctx.runAction(api.agents.enrichStory, {
-          articleId: c._id,
-        })
-        if (r.error) {
-          errors += 1
-          continue
-        }
-        if (r.changed) changed += 1
-        else skipped += 1
-      } catch {
-        errors += 1
-      }
+    const totalDays = Math.max(1, Math.min(days ?? 30, 90))
+    const r = await ctx.runAction(internal.agents.runMegaDeskInternal, {
+      lookbackHoursOverride: totalDays * 24,
+    })
+    return {
+      days: totalDays,
+      draftsCreated: r.draftsCreated,
+      eventsCreated: r.eventsCreated,
+      itemsConsidered: r.itemsConsidered,
+      error: r.error,
     }
-    return { processed, changed, skipped, errors }
   },
 })

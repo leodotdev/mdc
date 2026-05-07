@@ -1,3 +1,5 @@
+import { fetchBluesky } from "./bluesky"
+import { fetchIcs } from "./ics"
 import { fetchReddit } from "./reddit"
 import { fetchRss } from "./rss"
 import { fetchWeb } from "./web"
@@ -20,9 +22,21 @@ export async function fetchItems(
       return await fetchYouTube(source)
     case "x":
       return await fetchX(source)
+    case "bluesky":
+      return await fetchBluesky(source)
     case "web":
       return await fetchWeb(source)
     case "wikipedia-otd":
       return await fetchWikipediaOtd(source)
+    case "ics":
+      return await fetchIcs(source)
+    case "data":
+      // Data sources are routed through `convex/lib/dataAdapters.ts`
+      // before they reach this dispatcher — they never produce
+      // RawItems. Reaching this branch means the caller forgot the
+      // upstream branch.
+      throw new Error(
+        "Data sources must be routed via fetchDataMetrics, not fetchItems",
+      )
   }
 }
