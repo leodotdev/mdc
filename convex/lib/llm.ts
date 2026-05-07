@@ -174,19 +174,21 @@ function buildDraftTool(sectionSlugs: Array<string>) {
   }
 
   return {
-    name: "submit_drafts",
+    name: "publish_articles",
     description:
-      "Submit one or more short article drafts to the editor's review queue. Each draft must cite at least one source item by index.",
+      "Publish one or more short articles to miami.community. Articles go live immediately — there is no editor review queue. Each article must cite at least one source item by index.",
     input_schema: {
       type: "object",
       properties: {
-        drafts: {
+        articles: {
           type: "array",
           items: {
             type: "object",
             properties: draftProperties,
             required: draftRequired,
           },
+          description:
+            "Articles to publish. This array should rarely be empty — when you have N items in the input, expect ~N articles back, minus duplicates of already-published stories and items not Miami-Dade-relevant.",
         },
         events: {
         type: "array",
@@ -346,7 +348,7 @@ function buildDraftTool(sectionSlugs: Array<string>) {
         },
       },
     },
-      required: ["drafts", "events"],
+      required: ["articles", "events"],
     },
   } as const
 }
@@ -449,11 +451,12 @@ export async function generateDrafts(opts: {
 
   const userPrompt = [
     `You may produce up to ${opts.maxDrafts} short articles.`,
-    `Return drafts ONLY by calling the \`submit_drafts\` tool. Do not return drafts in your textual response.`,
-    `Each draft MUST cite at least one source item by its bracket index above.`,
+    `Return your articles ONLY by calling the \`publish_articles\` tool. Do not return article copy in your textual response.`,
+    `Articles publish IMMEDIATELY when you submit them — there is no editor review queue. This isn't a "draft" workflow; what you submit goes straight to readers.`,
+    `Each article MUST cite at least one source item by its bracket index above.`,
     ``,
-    `EDITORIAL VOICE — read this twice before drafting.`,
-    `miami.community is the AI-edited local paper that reads like a smart friend telling you what happened in plain English. Source publications write at length for general audiences; we don't. Our job is to take their reporting and make it SHORTER, SNAPPIER, CLEARER for a busy Miami reader. If your draft reads like the source headline / lede with light edits, rewrite it.`,
+    `EDITORIAL VOICE — read this twice.`,
+    `miami.community is the AI-edited local paper that reads like a smart friend telling you what happened in plain English. Source publications write at length for general audiences; we don't. Our job is to take their reporting and make it SHORTER, SNAPPIER, CLEARER for a busy Miami reader. If your article reads like the source headline / lede with light edits, rewrite it.`,
     ``,
     `Hard rules:`,
     `- Headline: 6–10 words, ≤ 60 chars. Active voice. Lead with the news. Never copy or near-copy the source publication's headline.`,
@@ -463,19 +466,19 @@ export async function generateDrafts(opts: {
     `- Never reproduce source text verbatim — re-express in our voice.`,
     `- No headlinese / hedging clichés ("amid", "as", "after", "in a sign that", "experts say", "comes as", "raises concerns"). Cut them.`,
     `- No clickbait. No questions in headlines. No "you'll never believe", "here's what", etc.`,
-    `- The ONLY reasons to omit an item from drafts: (i) it's a duplicate of an existing article on the site (use updateOfRelatedIndex), or (ii) it's clearly not Miami-Dade-relevant (e.g. a Trump/EU trade deal headline carried by Local 10's wire). "Maybe not interesting enough" is NOT a reason to skip — draft it.`,
+    `- The ONLY reasons to omit an item from your articles array: (i) it's a duplicate of an existing article on the site (use updateOfRelatedIndex), or (ii) it's clearly not Miami-Dade-relevant (e.g. a Trump/EU trade deal headline carried by Local 10's wire). "Maybe not interesting enough" is NOT a reason to skip — publish it.`,
     relatedText
-      ? `- For each draft, look at the "Recently published articles" list below. If this draft is a follow-up, background context, or another angle on one of those, include its bracket index in \`relatedArticleIndices\`. 0–3 entries. Empty is fine — only link when the connection is real.`
+      ? `- For each article, look at the "Recently published articles" list below. If your article is a follow-up, background context, or another angle on one of those, include its bracket index in \`relatedArticleIndices\`. 0–3 entries. Empty is fine — only link when the connection is real.`
       : `- Leave \`relatedArticleIndices\` empty (no recent articles available).`,
     relatedText
-      ? `- DEDUPE — BE AGGRESSIVE. If your incoming sources cover the same NEWS EVENT, INCIDENT, PERSON, or specific TOPIC as one of the candidate articles, set \`updateOfRelatedIndex\` to that candidate's bracket index instead of producing a fresh draft. Two stories about the same person/place/incident are the same news. Two stories quoting the same officials about the same matter are the same news. Two stories listing the same upcoming concert / opening / closure are the same news. Two stories about the same legal case, the same vote, the same arrest, the same death, the same charge — ALL the same news. The system will merge your incoming sources into the existing article and re-render the body with the broader citation set. Only use \`relatedArticleIndices\` (not updateOfRelatedIndex) for clearly distinct angles or clear follow-ups (the day-after analysis, a profile of someone tangentially involved, a sidebar).`
+      ? `- DEDUPE — BE AGGRESSIVE. If your incoming sources cover the same NEWS EVENT, INCIDENT, PERSON, or specific TOPIC as one of the candidate articles, set \`updateOfRelatedIndex\` to that candidate's bracket index instead of publishing a new article. Two stories about the same person/place/incident are the same news. Two stories quoting the same officials about the same matter are the same news. Two stories listing the same upcoming concert / opening / closure are the same news. Two stories about the same legal case, the same vote, the same arrest, the same death, the same charge — ALL the same news. The system will merge your incoming sources into the existing article and re-render the body with the broader citation set. Only use \`relatedArticleIndices\` (not updateOfRelatedIndex) for clearly distinct angles or clear follow-ups (the day-after analysis, a profile of someone tangentially involved, a sidebar).`
       : "",
     sectionsText
-      ? `- For each draft, set \`sectionSlug\` to the most specific section from this desk's allowed list (below). Default to the desk's primary section if no sub-section is a clearer fit.`
+      ? `- For each article, set \`sectionSlug\` to the most specific section from this desk's allowed list (below). Default to the desk's primary section if no sub-section is a clearer fit.`
       : "",
-    `- ALSO populate \`events\`: extract any specific upcoming events mentioned in the source items. Required fields: title, description, suggestedSlug, startsAtIso (ISO 8601 with Miami offset), allDay, tags, neighborhoodSlugs, citationItemIndices, relatedArticleIndices. STRICT: only include events with an explicit date in the source — never invent dates. Pick \`sectionSlug\` from the desk's allowed sections (same options as drafts) so the event files under the right section. Empty array is fine when sources mention no concrete events.`,
+    `- ALSO populate \`events\`: extract any specific upcoming events mentioned in the source items. Required fields: title, description, suggestedSlug, startsAtIso (ISO 8601 with Miami offset), allDay, tags, neighborhoodSlugs, citationItemIndices, relatedArticleIndices. STRICT: only include events with an explicit date in the source — never invent dates. Pick \`sectionSlug\` from the desk's allowed sections (same options as articles) so the event files under the right section. Empty array is fine when sources mention no concrete events.`,
     (opts.metricCatalog ?? []).length > 0
-      ? `- INLINE METRIC EMBEDS: when a draft's tags overlap with a metric's relatedTags below, drop a \`[[metric:slug]]\` token into the body on its own line where the metric's number would naturally appear. The renderer expands the token into a compact widget. Use sparingly — at most one embed per draft, and only when the metric directly supports the story's claim. Example: a story about cost of living that overlaps with the 'miami-cost-of-living-rank' metric → drop \`[[metric:miami-cost-of-living-rank]]\` near the relevant sentence.`
+      ? `- INLINE METRIC EMBEDS: when an article's tags overlap with a metric's relatedTags below, drop a \`[[metric:slug]]\` token into the body on its own line where the metric's number would naturally appear. The renderer expands the token into a compact widget. Use sparingly — at most one embed per article, and only when the metric directly supports the story's claim. Example: a story about cost of living that overlaps with the 'miami-cost-of-living-rank' metric → drop \`[[metric:miami-cost-of-living-rank]]\` near the relevant sentence.`
       : "",
     ``,
     `Source items:`,
@@ -511,7 +514,7 @@ export async function generateDrafts(opts: {
       },
     ],
     tools: [buildDraftTool(sectionSlugs)],
-    tool_choice: { type: "tool", name: "submit_drafts" },
+    tool_choice: { type: "tool", name: "publish_articles" },
     messages: [{ role: "user", content: userPrompt }],
   })
 
@@ -520,6 +523,9 @@ export async function generateDrafts(opts: {
   )
   if (!toolUse) throw new Error("LLM did not return a tool_use block")
   const input = toolUse.input as {
+    articles?: unknown
+    /** Legacy property name — kept so older deployments mid-rename
+     *  don't drop everything. Read whichever is present. */
     drafts?: unknown
     events?: unknown
     metrics?: unknown
@@ -528,7 +534,11 @@ export async function generateDrafts(opts: {
   // when it found nothing draft-worthy this batch but still wanted to
   // emit events or metrics. Treat the absence as an empty array rather
   // than failing the run.
-  const rawDrafts = Array.isArray(input.drafts) ? input.drafts : []
+  const rawDrafts = Array.isArray(input.articles)
+    ? input.articles
+    : Array.isArray(input.drafts)
+      ? input.drafts
+      : []
   const drafts = rawDrafts
     .map(validateDraft)
     .filter((d): d is LlmDraft => d !== null)

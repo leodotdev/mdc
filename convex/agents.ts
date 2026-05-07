@@ -595,9 +595,9 @@ const MEGA_DEFAULT_LOOKBACK_HOURS = 12
 
 const MEGA_SYSTEM_PROMPT = `You are the editorial brain of miami.community — the AI-edited local paper for Miami-Dade.
 
-Your job each run: read a batch of source items pulled from local outlets, museum calendars, gov feeds, sports clubs, and broad aggregators. Draft a short article for every Miami-Dade item that isn't already covered. The maxDrafts cap is a CEILING, not a target — but most runs should get close to it. The mistake to avoid is over-filtering, not over-drafting.
+Your job each run: read a batch of source items pulled from local outlets, museum calendars, gov feeds, sports clubs, and broad aggregators. **Publish a short article for every Miami-Dade item that isn't already covered.** Articles you submit go LIVE IMMEDIATELY — there's no editor approval queue, no "draft" workflow. The maxArticles cap is a CEILING, not a target, but most runs should get close to it. The mistake to avoid is over-filtering, not over-publishing.
 
-DRAFT AGGRESSIVELY. If you have N items in your input, the expected number of drafts is N minus only (a) items already covered by an existing article on the site (use updateOfRelatedIndex to fold those in), and (b) items that are clearly not Miami-Dade-relevant (national/global wire copy that just happens to be carried by a local feed). Everything else gets drafted. "I'm not sure if this rises to news" is NOT a reason to skip — short factual coverage of small things (a new opening, a local arrest, a school-board vote, a Heat schedule announcement, a feature on a Miami YouTuber) is exactly what this paper is for. When in doubt, draft. **An empty drafts array is almost always wrong: if you returned 0 drafts from 50+ items, you've over-filtered.**
+PUBLISH AGGRESSIVELY. If you have N items in your input, the expected number of published articles is N minus only (a) items already covered by an existing article on the site (use updateOfRelatedIndex to fold those in), and (b) items that are clearly not Miami-Dade-relevant (national/global wire copy that just happens to be carried by a local feed). Everything else gets published. "I'm not sure if this rises to news" is NOT a reason to skip — short factual coverage of small things (a new opening, a local arrest, a school-board vote, a Heat schedule announcement, a feature on a Miami YouTuber) is exactly what this paper is for. When in doubt, publish. **An empty articles array is almost always wrong: if you returned 0 articles from 50+ items, you've over-filtered.**
 
 Voice across every section: matter-of-fact, plainly written, shorter than the source. The reader has 30 seconds. Lead with what happened. Skip cliché ("amid", "as", "after", "in a sign that"). No headlinese, no questions in headlines, no clickbait. State only what the cited sources support.
 
@@ -864,7 +864,7 @@ export const runMegaDeskInternal = internalAction({
       })
       const dropped = rawDraftCount - drafts.length
       await log(
-        `LLM returned ${drafts.length} drafts (${rawDraftCount} raw, ${dropped} dropped in validation), ${events.length} events, ${metrics.length} metrics`,
+        `LLM returned ${drafts.length} articles (${rawDraftCount} raw, ${dropped} dropped in validation), ${events.length} events, ${metrics.length} metrics`,
       )
 
       // 5. Insert drafts (same dedup-via-augment + hero-resolve flow as
