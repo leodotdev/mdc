@@ -531,6 +531,20 @@ export async function generateDrafts(opts: {
     events?: unknown
     metrics?: unknown
   }
+  // Diagnostic: when the model returns an empty articles array, dump
+  // a snippet of what it DID return — gives us the model's text /
+  // reasoning so we can see if it's stop-reason=max_tokens, refusal,
+  // or genuinely empty submission.
+  const incomingArticles = Array.isArray(input.articles)
+    ? input.articles
+    : Array.isArray(input.drafts)
+      ? input.drafts
+      : []
+  if (incomingArticles.length === 0) {
+    console.warn(
+      `[generateDrafts] empty articles array. response stop_reason=${response.stop_reason}, tool input keys=${Object.keys(input).join(",")}, tool input snippet=${JSON.stringify(input).slice(0, 800)}`,
+    )
+  }
   // The model occasionally calls the tool with no drafts array — usually
   // when it found nothing draft-worthy this batch but still wanted to
   // emit events or metrics. Treat the absence as an empty array rather
