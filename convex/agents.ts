@@ -582,11 +582,11 @@ export const runDesk = action({
 const MEGA_DESK_SLUG = "miami-desk"
 // Item firehose cap. 100 means more freshness gets considered each
 // run, especially during news bursts when a single source can dump
-// 30+ items at once. Opus handles the larger input fine; the budget
-// gate catches if cost spikes.
-const MEGA_MAX_ITEMS = 100
-// Drafts per run. 20 means the system can publish a meaningful chunk
-// each hour during busy windows; quiet hours still produce 0-3.
+// Items per run. 50 keeps each Sonnet call's input under ~25KB and
+// keeps the model's attention focused. Mirrors seed's
+// `maxItemsPerRun: 50` on the agent record.
+const MEGA_MAX_ITEMS = 50
+// Articles per run.
 const MEGA_MAX_DRAFTS = 20
 // Lookback window. 12h forces focus on truly recent items — anything
 // older that wasn't drafted on a previous run probably wasn't going
