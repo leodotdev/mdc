@@ -1,33 +1,60 @@
 import { convexQuery } from "@convex-dev/react-query"
-import { useQuery } from "@tanstack/react-query"
-import { createFileRoute } from "@tanstack/react-router"
+import { keepPreviousData, useQuery } from "@tanstack/react-query"
+import { Link, createFileRoute, useNavigate } from "@tanstack/react-router"
 
 import { api } from "../../../convex/_generated/api"
+import type {EventRange} from "@/lib/event-helpers";
 import { CalendarList } from "@/components/events/calendar-list"
+import { CalendarMap } from "@/components/events/calendar-map"
 import { HappeningNowStrip } from "@/components/events/happening-now-strip"
 import { PageHeader } from "@/components/editorial/page-header"
 import { BannerAd } from "@/components/site/banner-ad"
-import { bucketEventsByDay } from "@/lib/event-helpers"
+import {
+  
+  bucketEventsByDay,
+  formatRangeLabel,
+  rangeForDay,
+  rangeWindow
+} from "@/lib/event-helpers"
 import { useTranslation } from "@/lib/i18n/context"
 
-// Public events page — a single forward-looking list of every
-// approved upcoming event, grouped by day. No view switching, no
-// time-range chips, no map toggle. Pure scroll. Section filtering is
-// retained as a query param but doesn't render UI right now.
-
 const SLUG_PATTERN = /^[a-z0-9-]+$/
+const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+const RANGE_VALUES = new Set<EventRange>(["today", "weekend", "nextWeekend"])
 
 type EventsSearch = {
-  /** Section slugs to filter the feed to. Multi-select. URL-only;
-   *  no UI control on the page. */
+  range?: EventRange
+  /** Set by the subnav chevrons or the Today datepicker (single-day or
+   *  range-start). Takes precedence over `range`. */
+  day?: string
+  /** Set when the Today dropdown's range mode picks a (start, end) pair.
+   *  When present, the window is [day, until] (inclusive); otherwise it
+   *  collapses to a single-day window. */
+  until?: string
+  /** "map" — pin map of the current window's events.
+   *  "list" — forward-only infinite list of every upcoming event,
+   *           ignoring the time-range chips below. */
+  view?: "map" | "list"
+  /** Top-level section slugs to filter the feed to. Multi-select. */
   sections?: Array<string>
 }
 
-const UPCOMING_DAYS = 365
-const UPCOMING_LIMIT = 200
-
 export const Route = createFileRoute("/_site/events")({
   validateSearch: (search: Record<string, unknown>): EventsSearch => {
+    const range =
+      typeof search.range === "string" && RANGE_VALUES.has(search.range as EventRange)
+        ? (search.range as EventRange)
+        : undefined
+    const day =
+      typeof search.day === "string" && DAY_PATTERN.test(search.day)
+        ? search.day
+        : undefined
+    const until =
+      typeof search.until === "string" && DAY_PATTERN.test(search.until)
+        ? search.until
+        : undefined
+    const view =
+      search.view === "map" ? "map" : search.view === "list" ? "list" : undefined
     let sections: Array<string> | undefined
     const raw = search.sections
     if (typeof raw === "string" && raw.length > 0) {
@@ -38,14 +65,15 @@ export const Route = createFileRoute("/_site/events")({
       )
     }
     if (sections && sections.length === 0) sections = undefined
-    return { sections }
+    return { range, day, until, view, sections }
   },
   loader: async ({ context }) => {
+    // Pre-warm "today" so the page paints immediately. Other ranges
+    // refetch on the client when their chip is clicked — they're each a
+    // small windowed query so the cost is bounded.
+    const { startMs, endMs } = rangeWindow("today")
     await context.queryClient.ensureQueryData(
-      convexQuery(api.events.upcoming, {
-        limit: UPCOMING_LIMIT,
-        days: UPCOMING_DAYS,
-      }),
+      convexQuery(api.events.inRange, { rangeStart: startMs, rangeEnd: endMs }),
     )
   },
   head: () => ({
@@ -58,21 +86,54 @@ function EventsPage() {
   const search = Route.useSearch()
   const { t } = useTranslation()
 
+  // Resolve the active window. Day (chevron-stepped) wins; otherwise the
+  // explicit range; otherwise today.
+  const activeRange: EventRange | null = search.range
+    ? search.range
+    : rangeForDay(search.day) ?? (search.day ? null : "today")
+
+  const window = (() => {
+    if (search.day && search.until) {
+      // Range mode — inclusive end; bump by one day so the
+      // `inRange` query covers the whole final day.
+      const startMs = new Date(`${search.day}T00:00:00Z`).getTime()
+      const endMs =
+        new Date(`${search.until}T00:00:00Z`).getTime() + 24 * 3_600_000
+      return { startMs, endMs }
+    }
+    if (search.day) {
+      const ts = new Date(`${search.day}T00:00:00Z`).getTime()
+      return { startMs: ts, endMs: ts + 24 * 3_600_000 }
+    }
+    return rangeWindow(activeRange ?? "today")
+  })()
+
   const selectedSections = search.sections ?? []
-  const { data: sectionsList } = useQuery(convexQuery(api.sections.list, {}))
-  const sectionMatcher = makeSectionMatcher(
-    selectedSections,
-    sectionsList ?? [],
-  )
+  const { data: sections } = useQuery(convexQuery(api.sections.list, {}))
+  const sectionMatcher = makeSectionMatcher(selectedSections, sections ?? [])
 
-  const { data: events } = useQuery(
-    convexQuery(api.events.upcoming, {
-      limit: UPCOMING_LIMIT,
-      days: UPCOMING_DAYS,
+  // Windowed query for the chip-driven views (Today / Weekend / chevrons).
+  const { data: events } = useQuery({
+    ...convexQuery(api.events.inRange, {
+      rangeStart: window.startMs,
+      rangeEnd: window.endMs,
     }),
-  )
+    placeholderData: keepPreviousData,
+  })
 
-  const filtered = (events ?? []).filter(sectionMatcher)
+  // Forward-only upcoming query for the list view. Always pulls the
+  // full horizon (~year out, capped at 200) so the list scrolls without
+  // pagination plumbing. Only fires when the list view is active to
+  // avoid a wasted query on the default chip-driven render.
+  const { data: upcomingEvents } = useQuery({
+    ...convexQuery(api.events.upcoming, { limit: 200, days: 365 }),
+    enabled: search.view === "list",
+    placeholderData: keepPreviousData,
+  })
+
+  const isListView = search.view === "list"
+  const sourceEvents = isListView ? upcomingEvents : events
+  const filtered = (sourceEvents ?? []).filter(sectionMatcher)
   const daysWithEvents = (() => {
     const map = bucketEventsByDay(filtered)
     return Array.from(map.keys())
@@ -80,12 +141,22 @@ function EventsPage() {
       .map((k) => ({ dayKey: k, events: map.get(k) ?? [] }))
   })()
 
-  // "Happening now" strip — the next 24h. Same query result, just
-  // sliced to the leading window so we don't double-fetch.
+  // "Happening soon" — tiny 24h query, deduped per page.
   const now = Date.now()
-  const filteredSoon = filtered.filter(
-    (e) => e.startsAt >= now && e.startsAt < now + 24 * 3_600_000,
-  )
+  const { data: soonEvents } = useQuery({
+    ...convexQuery(api.events.inRange, {
+      rangeStart: now,
+      rangeEnd: now + 24 * 3_600_000,
+    }),
+    placeholderData: keepPreviousData,
+  })
+  const filteredSoon = (soonEvents ?? []).filter(sectionMatcher)
+
+  const headerLabel = search.day
+    ? formatDay(search.day)
+    : activeRange
+      ? formatRangeLabel(activeRange)
+      : "Today"
 
   return (
     <div className="flex flex-col gap-10">
@@ -96,18 +167,34 @@ function EventsPage() {
       />
 
       {filtered.length === 0 ? (
-        <p className="font-editorial mt-12 max-w-2xl text-lg text-muted-foreground">
-          Nothing on the calendar yet. The desk extracts events from source
-          items mentioning a concrete date — they'll appear here as feeds
-          publish.
-        </p>
+        <EmptyState activeRange={activeRange} />
+      ) : search.view === "map" ? (
+        <div className="full-bleed">
+          <CalendarMap events={filtered} />
+        </div>
+      ) : isListView ? (
+        // List view ignores the time-range chips and shows every
+        // upcoming event grouped by day, sorted ascending. No focal-day
+        // ring (chevrons are inert in this mode).
+        <section>
+          <p className="meta mb-4">All upcoming · scroll forward</p>
+          <CalendarList
+            daysWithEvents={daysWithEvents}
+            focalDay={undefined}
+            loading={false}
+            onLoadMore={() => {}}
+          />
+        </section>
       ) : (
-        <CalendarList
-          daysWithEvents={daysWithEvents}
-          focalDay={undefined}
-          loading={false}
-          onLoadMore={() => {}}
-        />
+        <section>
+          <p className="meta mb-4">{headerLabel}</p>
+          <CalendarList
+            daysWithEvents={daysWithEvents}
+            focalDay={search.day}
+            loading={false}
+            onLoadMore={() => {}}
+          />
+        </section>
       )}
 
       <BannerAd slot="events-mid" className="pt-4" />
@@ -117,6 +204,68 @@ function EventsPage() {
       <BannerAd slot="events-bottom" className="pt-4" />
     </div>
   )
+}
+
+function EmptyState({ activeRange }: { activeRange: EventRange | null }) {
+  const navigate = useNavigate()
+  // Suggest the next preset window when the active one is empty —
+  // chains today → weekend → nextWeekend.
+  const suggestion: EventRange | null = (() => {
+    if (activeRange === "today") return "weekend"
+    if (activeRange === "weekend") return "nextWeekend"
+    return null
+  })()
+  return (
+    <div className="font-editorial mt-12 max-w-2xl text-lg text-muted-foreground">
+      <p>Nothing on the calendar for this window yet.</p>
+      {suggestion ? (
+        <p className="mt-3 text-base">
+          Try{" "}
+          <Link
+            to="/events"
+            search={(prev: Record<string, unknown>) => ({
+              ...prev,
+              range: suggestion,
+              day: undefined,
+            })}
+            className="underline hover:text-foreground"
+            onClick={(e) => {
+              // Defensive — the Link does navigate, this just keeps
+              // smooth scroll-to-top from interfering.
+              e.preventDefault()
+              void navigate({
+                to: "/events",
+                search: ((prev: Record<string, unknown>) => ({
+                  ...prev,
+                  range: suggestion,
+                  day: undefined,
+                })) as never,
+              })
+            }}
+          >
+            {nextRangeLabel(suggestion)}
+          </Link>
+          {" instead."}
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
+function nextRangeLabel(r: EventRange): string {
+  if (r === "weekend") return "this weekend"
+  if (r === "nextWeekend") return "next weekend"
+  return "today"
+}
+
+function formatDay(day: string): string {
+  const ts = new Date(`${day}T00:00:00Z`).getTime()
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(ts))
 }
 
 // Build a section matcher that's true for every event whose section
@@ -132,6 +281,8 @@ function makeSectionMatcher(
 ): (e: { section?: { slug?: string } | null }) => boolean {
   if (selected.length === 0) return () => true
   const selectedSet = new Set(selected)
+  // Build a map of every section slug → its top-level (trunk) slug so a
+  // sub-section like "music" matches when the user filters on "arts".
   const trunkBySlug = new Map<string, string>()
   for (const s of sections) {
     if (!s.parentId) {
@@ -148,3 +299,4 @@ function makeSectionMatcher(
     return selectedSet.has(trunk)
   }
 }
+

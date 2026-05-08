@@ -1,4 +1,4 @@
-import { Link } from "@tanstack/react-router"
+import { Link, useLocation  } from "@tanstack/react-router"
 import { Search } from "lucide-react"
 
 import { LanguageSwitcher } from "./language-switcher"
@@ -7,6 +7,7 @@ import { MainNav } from "./main-nav"
 import { MobileNav } from "./mobile-nav"
 import { useSearchCommand } from "./search-command"
 import { SubNav } from "./sub-nav"
+import { TimeRangeNav } from "@/components/events/time-range-nav"
 import { Button } from "@/components/ui/button"
 import { useTranslation } from "@/lib/i18n/context"
 import { sectionThemeStyle, useSectionAccent } from "@/lib/section-theme"
@@ -15,6 +16,8 @@ export function Masthead() {
   const { t } = useTranslation()
   const sectionAccent = useSectionAccent()
   const { setOpen } = useSearchCommand()
+  const location = useLocation()
+  const onEventsRoute = location.pathname === "/events"
 
   // When on a section page, the entire masthead reads in that section's
   // mini-paper voice. We expose three palette steps as CSS vars on the
@@ -114,6 +117,7 @@ export function Masthead() {
         <div className="bg-background">
           <div className="container-page">
             <SubNav />
+            {onEventsRoute ? <TimeRangeNav /> : null}
           </div>
         </div>
       </div>
