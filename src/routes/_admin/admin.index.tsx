@@ -58,6 +58,7 @@ function DashboardPage() {
         <div className="flex flex-wrap items-stretch gap-2">
           <DailyBudgetControl />
           <AdsToggle />
+          <MapViewToggle />
         </div>
       </header>
 
@@ -1121,6 +1122,54 @@ function AdsToggle() {
         disabled={isLoading || toggle.isPending}
         onCheckedChange={(next) => toggle.mutate(next)}
         aria-label="Toggle advertising site-wide"
+      />
+    </label>
+  )
+}
+
+// Map-view toggle — shows/hides the "Map" pill on the public /events
+// subnav. Default off; flip on once the editor's confident the map
+// view reads well with current event volume + neighborhood coverage.
+function MapViewToggle() {
+  const convex = useConvex()
+  const queryClient = useQueryClient()
+  const { data: settings, isLoading } = useQuery(
+    convexQuery(api.siteSettings.get, {}),
+  )
+  const enabled = settings?.mapViewEnabled ?? false
+
+  const toggle = useMutation({
+    mutationFn: async (next: boolean) => {
+      await convex.mutation(api.siteSettings.setMapViewEnabled, {
+        enabled: next,
+      })
+    },
+    onSuccess: (_, next) => {
+      queryClient.invalidateQueries({
+        queryKey: convexQuery(api.siteSettings.get, {}).queryKey,
+      })
+      toast.success(
+        next ? "Map view shown on /events" : "Map view hidden on /events",
+      )
+    },
+  })
+
+  return (
+    <label
+      className="flex items-center gap-3 rounded-md border bg-card px-3 py-2"
+      title="Toggle the Map pill on the public events subnav."
+    >
+      <div className="flex flex-col items-start">
+        <span className="font-sans text-sm font-medium leading-none">
+          {enabled ? "Map on" : "Map off"}
+        </span>
+        <span className="meta text-[0.65rem]">/events map toggle</span>
+      </div>
+      <Switch
+        checked={enabled}
+        disabled={isLoading || toggle.isPending}
+        onCheckedChange={(next) => toggle.mutate(next)}
+        aria-label="Toggle map view on the public events page"
       />
     </label>
   )

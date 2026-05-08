@@ -283,6 +283,11 @@ export default defineSchema({
      *  bump it from the dashboard during news bursts and tighten it
      *  back down later. */
     dailyBudgetCents: v.optional(v.number()),
+    /** Public events page renders a "Map" view-toggle pill when this
+     *  is true. Default false — map's still wired up but hidden until
+     *  the editor flips it. Toggling propagates instantly via the
+     *  reactive subscription. */
+    mapViewEnabled: v.optional(v.boolean()),
     updatedAt: v.number(),
   }),
 

@@ -11,6 +11,7 @@ import { requireEditor } from "./lib/guard"
 // defaults below).
 
 const DEFAULT_ADS_ENABLED = true
+const DEFAULT_MAP_VIEW_ENABLED = false
 
 export const get = query({
   args: {},
@@ -19,6 +20,7 @@ export const get = query({
     return {
       adsEnabled: row?.adsEnabled ?? DEFAULT_ADS_ENABLED,
       dailyBudgetCents: row?.dailyBudgetCents ?? BUDGET_DAILY_CENTS_DEFAULT,
+      mapViewEnabled: row?.mapViewEnabled ?? DEFAULT_MAP_VIEW_ENABLED,
     }
   },
 })
@@ -34,6 +36,24 @@ export const setAdsEnabled = mutation({
     } else {
       await ctx.db.insert("siteSettings", {
         adsEnabled: enabled,
+        updatedAt: now,
+      })
+    }
+  },
+})
+
+export const setMapViewEnabled = mutation({
+  args: { enabled: v.boolean() },
+  handler: async (ctx, { enabled }) => {
+    await requireEditor(ctx)
+    const row = await ctx.db.query("siteSettings").first()
+    const now = Date.now()
+    if (row) {
+      await ctx.db.patch(row._id, { mapViewEnabled: enabled, updatedAt: now })
+    } else {
+      await ctx.db.insert("siteSettings", {
+        adsEnabled: DEFAULT_ADS_ENABLED,
+        mapViewEnabled: enabled,
         updatedAt: now,
       })
     }

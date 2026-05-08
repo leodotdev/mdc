@@ -1,6 +1,9 @@
+import { convexQuery } from "@convex-dev/react-query"
+import { useQuery } from "@tanstack/react-query"
 import { Link, useNavigate, useSearch } from "@tanstack/react-router"
 import { ChevronLeft, ChevronRight } from "lucide-react"
 
+import { api } from "../../../convex/_generated/api"
 import { SectionFilterDropdown } from "./section-filter-dropdown"
 import type {EventRange} from "@/lib/event-helpers";
 import {
@@ -83,6 +86,11 @@ const ICON_PILL_CLASS =
 
 export function TimeRangeNav() {
   const search = useSearch({ strict: false })
+  // Map view is gated behind an editor flag — hide the Map pill
+  // when off, but keep the underlying ?view=map URL still functional
+  // so editors testing it directly can preview before enabling.
+  const { data: settings } = useQuery(convexQuery(api.siteSettings.get, {}))
+  const mapViewEnabled = settings?.mapViewEnabled ?? false
   const navigate = useNavigate()
 
   // Active range = explicit range param OR (when chevron-stepped to an
@@ -217,20 +225,22 @@ export function TimeRangeNav() {
             List
           </Link>
         </li>
-        <li>
-          <Link
-            to="/events"
-            search={{
-              ...search,
-              view: view === "map" ? undefined : "map",
-            }}
-            className={PILL_CLASS}
-            data-nav-state={view === "map" ? "active" : "inactive"}
-            style={PILL_VARS}
-          >
-            Map
-          </Link>
-        </li>
+        {mapViewEnabled ? (
+          <li>
+            <Link
+              to="/events"
+              search={{
+                ...search,
+                view: view === "map" ? undefined : "map",
+              }}
+              className={PILL_CLASS}
+              data-nav-state={view === "map" ? "active" : "inactive"}
+              style={PILL_VARS}
+            >
+              Map
+            </Link>
+          </li>
+        ) : null}
 
         <li>
           <SectionFilterDropdown
