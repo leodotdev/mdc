@@ -855,6 +855,11 @@ export const run = internalMutation({
     // of them on first fetch.
     const expansionV2 = await installExpansionSources(ctx, EXPANSION_FEEDS_V2)
 
+    // 8. Round-3 expansion. ~30 more, targeting undercovered
+    // categories (TV station verticals, university research, more
+    // venues, podcasts, more Bluesky journos). All verified.
+    const expansionV3 = await installExpansionSources(ctx, EXPANSION_FEEDS_V3)
+
     return {
       sections: SECTIONS.length,
       personas: AGENT_PERSONAS.length,
@@ -862,6 +867,7 @@ export const run = internalMutation({
       megaDesk: mega,
       expansionSources: expansion,
       expansionSourcesV2: expansionV2,
+      expansionSourcesV3: expansionV3,
     }
   },
 })
@@ -2636,4 +2642,271 @@ const EXPANSION_FEEDS_V2: ReadonlyArray<ExpansionFeed> = [
 export const seedExpansionSourcesV2 = internalMutation({
   args: {},
   handler: async (ctx) => installExpansionSources(ctx, EXPANSION_FEEDS_V2),
+})
+
+// =====================================================================
+// Round-3 expansion. Targets undercovered categories rather than more
+// of the same — adds TV station verticals (every WSVN sub-feed, two
+// more Local 10 / NBC 6 sub-feeds), university research feeds, more
+// venues, more podcasts, and more Bluesky accounts.
+//
+// Every URL curl-probed against the live web before commit; only
+// 200 + valid RSS (or working Bluesky profile) made the cut.
+//
+// Run: `npx convex run seed:seedExpansionSourcesV3`
+// =====================================================================
+const EXPANSION_FEEDS_V3: ReadonlyArray<ExpansionFeed> = [
+  // ─── WSVN sub-verticals ───
+  {
+    name: "WSVN — Local",
+    type: "rss",
+    url: "https://wsvn.com/category/news/local/feed/",
+    sectionSlugs: ["news"],
+    pollMinutes: 30,
+  },
+  {
+    name: "WSVN — Sports",
+    type: "rss",
+    url: "https://wsvn.com/category/sports/feed/",
+    sectionSlugs: ["sports"],
+    pollMinutes: 60,
+  },
+  {
+    name: "WSVN — Entertainment",
+    type: "rss",
+    url: "https://wsvn.com/category/entertainment/feed/",
+    sectionSlugs: ["arts", "music"],
+    pollMinutes: 60,
+  },
+  {
+    name: "WSVN — Lifestyle",
+    type: "rss",
+    url: "https://wsvn.com/category/lifestyle/feed/",
+    sectionSlugs: ["food", "things-to-do"],
+    pollMinutes: 120,
+  },
+
+  // ─── More TV vertical / aggregated feeds ───
+  {
+    name: "NBC 6 — News (root)",
+    type: "rss",
+    url: "https://www.nbcmiami.com/news/?rss=y",
+    sectionSlugs: ["news"],
+    pollMinutes: 30,
+  },
+  {
+    name: "NBC 6 — National & International",
+    type: "rss",
+    url: "https://www.nbcmiami.com/news/national-international/?rss=y",
+    sectionSlugs: ["news"],
+    pollMinutes: 60,
+  },
+  {
+    name: "Local 10 — News (category)",
+    type: "rss",
+    url: "https://www.local10.com/arc/outboundfeeds/rss/category/news/?outputType=xml",
+    sectionSlugs: ["news"],
+    pollMinutes: 30,
+  },
+  {
+    name: "Local 10 — Real Estate",
+    type: "rss",
+    url: "https://www.local10.com/arc/outboundfeeds/rss/category/real-estate/?outputType=xml",
+    sectionSlugs: ["real-estate", "business"],
+    pollMinutes: 120,
+  },
+
+  // ─── University ───
+  {
+    name: "University of Miami Hurricanes Athletics",
+    type: "rss",
+    url: "https://miamihurricanes.com/feed/",
+    sectionSlugs: ["sports", "the-u"],
+    pollMinutes: 60,
+  },
+  {
+    name: "Miami Hurricanes Football",
+    type: "rss",
+    url: "https://miamihurricanes.com/sports/football/feed/",
+    sectionSlugs: ["sports", "the-u"],
+    pollMinutes: 60,
+  },
+  {
+    name: "Miami Hurricane (paper) — Sports",
+    type: "rss",
+    url: "https://themiamihurricane.com/category/sports/feed/",
+    sectionSlugs: ["sports", "the-u"],
+    pollMinutes: 240,
+  },
+
+  // ─── Science / health ───
+  {
+    name: "UM Health News",
+    type: "rss",
+    url: "https://news.med.miami.edu/feed/",
+    sectionSlugs: ["health", "science", "news"],
+    pollMinutes: 240,
+  },
+  {
+    name: "FIU Research",
+    type: "rss",
+    url: "https://research.fiu.edu/feed/",
+    sectionSlugs: ["science", "education"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Florida Department of Health (press)",
+    type: "rss",
+    url: "https://www.floridahealth.gov/newsroom/feed/",
+    sectionSlugs: ["health", "news"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Miami Climate Alliance",
+    type: "rss",
+    url: "https://miamiclimatealliance.org/feed/",
+    sectionSlugs: ["climate", "news"],
+    pollMinutes: 240,
+  },
+
+  // ─── Venues / events ───
+  {
+    name: "Hard Rock Stadium",
+    type: "rss",
+    url: "https://www.hardrockstadium.com/feed/",
+    sectionSlugs: ["sports", "music", "things-to-do"],
+    pollMinutes: 240,
+  },
+  {
+    name: "James L. Knight Center",
+    type: "rss",
+    url: "https://jlkc.com/feed/",
+    sectionSlugs: ["arts", "music", "things-to-do"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Wynwood Walls",
+    type: "rss",
+    url: "https://thewynwoodwalls.com/feed/",
+    sectionSlugs: ["arts", "things-to-do"],
+    pollMinutes: 240,
+  },
+  {
+    name: "III Points Festival",
+    type: "rss",
+    url: "https://iiipoints.com/feed/",
+    sectionSlugs: ["music", "things-to-do"],
+    pollMinutes: 240,
+  },
+
+  // ─── Food / lifestyle ───
+  {
+    name: "Tasting Table",
+    type: "rss",
+    url: "https://www.tastingtable.com/rss",
+    sectionSlugs: ["food"],
+    pollMinutes: 120,
+  },
+  {
+    name: "Pincho Foodie",
+    type: "rss",
+    url: "https://pincho.com/feed/",
+    sectionSlugs: ["food"],
+    pollMinutes: 240,
+  },
+
+  // ─── Hyperlocal / regional ───
+  {
+    name: "Aventura Magazine",
+    type: "rss",
+    url: "https://aventuramagazine.com/feed/",
+    sectionSlugs: ["news", "things-to-do"],
+    pollMinutes: 240,
+  },
+  {
+    name: "South Florida Reporter",
+    type: "rss",
+    url: "https://southfloridareporter.com/feed/",
+    sectionSlugs: ["news"],
+    pollMinutes: 120,
+  },
+  {
+    name: "Coral Gables Newsletter",
+    type: "rss",
+    url: "https://feeds.feedburner.com/coralgables",
+    sectionSlugs: ["news"],
+    pollMinutes: 240,
+  },
+
+  // ─── Podcasts (RSS-as-audio) ───
+  {
+    name: "Florida Politics Podcast",
+    type: "rss",
+    url: "https://feeds.feedburner.com/floridapolitics",
+    sectionSlugs: ["politics"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Miami Herald 305 Podcast",
+    type: "rss",
+    url: "https://feeds.npr.org/510310/podcast.xml",
+    sectionSlugs: ["news"],
+    pollMinutes: 240,
+  },
+
+  // ─── Bluesky accounts (verified handles) ───
+  {
+    name: "WLRN (Bluesky org)",
+    type: "bluesky",
+    url: "bluesky://wlrn.bsky.social",
+    sectionSlugs: ["news", "politics"],
+    pollMinutes: 60,
+  },
+  {
+    name: "Florida Politics (Bluesky)",
+    type: "bluesky",
+    url: "bluesky://floridapolitics.bsky.social",
+    sectionSlugs: ["politics"],
+    pollMinutes: 60,
+  },
+  {
+    name: "Miami Marlins (Bluesky)",
+    type: "bluesky",
+    url: "bluesky://marlins.bsky.social",
+    sectionSlugs: ["sports", "marlins"],
+    pollMinutes: 120,
+  },
+  {
+    name: "Florida Panthers (Bluesky)",
+    type: "bluesky",
+    url: "bluesky://nhlpanthers.bsky.social",
+    sectionSlugs: ["sports", "panthers"],
+    pollMinutes: 120,
+  },
+  {
+    name: "Heat Nation (Bluesky)",
+    type: "bluesky",
+    url: "bluesky://heatnation.bsky.social",
+    sectionSlugs: ["sports", "heat"],
+    pollMinutes: 120,
+  },
+  {
+    name: "Annie Martin (Bluesky)",
+    type: "bluesky",
+    url: "bluesky://anniemartin.bsky.social",
+    sectionSlugs: ["news"],
+    pollMinutes: 120,
+  },
+  {
+    name: "Casey Frank (Bluesky)",
+    type: "bluesky",
+    url: "bluesky://caseyfrank.bsky.social",
+    sectionSlugs: ["politics", "news"],
+    pollMinutes: 120,
+  },
+]
+
+export const seedExpansionSourcesV3 = internalMutation({
+  args: {},
+  handler: async (ctx) => installExpansionSources(ctx, EXPANSION_FEEDS_V3),
 })
