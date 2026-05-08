@@ -843,7 +843,7 @@ export const runMegaDeskInternal = internalAction({
       }))
 
       await log(`Calling ${model} (${reservation.centsSpent}¢ today)`)
-      const { drafts, events, metrics, rawDraftCount } = await generateDrafts({
+      const { drafts, events, metrics, rawDraftCount, stopReason, rawInputSnippet } = await generateDrafts({
         systemPrompt: MEGA_SYSTEM_PROMPT,
         model,
         items: draftItems,
@@ -856,6 +856,9 @@ export const runMegaDeskInternal = internalAction({
       await log(
         `LLM returned ${drafts.length} articles (${rawDraftCount} raw, ${dropped} dropped in validation), ${events.length} events, ${metrics.length} metrics`,
       )
+      if (rawDraftCount === 0) {
+        await log(`Empty articles diagnostic — stop_reason=${stopReason} input=${rawInputSnippet}`)
+      }
 
       // Mark every candidate the LLM saw as consumed — whether it made
       // it into a draft or not. Without this, items the LLM rejects
