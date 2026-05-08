@@ -32,6 +32,7 @@ import type * as lib_adapters_wikipediaOtd from "../lib/adapters/wikipediaOtd.js
 import type * as lib_adapters_x from "../lib/adapters/x.js";
 import type * as lib_adapters_youtube from "../lib/adapters/youtube.js";
 import type * as lib_budget from "../lib/budget.js";
+import type * as lib_cronGate from "../lib/cronGate.js";
 import type * as lib_dataAdapters from "../lib/dataAdapters.js";
 import type * as lib_guard from "../lib/guard.js";
 import type * as lib_llm from "../lib/llm.js";
@@ -82,6 +83,7 @@ declare const fullApi: ApiFromModules<{
   "lib/adapters/x": typeof lib_adapters_x;
   "lib/adapters/youtube": typeof lib_adapters_youtube;
   "lib/budget": typeof lib_budget;
+  "lib/cronGate": typeof lib_cronGate;
   "lib/dataAdapters": typeof lib_dataAdapters;
   "lib/guard": typeof lib_guard;
   "lib/llm": typeof lib_llm;

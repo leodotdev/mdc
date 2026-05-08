@@ -7,6 +7,7 @@ import {
   query,
 } from "./_generated/server"
 import { estimatedCallCents } from "./lib/budget"
+import { cronsEnabled } from "./lib/cronGate"
 import { generateWidgetBatch } from "./lib/llm"
 import type { WidgetEntry } from "./lib/llm"
 
@@ -236,6 +237,9 @@ export const insertEntries = internalMutation({
 export const dailyRefresh = internalAction({
   args: {},
   handler: async (ctx): Promise<{ inserted: number; skipped: Array<string> }> => {
+    if (!cronsEnabled()) {
+      return { inserted: 0, skipped: ["crons-disabled"] }
+    }
     // Budget gate. Daily widget refresh is expected to be ~10¢ — well
     // under cap, but we still book it so the system's spend accounting
     // includes widget runs alongside mega-desk runs.

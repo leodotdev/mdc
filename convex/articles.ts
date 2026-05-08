@@ -5,6 +5,7 @@ import { action, internalAction, internalMutation, mutation, query } from "./_ge
 import { cleanTags } from "./agents"
 import { requireEditor } from "./lib/guard"
 import { estimatedCallCents } from "./lib/budget"
+import { cronsEnabled } from "./lib/cronGate"
 import { generateTranslation, verifyMerge } from "./lib/llm"
 import { findHeroCandidates } from "./lib/media"
 import { compareByImportance } from "./lib/scoring"
@@ -1065,6 +1066,9 @@ export const bulkTranslateInternal = internalAction({
     translated: number
     errors: number
   }> => {
+    if (!cronsEnabled()) {
+      return { processed: 0, translated: 0, errors: 0 }
+    }
     const cap = maxArticles ?? 10
     const stale = await ctx.runQuery(api.articles.needingTranslation, {
       limit: cap,
@@ -1334,6 +1338,15 @@ export const mergeSweep = internalAction({
     merged: number
     notes: Array<string>
   }> => {
+    if (!cronsEnabled()) {
+      return {
+        scanned: 0,
+        candidates: 0,
+        verified: 0,
+        merged: 0,
+        notes: ["skipped — CRONS_ENABLED not set"],
+      }
+    }
     const since = Date.now() - MERGE_LOOKBACK_HOURS * 3_600_000
     const recent = await ctx.runQuery(api.articles.publishedRecentForMerge, {
       sinceMs: since,

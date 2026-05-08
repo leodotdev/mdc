@@ -12,6 +12,7 @@ import { cleanTags } from "./agents"
 import { attachParentAccent } from "./articles"
 import { requireEditor } from "./lib/guard"
 import { estimatedCallCents } from "./lib/budget"
+import { cronsEnabled } from "./lib/cronGate"
 import { generateEventTranslation } from "./lib/llm"
 import { findHeroCandidates } from "./lib/media"
 import { filterNeighborhoodSlugs } from "./lib/neighborhoods"
@@ -521,6 +522,9 @@ export const bulkTranslateEventsInternal = internalAction({
     translated: number
     errors: number
   }> => {
+    if (!cronsEnabled()) {
+      return { processed: 0, translated: 0, errors: 0 }
+    }
     const cap = maxEvents ?? 10
     const stale = await ctx.runQuery(api.events.needingTranslation, {
       limit: cap,

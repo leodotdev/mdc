@@ -5,6 +5,7 @@ import { action, internalAction } from "./_generated/server"
 import {  fetchItems } from "./lib/adapters"
 import { fetchDataMetrics } from "./lib/dataAdapters"
 import { estimatedCallCents } from "./lib/budget"
+import { cronsEnabled } from "./lib/cronGate"
 import { generateDrafts } from "./lib/llm"
 import { resolveHero } from "./lib/media"
 import { filterNeighborhoodSlugs } from "./lib/neighborhoods"
@@ -1171,10 +1172,16 @@ export const runMegaDesk = action({
   },
 })
 
-// Cron tick — every 4 hours. Replaces `cronRunAllDesks`.
+// Cron tick — fires on the cron schedule (every 1 hour). Gated by
+// `CRONS_ENABLED` so the dev deployment doesn't double-bill the
+// Anthropic key. Manual "Run now" through /admin uses `runMegaDesk`
+// (the public action) and bypasses this gate.
 export const cronRunMegaDesk = internalAction({
   args: {},
   handler: async (ctx): Promise<{ summary: string }> => {
+    if (!cronsEnabled()) {
+      return { summary: "mega-desk: skipped — CRONS_ENABLED not set" }
+    }
     const r = await ctx.runAction(internal.agents.runMegaDeskInternal, {})
     if (r.error) return { summary: `mega-desk: ERROR ${r.error}` }
     return {

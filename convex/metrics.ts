@@ -7,6 +7,7 @@ import {
   query,
 } from "./_generated/server"
 import { estimatedCallCents } from "./lib/budget"
+import { cronsEnabled } from "./lib/cronGate"
 import { extractMetricsFromArticles } from "./lib/llm"
 import type { ExtractMetricsArticle } from "./lib/llm"
 
@@ -150,6 +151,9 @@ export const extractRecent = internalAction({
     upserted: number
     skipped: Array<string>
   }> => {
+    if (!cronsEnabled()) {
+      return { scanned: 0, extracted: 0, upserted: 0, skipped: ["crons-disabled"] }
+    }
     const reservation = await ctx.runMutation(internal.budget.reserve, {
       estimatedCents: estimatedCallCents(EXTRACT_MODEL),
       label: "metricsExtractRecent",
