@@ -1,6 +1,7 @@
 import { v } from "convex/values"
 
 import { mutation, query } from "./_generated/server"
+import { BUDGET_DAILY_CENTS_DEFAULT } from "./lib/budget"
 import { requireEditor } from "./lib/guard"
 
 // Site-wide flags. Single-row pattern: we always read/write the first
@@ -17,6 +18,7 @@ export const get = query({
     const row = await ctx.db.query("siteSettings").first()
     return {
       adsEnabled: row?.adsEnabled ?? DEFAULT_ADS_ENABLED,
+      dailyBudgetCents: row?.dailyBudgetCents ?? BUDGET_DAILY_CENTS_DEFAULT,
     }
   },
 })
@@ -35,5 +37,32 @@ export const setAdsEnabled = mutation({
         updatedAt: now,
       })
     }
+  },
+})
+
+export const setDailyBudgetCents = mutation({
+  args: { cents: v.number() },
+  handler: async (ctx, { cents }) => {
+    await requireEditor(ctx)
+    // Sanity bounds — anything below 50¢ effectively turns the system
+    // off; anything above $50/day risks runaway spend if a bug slips
+    // past us again. Editor can extend the upper bound by editing
+    // these constants.
+    const clamped = Math.max(50, Math.min(cents, 5000))
+    const row = await ctx.db.query("siteSettings").first()
+    const now = Date.now()
+    if (row) {
+      await ctx.db.patch(row._id, {
+        dailyBudgetCents: clamped,
+        updatedAt: now,
+      })
+    } else {
+      await ctx.db.insert("siteSettings", {
+        adsEnabled: DEFAULT_ADS_ENABLED,
+        dailyBudgetCents: clamped,
+        updatedAt: now,
+      })
+    }
+    return { dailyBudgetCents: clamped }
   },
 })

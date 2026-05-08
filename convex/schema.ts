@@ -278,6 +278,11 @@ export default defineSchema({
     // Default: true (ads enabled). Toggling propagates instantly via
     // Convex's reactive subscriptions; no redeploy needed.
     adsEnabled: v.boolean(),
+    /** Daily LLM spend cap in cents. Read at every `budget.reserve`
+     *  call; falls back to a code-side default when unset. Editor can
+     *  bump it from the dashboard during news bursts and tighten it
+     *  back down later. */
+    dailyBudgetCents: v.optional(v.number()),
     updatedAt: v.number(),
   }),
 

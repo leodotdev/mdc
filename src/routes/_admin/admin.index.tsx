@@ -14,7 +14,7 @@ import {
   Sparkles,
   Wrench,
 } from "lucide-react"
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { api } from "../../../convex/_generated/api"
@@ -55,7 +55,10 @@ function DashboardPage() {
             Nothing here is a to-do.
           </p>
         </div>
-        <AdsToggle />
+        <div className="flex flex-wrap items-stretch gap-2">
+          <DailyBudgetControl />
+          <AdsToggle />
+        </div>
       </header>
 
       <DashboardGrid />
@@ -988,6 +991,93 @@ function TriggerCard({
         )}
       </button>
     </article>
+  )
+}
+
+// Daily LLM budget control — editor sets the dollar/day cap. Stored
+// in `siteSettings.dailyBudgetCents`; `budget.reserve` reads it on
+// every gate so changes take effect on the next mega-desk tick.
+function DailyBudgetControl() {
+  const convex = useConvex()
+  const queryClient = useQueryClient()
+  const { data: settings, isLoading } = useQuery(
+    convexQuery(api.siteSettings.get, {}),
+  )
+  const { data: today } = useQuery(convexQuery(api.budget.today, {}))
+  const capCents = settings?.dailyBudgetCents ?? 500
+  const [draft, setDraft] = useState<string>(String(capCents / 100))
+  // Keep input in sync with server when it changes externally (or
+  // when the data lands for the first time).
+  const lastSettled = useRef(capCents)
+  if (lastSettled.current !== capCents) {
+    lastSettled.current = capCents
+    setDraft(String(capCents / 100))
+  }
+
+  const save = useMutation({
+    mutationFn: async (cents: number) => {
+      return await convex.mutation(api.siteSettings.setDailyBudgetCents, {
+        cents,
+      })
+    },
+    onSuccess: (r) => {
+      queryClient.invalidateQueries({
+        queryKey: convexQuery(api.siteSettings.get, {}).queryKey,
+      })
+      toast.success(`Daily cap set to $${(r.dailyBudgetCents / 100).toFixed(2)}`)
+    },
+    onError: (e) => {
+      toast.error("Couldn't update budget", {
+        description: e instanceof Error ? e.message : String(e),
+      })
+    },
+  })
+
+  const submit = () => {
+    const dollars = Number(draft)
+    if (!Number.isFinite(dollars) || dollars <= 0) {
+      toast.error("Enter a positive dollar amount")
+      return
+    }
+    save.mutate(Math.round(dollars * 100))
+  }
+
+  const spentDollars = ((today?.centsSpent ?? 0) / 100).toFixed(2)
+  const capDollars = (capCents / 100).toFixed(2)
+
+  return (
+    <form
+      className="flex items-center gap-2 rounded-md border bg-card px-3 py-2"
+      onSubmit={(e) => {
+        e.preventDefault()
+        submit()
+      }}
+      title="LLM spend cap per day. Hard cap — once spent, downstream calls bail until UTC midnight."
+    >
+      <div className="flex flex-col items-start">
+        <span className="font-sans text-sm font-medium leading-none">
+          Daily cap
+        </span>
+        <span className="meta text-[0.65rem]">
+          ${spentDollars} / ${capDollars} today
+        </span>
+      </div>
+      <div className="flex items-center">
+        <span className="meta text-sm pr-1">$</span>
+        <input
+          type="number"
+          step="0.50"
+          min="0.50"
+          max="50"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={submit}
+          disabled={isLoading || save.isPending}
+          className="w-16 rounded border border-foreground/15 bg-background px-2 py-1 text-right font-mono text-sm tabular-nums focus:border-foreground/40 focus:outline-none"
+          aria-label="Daily LLM budget cap in dollars"
+        />
+      </div>
+    </form>
   )
 }
 

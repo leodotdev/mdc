@@ -13,12 +13,16 @@
 // The cap is enforced before the call, not after — and our estimates
 // are a hard ceiling for what the gate counts, so being generous with
 // the estimate is the safe direction.
-// $5/day at hourly cadence + ~15-20¢ per Opus call leaves comfortable
-// headroom (~30¢ buffer per tick × 24 ticks) without risking another
-// runaway. If real spend lands well under this, tighten back down to
-// 350-400 to set a sharper ceiling.
-export const BUDGET_DAILY_CENTS = 500
-export const BUDGET_WARNING_CENTS = 400
+// Default daily LLM spend cap in cents. The runtime value is
+// stored in `siteSettings.dailyBudgetCents` and the editor can
+// adjust it from /admin without a redeploy. This constant is the
+// fallback used until that row is set + a sanity floor for code
+// paths that can't read the settings (none currently).
+export const BUDGET_DAILY_CENTS_DEFAULT = 500
+// Warning threshold = 80% of cap; rendered on the dashboard.
+export function budgetWarningCents(capCents: number): number {
+  return Math.floor(capCents * 0.8)
+}
 
 // Conservative cents-per-call estimate by model. Used to deduct from the
 // budget before the LLM call.

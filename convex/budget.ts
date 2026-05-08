@@ -2,8 +2,8 @@ import { v } from "convex/values"
 
 import { internalMutation, query } from "./_generated/server"
 import {
-  BUDGET_DAILY_CENTS,
-  BUDGET_WARNING_CENTS,
+  BUDGET_DAILY_CENTS_DEFAULT,
+  budgetWarningCents,
   todayDayKey,
 } from "./lib/budget"
 
@@ -12,6 +12,8 @@ export const today = query({
   args: {},
   handler: async (ctx) => {
     const dayKey = todayDayKey()
+    const settings = await ctx.db.query("siteSettings").first()
+    const capCents = settings?.dailyBudgetCents ?? BUDGET_DAILY_CENTS_DEFAULT
     const row = await ctx.db
       .query("llmBudget")
       .withIndex("by_day", (q) => q.eq("dayKey", dayKey))
@@ -20,9 +22,9 @@ export const today = query({
       dayKey,
       centsSpent: row?.centsSpent ?? 0,
       callsToday: row?.callsToday ?? 0,
-      capCents: BUDGET_DAILY_CENTS,
-      warningCents: BUDGET_WARNING_CENTS,
-      overBudget: (row?.centsSpent ?? 0) >= BUDGET_DAILY_CENTS,
+      capCents,
+      warningCents: budgetWarningCents(capCents),
+      overBudget: (row?.centsSpent ?? 0) >= capCents,
     }
   },
 })
@@ -40,16 +42,20 @@ export const reserve = internalMutation({
   },
   handler: async (ctx, { estimatedCents, label }) => {
     const dayKey = todayDayKey()
+    // Read the editor-controlled cap on every call. Lets the cap
+    // change take effect on the next gate without a redeploy.
+    const settings = await ctx.db.query("siteSettings").first()
+    const capCents = settings?.dailyBudgetCents ?? BUDGET_DAILY_CENTS_DEFAULT
     const row = await ctx.db
       .query("llmBudget")
       .withIndex("by_day", (q) => q.eq("dayKey", dayKey))
       .first()
     const before = row?.centsSpent ?? 0
-    if (before + estimatedCents > BUDGET_DAILY_CENTS) {
+    if (before + estimatedCents > capCents) {
       return {
         allowed: false,
         centsSpent: before,
-        capCents: BUDGET_DAILY_CENTS,
+        capCents,
       }
     }
     if (row) {
@@ -70,7 +76,7 @@ export const reserve = internalMutation({
     return {
       allowed: true,
       centsSpent: before + estimatedCents,
-      capCents: BUDGET_DAILY_CENTS,
+      capCents,
     }
   },
 })
