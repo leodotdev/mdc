@@ -55,7 +55,6 @@ function AdminLayout() {
   const navItems = [
     { to: "/admin", label: "Dashboard" },
     { to: "/admin/published", label: "Published" },
-    { to: "/admin/events", label: "Events" },
     { to: "/admin/sources", label: "Sources" },
     { to: "/admin/runs", label: "Runs" },
   ] as const

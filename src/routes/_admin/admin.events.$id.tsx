@@ -195,7 +195,7 @@ function EventEditPage() {
               ? "rejected"
               : "moved to review"
       toast.success(`Event ${label}`)
-      void navigate({ to: "/admin/events" })
+      void navigate({ to: "/admin/published", search: { tab: "events" } })
     },
     onError: (e) => {
       toast.error("Couldn't update status", {
@@ -214,7 +214,7 @@ function EventEditPage() {
     },
     onSuccess: () => {
       toast.success("Event approved")
-      void navigate({ to: "/admin/events" })
+      void navigate({ to: "/admin/published", search: { tab: "events" } })
     },
     onError: (e) => {
       toast.error("Couldn't approve", {
@@ -232,7 +232,7 @@ function EventEditPage() {
   return (
     <div className="grid gap-10 lg:grid-cols-2">
       <section className="flex flex-col gap-4">
-        <Link to="/admin/events" className="meta hover:underline">
+        <Link to="/admin/published" search={{ tab: "events" }} className="meta hover:underline">
           ← Back to events
         </Link>
 
