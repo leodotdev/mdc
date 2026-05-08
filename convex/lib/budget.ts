@@ -13,8 +13,12 @@
 // The cap is enforced before the call, not after — and our estimates
 // are a hard ceiling for what the gate counts, so being generous with
 // the estimate is the safe direction.
-export const BUDGET_DAILY_CENTS = 250
-export const BUDGET_WARNING_CENTS = 200 // toast warning threshold
+// $5/day at hourly cadence + ~15-20¢ per Opus call leaves comfortable
+// headroom (~30¢ buffer per tick × 24 ticks) without risking another
+// runaway. If real spend lands well under this, tighten back down to
+// 350-400 to set a sharper ceiling.
+export const BUDGET_DAILY_CENTS = 500
+export const BUDGET_WARNING_CENTS = 400
 
 // Conservative cents-per-call estimate by model. Used to deduct from the
 // budget before the LLM call.
