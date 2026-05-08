@@ -1176,15 +1176,41 @@ export const runMegaDesk = action({
   },
 })
 
-// Cron tick — fires on the cron schedule (every 1 hour). Gated by
-// `CRONS_ENABLED` so the dev deployment doesn't double-bill the
-// Anthropic key. Manual "Run now" through /admin uses `runMegaDesk`
-// (the public action) and bypasses this gate.
+// Cron tick — fires on the cron schedule (every 1 hour). Gated by:
+//   - `CRONS_ENABLED` so the dev deployment doesn't double-bill the
+//     Anthropic key.
+//   - Quiet-hours window: 12am-5am Miami time (5 ticks/day) skips
+//     because there's almost no fresh local content overnight and
+//     each tick costs ~30¢. Saves ~20% of daily spend with negligible
+//     editorial impact — the morning's first tick at 6am ET catches
+//     anything that did publish overnight.
+//
+// Manual "Run now" through /admin uses `runMegaDesk` (public action)
+// and bypasses both gates.
+const QUIET_HOURS_START = 0 // 12am Miami time, inclusive
+const QUIET_HOURS_END = 5 // 5am Miami time, exclusive
+
+function miamiHour(): number {
+  return Number(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      hour: "numeric",
+      hour12: false,
+    }).format(new Date()),
+  )
+}
+
 export const cronRunMegaDesk = internalAction({
   args: {},
   handler: async (ctx): Promise<{ summary: string }> => {
     if (!cronsEnabled()) {
       return { summary: "mega-desk: skipped — CRONS_ENABLED not set" }
+    }
+    const hour = miamiHour()
+    if (hour >= QUIET_HOURS_START && hour < QUIET_HOURS_END) {
+      return {
+        summary: `mega-desk: skipped — quiet hours (${hour}:00 ET, runs resume at ${QUIET_HOURS_END}:00 ET)`,
+      }
     }
     const r = await ctx.runAction(internal.agents.runMegaDeskInternal, {})
     if (r.error) return { summary: `mega-desk: ERROR ${r.error}` }

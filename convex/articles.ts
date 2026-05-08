@@ -623,10 +623,10 @@ export const recentAnomalies = query({
       if (!a.publishedAt || a.publishedAt < since) continue
       const reasons: Array<string> = []
       if (a.title.length > 60) reasons.push(`title ${a.title.length} chars`)
-      if (a.dek.length > 120) reasons.push(`dek ${a.dek.length} chars`)
+      if (a.dek.length > 100) reasons.push(`dek ${a.dek.length} chars`)
       const bodyWords = a.body.trim().split(/\s+/).filter(Boolean).length
-      if (bodyWords < 30) reasons.push(`body ${bodyWords} words (thin)`)
-      if (bodyWords > 100) reasons.push(`body ${bodyWords} words (bloated)`)
+      if (bodyWords < 20) reasons.push(`body ${bodyWords} words (thin)`)
+      if (bodyWords > 80) reasons.push(`body ${bodyWords} words (bloated)`)
       if (!a.heroImage || a.heroSource === "none") reasons.push("no hero")
       const distinctPublishers = new Set(
         a.citations

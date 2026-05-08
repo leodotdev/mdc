@@ -115,12 +115,12 @@ function buildDraftTool(sectionSlugs: Array<string>) {
     dek: {
       type: "string",
       description:
-        "One-sentence standfirst that adds new info beyond the headline (don't restate it). HARD CAP 120 characters / ~20 words. Concrete, not vague. No 'in a sign that…' / 'amid growing concerns…' / 'experts say'. Skip if a strong dek would just rephrase the headline.",
+        "One-sentence standfirst that adds new info beyond the headline (don't restate it). TARGET 60-80 characters, HARD CAP 100. Concrete, not vague. No 'in a sign that…' / 'amid growing concerns…' / 'experts say'. Drop the dek entirely if it would just rephrase the headline.",
     },
     body: {
       type: "string",
       description:
-        "Article body in plain prose: ONE paragraph, 40–80 words. The shortest version that gives the reader who/what/where/when and why it matters in Miami. Active voice, short sentences, no line breaks, no Markdown, no bullet points. Do NOT paraphrase the source paragraph-by-paragraph — distill it.",
+        "Article body: ONE paragraph, MAX 3 SENTENCES, 30-60 words. The shortest version that gives the reader who/what/where/when and why it matters in Miami. Active voice, short sentences, no line breaks, no Markdown, no bullet points. Distill, don't paraphrase. Hitting the bottom of the range is fine — there's no minimum.",
     },
     tags: {
       type: "array",
@@ -463,8 +463,8 @@ export async function generateDrafts(opts: {
     ``,
     `Hard rules:`,
     `- Headline: 6–10 words, ≤ 60 chars. Active voice. Lead with the news. Never copy or near-copy the source publication's headline.`,
-    `- Dek: ≤ 120 chars / ~20 words. ADDS information the headline doesn't carry — don't restate. If you'd just be rewording the headline, write a shorter dek with one concrete fact (a number, a place, a name).`,
-    `- Body: ONE paragraph, 40–80 words. The shortest version that answers who/what/where/when + why a Miamian should care. Distill, don't paraphrase. Cut every sentence that doesn't add a fact.`,
+    `- Dek: TARGET 60-80 chars, HARD CAP 100. ADDS information the headline doesn't carry. Drop it entirely if you'd just be rewording the headline.`,
+    `- Body: ONE paragraph, **MAX 3 SENTENCES**, 30-60 words. Shortest version that answers who/what/where/when + why it matters in Miami. Hitting the bottom of the range is fine. Cut every sentence that doesn't add a fact.`,
     `- State only facts present in the cited items. Do not fabricate quotes, names, dates, or numbers. If something's missing, omit it.`,
     `- Never reproduce source text verbatim — re-express in our voice.`,
     `- No headlinese / hedging clichés ("amid", "as", "after", "in a sign that", "experts say", "comes as", "raises concerns"). Cut them.`,
