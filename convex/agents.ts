@@ -857,6 +857,18 @@ export const runMegaDeskInternal = internalAction({
         `LLM returned ${drafts.length} articles (${rawDraftCount} raw, ${dropped} dropped in validation), ${events.length} events, ${metrics.length} metrics`,
       )
 
+      // Mark every candidate the LLM saw as consumed — whether it made
+      // it into a draft or not. Without this, items the LLM rejects
+      // (national wire copy, generic feed noise, items that just
+      // weren't a fit) recycle endlessly on the unconsumed queue and
+      // crowd out fresh items. The mega-desk has now seen them; if
+      // they were drafts, they'll get consumed below as part of the
+      // draft-insertion loop too (idempotent patch). If they weren't,
+      // we're saying "we considered these and passed."
+      await ctx.runMutation(api.agentsData.markItemsConsumed, {
+        itemIds: candidates.map((c) => c.item._id),
+      })
+
       // 5. Insert drafts (same dedup-via-augment + hero-resolve flow as
       //    runDeskInternal). No author IDs — bylines moved to "From sources"
       //    in the article header per the rip-and-replace plan.
