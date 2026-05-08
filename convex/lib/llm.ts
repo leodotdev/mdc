@@ -508,7 +508,11 @@ export async function generateDrafts(opts: {
 
   const response = await client.messages.create({
     model: opts.model,
-    max_tokens: 4096,
+    // 16k output cap. 20 articles × (title + dek + body ≈ 600 tokens
+    // each) + events + metrics + tool-call overhead easily exceeds
+    // 4k; we were getting stop_reason=max_tokens with an EMPTY tool
+    // input because the model couldn't even finish the first article.
+    max_tokens: 16384,
     system: [
       {
         type: "text",
