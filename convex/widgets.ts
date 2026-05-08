@@ -162,7 +162,9 @@ const KINDS = [
   "quote",
 ] as const
 
-const WIDGET_MODEL = "claude-opus-4-7"
+// Sonnet handles the daily 5-widget batch perfectly well; the previous
+// Opus default added ~15¢/day for no quality gain.
+const WIDGET_MODEL = "claude-sonnet-4-6"
 
 // Public — most-recent entry per kind. Returns one map keyed by kind.
 // Skipped kinds (the LLM omitted them on the latest run) fall back to

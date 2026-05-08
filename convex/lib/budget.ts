@@ -2,32 +2,32 @@
 // before each LLM call; over-cap reservations return `{ allowed: false }`
 // and the caller logs "Skipped LLM call — daily budget hit" and bails.
 //
-// Cost estimates per call (Anthropic pricing as of 2026-Q2):
-//   - Sonnet 4.6 draft: ~$0.014 (~3.5k input + 600 output tokens)
-//   - Sonnet 4.6 translation: ~$0.005
-//   - Haiku merge verification: ~$0.005
-//   - Opus 4.7 mega-desk run: ~$0.07-0.15 depending on item count
+// Estimates were too low under Opus + 200-item batches and the system
+// burned $25/12h before we caught it. Bumped after that incident:
+//   - Sonnet 4.6 mega-desk run (50 items, ~20 articles output): ~$0.10
+//   - Sonnet 4.6 translation: ~$0.01
+//   - Haiku merge verification: ~$0.01
+//   - Opus 4.7 (any caller): kept high so anything still on Opus
+//     trips the gate aggressively.
 //
-// Cap is soft — once tripped, downstream LLM calls no-op until next
-// day. The mega-desk's 1h cadence + the merge-sweep + daily widget
-// refresh together typically land at $1.80–2.50/day.
-
-// $2.50/day ≈ $75/month. Sized for a 1h-cadence mega-desk (24 runs/day)
-// using Opus 4.7. With per-run cost averaging 7-12¢, real spend lands
-// around $1.80-$2.50/day — the cap is the ceiling, not the target. On
-// burst-y news days the gate kicks in mid-day and later runs no-op
-// gracefully.
+// The cap is enforced before the call, not after — and our estimates
+// are a hard ceiling for what the gate counts, so being generous with
+// the estimate is the safe direction.
 export const BUDGET_DAILY_CENTS = 250
 export const BUDGET_WARNING_CENTS = 200 // toast warning threshold
 
 // Conservative cents-per-call estimate by model. Used to deduct from the
-// budget before the LLM call (we don't see actual usage tokens until
-// after, and most calls are within ±30% of these values).
+// budget before the LLM call.
 export function estimatedCallCents(model: string): number {
-  if (model.startsWith("claude-opus")) return 7 // ~$0.07
-  if (model.startsWith("claude-haiku")) return 1 // ~$0.005-0.01
-  // Sonnet + everything else
-  return 2 // ~$0.014-0.02
+  // Opus is the wallet-melter — assume worst-case so the gate trips
+  // fast if anything's still routed through it.
+  if (model.startsWith("claude-opus")) return 60 // ~$0.60
+  if (model.startsWith("claude-haiku")) return 1
+  // Sonnet — mega-desk's primary model. ~10¢ per 50-item batch is a
+  // realistic upper bound; small calls (translation, single-article
+  // expansion) come in well under this and the over-estimate just
+  // means they count more conservatively against the daily cap.
+  return 10
 }
 
 // Miami-time YYYY-MM-DD key for budget bucketing.

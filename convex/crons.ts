@@ -25,14 +25,15 @@ import { internal } from "./_generated/api"
 
 const crons = cronJobs()
 
-// W2 — Mega-desk every 30 minutes. Tighter cadence so the front page
-// reflects what just happened, not what happened an hour ago. Single
-// agent, one Opus call per tick. Budget gate caps daily spend; ticks
-// that hit the cap write a "skipped" run row so /admin/runs makes
-// the cap visible at a glance.
+// W2 — Mega-desk every hour. Frequent enough that the front page
+// reflects today's news; cheap enough at Sonnet pricing that 24
+// runs/day stays well under the daily budget cap. The previous 30-min
+// cadence + Opus combo burned ~$25/12h; this keeps daily spend in the
+// $1–3 range. Budget gate caps spend; ticks that hit the cap write a
+// "skipped" run row so /admin/runs makes the cap visible.
 crons.interval(
   "run mega desk",
-  { minutes: 30 },
+  { hours: 1 },
   internal.agents.cronRunMegaDesk,
   {},
 )

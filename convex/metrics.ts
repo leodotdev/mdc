@@ -134,9 +134,9 @@ export const upsertFromAgent = internalMutation({
 //
 // This complements in-run extraction (which happens at draft time
 // inside generateDrafts): catches numbers the mega-desk missed when
-// it first processed the article. Cost: one Opus call per pass,
-// ~10-20¢ depending on article volume.
-const EXTRACT_MODEL = "claude-opus-4-7"
+// it first processed the article. Sonnet is plenty for reading
+// published bodies and pulling explicit numbers — no creative work.
+const EXTRACT_MODEL = "claude-sonnet-4-6"
 const EXTRACT_LOOKBACK_HOURS = 7 * 24
 const EXTRACT_MAX_ARTICLES = 30
 

@@ -1375,7 +1375,16 @@ export const mergeSweep = internalAction({
     const mergedLoserIds = new Set<string>()
     let verified = 0
     let merged = 0
+    // Hard cap — at hourly cadence with a permissive title-overlap
+    // floor, a quiet-news day can still surface 30+ pairs. Cap each
+    // run so a flurry of false-positive candidates can't burn cents
+    // even at 1¢ each. The unverified pairs roll into the next sweep.
+    const MAX_VERIFICATIONS_PER_RUN = 12
     for (const { a, b } of candidates) {
+      if (verified >= MAX_VERIFICATIONS_PER_RUN) {
+        notes.push(`per-run verification cap hit at ${verified}`)
+        break
+      }
       if (mergedLoserIds.has(a._id)) continue
       if (mergedLoserIds.has(b._id)) continue
       // Budget gate — verifications are cheap (~1¢) but still booked.

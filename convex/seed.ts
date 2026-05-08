@@ -1310,17 +1310,21 @@ async function installMegaDesk(ctx: {
     name: "Miami Desk",
     sectionId: news._id,
     authorId: fallbackAuthor._id,
-    model: "claude-opus-4-7",
+    // Sonnet 4.6 is ~5× cheaper than Opus and excellent at this kind
+    // of newspaper-voice rewriting + structured tool output. Opus was
+    // burning ~$25/12h at 30-min cadence; Sonnet keeps the daily run
+    // count up while the budget gate actually holds.
+    model: "claude-sonnet-4-6",
     systemPrompt: megaPrompt,
     beats: ["everything"] as Array<string>,
     enabled: true,
-    maxItemsPerRun: 200,
-    maxDraftsPerRun: 40,
-    // 24h window. With the 30-min cadence + soft "prefer fresh" rule
-    // in the prompt, the LLM picks recent items first but can still
-    // recover from a stalled deploy by drafting older candidates.
-    // Going below 24h leaves the system unable to catch up after any
-    // outage longer than the lookback.
+    // Smaller batch keeps per-call input tokens reasonable. Each item
+    // is ~500 chars × 200 → 100KB input; cutting to 50 items keeps
+    // calls under ~25KB input, which is the sweet spot for cost +
+    // model attention.
+    maxItemsPerRun: 50,
+    maxDraftsPerRun: 20,
+    // 24h window so a stalled deploy can catch up on the next tick.
     lookbackHours: 24,
   }
   if (existingMega) {

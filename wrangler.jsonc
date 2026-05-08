@@ -4,5 +4,13 @@
   "compatibility_date": "2026-04-30",
   "compatibility_flags": ["nodejs_compat"],
   "main": "@tanstack/react-start/server-entry",
-  "observability": { "enabled": true }
+  "observability": { "enabled": true },
+  // Custom-domain routing — both apex and www serve the worker. The
+  // zone must already be active in this Cloudflare account; wrangler
+  // creates the route on deploy. www → apex redirect (or vice versa)
+  // is handled by a Cloudflare redirect rule, not by the worker.
+  "routes": [
+    { "pattern": "miami.community/*", "zone_name": "miami.community" },
+    { "pattern": "www.miami.community/*", "zone_name": "miami.community" }
+  ]
 }
