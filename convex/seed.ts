@@ -1310,11 +1310,12 @@ async function installMegaDesk(ctx: {
     name: "Miami Desk",
     sectionId: news._id,
     authorId: fallbackAuthor._id,
-    // Sonnet 4.6 is ~5× cheaper than Opus and excellent at this kind
-    // of newspaper-voice rewriting + structured tool output. Opus was
-    // burning ~$25/12h at 30-min cadence; Sonnet keeps the daily run
-    // count up while the budget gate actually holds.
-    model: "claude-sonnet-4-6",
+    // Opus 4.7. We tried Sonnet to cut cost and it was over-filtering
+    // legitimate Miami stories (returning 0 articles even when the
+    // candidate pool had clear local news). Cost is back under
+    // control via the small batches (50 items, 20 articles output)
+    // + 1h cadence + dev gate, so $/day stays in the $3-4 range.
+    model: "claude-opus-4-7",
     systemPrompt: megaPrompt,
     beats: ["everything"] as Array<string>,
     enabled: true,

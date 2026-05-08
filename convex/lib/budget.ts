@@ -19,9 +19,9 @@ export const BUDGET_WARNING_CENTS = 200 // toast warning threshold
 // Conservative cents-per-call estimate by model. Used to deduct from the
 // budget before the LLM call.
 export function estimatedCallCents(model: string): number {
-  // Opus is the wallet-melter — assume worst-case so the gate trips
-  // fast if anything's still routed through it.
-  if (model.startsWith("claude-opus")) return 60 // ~$0.60
+  // Opus at 50-item input + 20-article output ≈ 15-20¢. Estimate
+  // generously so the gate trips before runaway burst.
+  if (model.startsWith("claude-opus")) return 20 // ~$0.20
   if (model.startsWith("claude-haiku")) return 1
   // Sonnet — mega-desk's primary model. ~10¢ per 50-item batch is a
   // realistic upper bound; small calls (translation, single-article
