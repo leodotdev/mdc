@@ -298,19 +298,47 @@ export const unconsumedItemsAll = query({
         .filter((s) => s.enabled)
         .map((s) => s._id),
     )
+    // Pull a wider window than the cap so the per-source cap below
+    // has room to round-robin across sources before hitting `limit`.
     const items = await ctx.db
       .query("ingestedItems")
       .withIndex("by_consumed_fetched", (q) => q.eq("consumed", false))
       .order("desc")
-      .take(limit * 4)
+      .take(limit * 10)
     const filtered = items
       .filter((i) => enabledSourceIds.has(i.sourceId) && i.fetchedAt >= sinceMs)
       .sort(
         (a, b) =>
           (b.publishedAt ?? b.fetchedAt) - (a.publishedAt ?? a.fetchedAt),
       )
+    // Per-source cap: prevents one wire-heavy feed (Local 10 carries
+    // 100+ AP items at any moment) from monopolizing the LLM's input
+    // batch and crowding out smaller hyperlocal sources. 5 items per
+    // source × 10+ sources = balanced 50-item batch.
+    const PER_SOURCE_CAP = 5
+    const perSource = new Map<string, number>()
+    const balanced: typeof filtered = []
+    for (const item of filtered) {
+      if (balanced.length >= limit) break
+      const key = item.sourceId as unknown as string
+      const taken = perSource.get(key) ?? 0
+      if (taken >= PER_SOURCE_CAP) continue
+      perSource.set(key, taken + 1)
+      balanced.push(item)
+    }
+    // If we ran short of `limit` due to the cap, fill the rest from
+    // whichever items remain (LLM still wants a full batch when the
+    // pool is small).
+    if (balanced.length < limit) {
+      const taken = new Set(balanced.map((i) => i._id))
+      for (const item of filtered) {
+        if (balanced.length >= limit) break
+        if (taken.has(item._id)) continue
+        balanced.push(item)
+      }
+    }
     return await Promise.all(
-      filtered.slice(0, limit).map(async (i) => {
+      balanced.slice(0, limit).map(async (i) => {
         const src = await ctx.db.get(i.sourceId)
         return { item: i, sourceName: src?.name ?? "(unknown)" }
       }),
