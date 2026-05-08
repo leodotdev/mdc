@@ -654,28 +654,17 @@ export const runMegaDeskInternal = internalAction({
     let eventsCreated = 0
 
     try {
-      // 1. Refresh every enabled source — but skip sources whose last
-      //    fetch is younger than their pollIntervalMinutes (defaults to
-      //    60). The mega-desk runs every 30 min; without this gate it
-      //    would re-fetch every long-tail blog every tick, burning rate
-      //    limits and wall-clock time for items that didn't change.
+      // 1. Refresh every enabled source on every tick. The earlier
+      //    poll-interval gate starved the LLM of local content — at
+      //    hourly cadence, only TV-wire sources fetch on each tick
+      //    (because their poll interval is shorter), so the candidate
+      //    queue was dominated by national wire copy and Sonnet
+      //    correctly skipped most of it. Cost of always fetching is
+      //    just network IO; no LLM per source. Worth it for queue
+      //    diversity.
       const sources = await ctx.runQuery(internal.sourcesData.listInternal, {})
-      const allEnabled = sources.filter((s) => s.enabled)
-      const tickStart = Date.now()
-      const enabled = allEnabled.filter((s) => {
-        const interval = (s.pollIntervalMinutes ?? 60) * 60_000
-        // Force-fresh if never fetched, or last fetch failed.
-        if (!s.lastFetchedAt) return true
-        if (s.lastFetchStatus === "error") return true
-        return tickStart - s.lastFetchedAt >= interval
-      })
-      const skippedFresh = allEnabled.length - enabled.length
-      await log(
-        `Refreshing ${enabled.length} of ${allEnabled.length} sources` +
-          (skippedFresh > 0
-            ? ` (${skippedFresh} skipped — fresh within their poll interval)`
-            : ""),
-      )
+      const enabled = sources.filter((s) => s.enabled)
+      await log(`Refreshing ${enabled.length} sources`)
       for (const src of enabled) {
         // `data` sources bypass the article pipeline entirely — they
         // emit metric records straight into the metrics table. The
