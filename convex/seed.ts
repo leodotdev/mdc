@@ -850,12 +850,18 @@ export const run = internalMutation({
     // seed commands to reach decent coverage.
     const expansion = await installExpansionSources(ctx, EXPANSION_FEEDS)
 
+    // 7. Round-2 expansion (verified URLs). ~30 more sources curl-
+    // probed before commit so we don't silently auto-disable a third
+    // of them on first fetch.
+    const expansionV2 = await installExpansionSources(ctx, EXPANSION_FEEDS_V2)
+
     return {
       sections: SECTIONS.length,
       personas: AGENT_PERSONAS.length,
       agents: AGENTS.length,
       megaDesk: mega,
       expansionSources: expansion,
+      expansionSourcesV2: expansionV2,
     }
   },
 })
@@ -2374,4 +2380,260 @@ const EXPANSION_FEEDS: ReadonlyArray<ExpansionFeed> = [
 export const seedExpansionSources = internalMutation({
   args: {},
   handler: async (ctx) => installExpansionSources(ctx, EXPANSION_FEEDS),
+})
+
+// =====================================================================
+// Round-2 expansion (post-verification). Every URL below was curl-
+// probed against the live web before commit, returns 200 + valid RSS
+// (or a working Bluesky profile). Adds ~30 sources targeting:
+//
+//   - TV station sub-feeds (sports / money / entertainment for Local 10
+//     and NBC 6, plus three Telemundo verticals)
+//   - Hyperlocal blogs (Refresh Miami, Coconut Grove Spotlight)
+//   - Cultural institutions (Bass, Vizcaya, PAMM events, Miami New
+//     Drama, Miami Light Project, Miami Theater Center, Coral Gables
+//     Art Cinema, Edible South Florida)
+//   - Investigations / accountability (Florida Bulldog + its govt
+//     vertical)
+//   - Real estate / business (Miami Worldcenter, Miami New Times root)
+//   - Sports blogs (Heat Nation, Hot Hot Hoops fixed URL)
+//   - Bluesky (Inter Miami CF, Miami Heat, Telemundo 51, Doug Hanks,
+//     Daniel Rivero/WLRN)
+//
+// Skipped: anything that 404'd, 403'd, returned non-RSS, or had no
+// real Miami signal during a manual sniff.
+//
+// Run: `npx convex run seed:seedExpansionSourcesV2`
+// =====================================================================
+const EXPANSION_FEEDS_V2: ReadonlyArray<ExpansionFeed> = [
+  // ─── Local TV — sub-vertical feeds (15 min cadence) ───
+  {
+    name: "Local 10 — Sports (RSS)",
+    type: "rss",
+    url: "https://www.local10.com/arc/outboundfeeds/rss/category/sports/?outputType=xml",
+    sectionSlugs: ["sports"],
+    pollMinutes: 30,
+  },
+  {
+    name: "Local 10 — Money (RSS)",
+    type: "rss",
+    url: "https://www.local10.com/arc/outboundfeeds/rss/category/money/?outputType=xml",
+    sectionSlugs: ["business", "real-estate"],
+    pollMinutes: 60,
+  },
+  {
+    name: "Local 10 — Entertainment (RSS)",
+    type: "rss",
+    url: "https://www.local10.com/arc/outboundfeeds/rss/category/entertainment/?outputType=xml",
+    sectionSlugs: ["arts", "music", "food"],
+    pollMinutes: 60,
+  },
+  {
+    name: "NBC 6 — Sports (RSS)",
+    type: "rss",
+    url: "https://www.nbcmiami.com/news/sports/?rss=y",
+    sectionSlugs: ["sports"],
+    pollMinutes: 30,
+  },
+  {
+    name: "NBC 6 — Entertainment (RSS)",
+    type: "rss",
+    url: "https://www.nbcmiami.com/entertainment/?rss=y",
+    sectionSlugs: ["arts", "music"],
+    pollMinutes: 60,
+  },
+  {
+    name: "NBC 6 — Weather (RSS)",
+    type: "rss",
+    url: "https://www.nbcmiami.com/news/weather/?rss=y",
+    sectionSlugs: ["climate", "news"],
+    pollMinutes: 30,
+  },
+
+  // ─── Telemundo 51 verticals ───
+  {
+    name: "Telemundo 51 — Política (RSS)",
+    type: "rss",
+    url: "https://www.telemundo51.com/noticias/politica/?rss=y",
+    sectionSlugs: ["politics", "news"],
+    pollMinutes: 60,
+  },
+  {
+    name: "Telemundo 51 — Deportes (RSS)",
+    type: "rss",
+    url: "https://www.telemundo51.com/deportes/?rss=y",
+    sectionSlugs: ["sports"],
+    pollMinutes: 60,
+  },
+  {
+    name: "Telemundo 51 — Local (RSS)",
+    type: "rss",
+    url: "https://www.telemundo51.com/noticias/local/?rss=y",
+    sectionSlugs: ["news"],
+    pollMinutes: 30,
+  },
+
+  // ─── Hyperlocal blogs ───
+  {
+    name: "Refresh Miami",
+    type: "rss",
+    url: "https://refreshmiami.com/feed/",
+    sectionSlugs: ["business", "news"],
+    pollMinutes: 120,
+  },
+  {
+    name: "Coconut Grove Spotlight",
+    type: "rss",
+    url: "https://www.coconutgrovespotlight.com/feed",
+    sectionSlugs: ["news"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Edible South Florida",
+    type: "rss",
+    url: "https://ediblesouthflorida.ediblecommunities.com/feed",
+    sectionSlugs: ["food"],
+    pollMinutes: 240,
+  },
+
+  // ─── Cultural institutions ───
+  {
+    name: "Bass Museum of Art",
+    type: "rss",
+    url: "https://thebass.org/feed/",
+    sectionSlugs: ["arts"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Vizcaya Museum & Gardens",
+    type: "rss",
+    url: "https://vizcaya.org/feed/",
+    sectionSlugs: ["arts", "things-to-do"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Pérez Art Museum Miami — Events",
+    type: "rss",
+    url: "https://www.pamm.org/en/events/feed/",
+    sectionSlugs: ["arts"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Miami New Drama",
+    type: "rss",
+    url: "https://www.miaminewdrama.org/feed/",
+    sectionSlugs: ["arts", "theater"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Miami Light Project",
+    type: "rss",
+    url: "https://miamilightproject.com/feed/",
+    sectionSlugs: ["arts", "music"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Miami Theater Center",
+    type: "rss",
+    url: "https://www.mtcmiami.org/feed/",
+    sectionSlugs: ["arts", "theater"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Coral Gables Art Cinema",
+    type: "rss",
+    url: "https://gablescinema.com/feed/",
+    sectionSlugs: ["arts", "film"],
+    pollMinutes: 240,
+  },
+
+  // ─── Investigations ───
+  {
+    name: "Florida Bulldog",
+    type: "rss",
+    url: "https://www.floridabulldog.org/feed/",
+    sectionSlugs: ["news", "investigations"],
+    pollMinutes: 120,
+  },
+  {
+    name: "Florida Bulldog — Government",
+    type: "rss",
+    url: "https://www.floridabulldog.org/category/government/feed/",
+    sectionSlugs: ["politics", "investigations"],
+    pollMinutes: 120,
+  },
+
+  // ─── Real estate / business ───
+  {
+    name: "Miami Worldcenter",
+    type: "rss",
+    url: "https://miamiworldcenter.com/feed/",
+    sectionSlugs: ["real-estate", "business"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Miami New Times",
+    type: "rss",
+    url: "https://www.miaminewtimes.com/feed",
+    sectionSlugs: ["news", "food", "arts"],
+    pollMinutes: 60,
+  },
+
+  // ─── Sports — additional Heat blog ───
+  {
+    name: "Heat Nation",
+    type: "rss",
+    url: "https://heatnation.com/feed/",
+    sectionSlugs: ["sports", "heat"],
+    pollMinutes: 60,
+  },
+  {
+    name: "Hot Hot Hoops (Heat blog) — fixed URL",
+    type: "rss",
+    url: "https://www.hothothoops.com/feed/",
+    sectionSlugs: ["sports", "heat"],
+    pollMinutes: 60,
+  },
+
+  // ─── Bluesky (verified handles) ───
+  {
+    name: "Telemundo 51 (Bluesky)",
+    type: "bluesky",
+    url: "bluesky://telemundo51.com",
+    sectionSlugs: ["news"],
+    pollMinutes: 30,
+  },
+  {
+    name: "Inter Miami CF (Bluesky)",
+    type: "bluesky",
+    url: "bluesky://intermiamicf.bsky.social",
+    sectionSlugs: ["sports", "soccer"],
+    pollMinutes: 60,
+  },
+  {
+    name: "Miami Heat (Bluesky)",
+    type: "bluesky",
+    url: "bluesky://miamiheat.bsky.social",
+    sectionSlugs: ["sports", "heat"],
+    pollMinutes: 60,
+  },
+  {
+    name: "Doug Hanks — Miami Herald (Bluesky)",
+    type: "bluesky",
+    url: "bluesky://doughanks.bsky.social",
+    sectionSlugs: ["politics", "news"],
+    pollMinutes: 60,
+  },
+  {
+    name: "Daniel Rivero — WLRN (Bluesky)",
+    type: "bluesky",
+    url: "bluesky://danielrivero.bsky.social",
+    sectionSlugs: ["news", "politics"],
+    pollMinutes: 60,
+  },
+]
+
+export const seedExpansionSourcesV2 = internalMutation({
+  args: {},
+  handler: async (ctx) => installExpansionSources(ctx, EXPANSION_FEEDS_V2),
 })
