@@ -73,7 +73,14 @@ const TEAMS: Array<Team> = [
 type EspnCompetitor = {
   team?: { displayName?: string; abbreviation?: string; shortDisplayName?: string }
   homeAway?: "home" | "away"
-  score?: string | { value?: number; displayValue?: string }
+  // ESPN returns scores in three different shapes depending on which
+  // endpoint and game state: a plain number for live games on the
+  // schedule endpoint, a string on completed games, or a structured
+  // object on the scoreboard endpoint. `scoreOf` normalizes all three.
+  score?: string | number | { value?: number; displayValue?: string }
+  // For live games, `linescores` is the per-inning/quarter array; the
+  // sum of its `value`s is the running total when `score` is absent.
+  linescores?: ReadonlyArray<{ value?: number; displayValue?: string }>
   winner?: boolean
 }
 
@@ -177,10 +184,37 @@ function pickRelevantEvent(events: Array<EspnEvent>): EspnEvent | null {
 }
 
 function scoreOf(c: EspnCompetitor | undefined): string | null {
-  if (!c?.score) return null
-  if (typeof c.score === "string") return c.score
-  if (typeof c.score.displayValue === "string") return c.score.displayValue
-  if (typeof c.score.value === "number") return String(c.score.value)
+  if (!c) return null
+  // Direct shapes: plain number (live schedule endpoint), plain string
+  // (completed schedule endpoint), or {value, displayValue} object
+  // (scoreboard endpoint). Plus `0` is a valid score so we can't use
+  // truthiness — check explicitly.
+  const s = c.score
+  if (typeof s === "number" && Number.isFinite(s)) return String(s)
+  if (typeof s === "string" && s.length > 0) return s
+  if (s && typeof s === "object") {
+    if (typeof s.displayValue === "string" && s.displayValue.length > 0) {
+      return s.displayValue
+    }
+    if (typeof s.value === "number" && Number.isFinite(s.value)) {
+      return String(s.value)
+    }
+  }
+  // Fallback: sum the linescores. For a live MLB game in the bottom
+  // of the 4th, linescores has 4 entries with run totals; their sum
+  // is the running score even if the top-level `score` field is
+  // missing or stale.
+  if (Array.isArray(c.linescores) && c.linescores.length > 0) {
+    let total = 0
+    let any = false
+    for (const ls of c.linescores) {
+      if (typeof ls.value === "number" && Number.isFinite(ls.value)) {
+        total += ls.value
+        any = true
+      }
+    }
+    if (any) return String(total)
+  }
   return null
 }
 
