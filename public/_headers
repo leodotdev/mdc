@@ -1,0 +1,12 @@
+# Security headers — applied to all responses served from this site.
+# Cloudflare's static-asset binding reads this file; for full coverage
+# of dynamic SSR responses, also add a matching Transform Rule in the
+# Cloudflare dashboard (Rules → Transform Rules → Modify Response Header).
+
+/*
+  Content-Security-Policy: default-src 'self'; img-src 'self' https: data: blob:; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com https://pagead2.googlesyndication.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; connect-src 'self' https://*.convex.cloud wss://*.convex.cloud https://public.api.bsky.app https://en.wikipedia.org; frame-src https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com https://googleads.g.doubleclick.net; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: geolocation=(), microphone=(), camera=()
+  Strict-Transport-Security: max-age=31536000; includeSubDomains

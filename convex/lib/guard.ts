@@ -1,5 +1,10 @@
 import { getAuthUserId } from "@convex-dev/auth/server"
-import type { MutationCtx, QueryCtx } from "../_generated/server"
+import { internal } from "../_generated/api"
+import type {
+  ActionCtx,
+  MutationCtx,
+  QueryCtx,
+} from "../_generated/server"
 
 export async function requireEditor(
   ctx: QueryCtx | MutationCtx,
@@ -29,4 +34,13 @@ export async function isEditor(
   } catch {
     return false
   }
+}
+
+// Action-context variant — actions can't `ctx.db.query` directly, so
+// we delegate to an internal query that performs the same check. Use
+// this on any public action that should be editor-only (mega-desk
+// runner, manual sweeps, anything that spends Anthropic credit).
+export async function requireEditorInAction(ctx: ActionCtx): Promise<void> {
+  const ok = await ctx.runQuery(internal.lib.guardData.checkEditor, {})
+  if (!ok) throw new Error("Forbidden: editor access required")
 }

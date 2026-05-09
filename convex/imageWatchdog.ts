@@ -17,6 +17,7 @@ import {
   internalMutation,
   query,
 } from "./_generated/server"
+import { requireEditorInAction } from "./lib/guard"
 import { findHeroCandidates, isLowQualityHero } from "./lib/media"
 import type { Doc } from "./_generated/dataModel"
 
@@ -326,7 +327,7 @@ export const runNow = action({
     eventsChecked: number
     eventsFixed: number
   }> => {
-    await ctx.runQuery(api.me.current, {})
+    await requireEditorInAction(ctx)
     return await ctx.runAction(internal.imageWatchdog.cronTick, {})
   },
 })
@@ -340,7 +341,7 @@ export const reresolveOne = action({
     ctx,
     { articleId },
   ): Promise<{ replaced: boolean; newUrl?: string }> => {
-    await ctx.runQuery(api.me.current, {})
+    await requireEditorInAction(ctx)
     const article = await ctx.runQuery(api.articles.getById, { id: articleId })
     if (!article || !article.heroImage) {
       return { replaced: false }

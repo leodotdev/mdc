@@ -13,6 +13,7 @@ import { attachParentAccent } from "./articles"
 import { requireEditor } from "./lib/guard"
 import { estimatedCallCents } from "./lib/budget"
 import { cronsEnabled } from "./lib/cronGate"
+import { requireEditorInAction } from "./lib/guard"
 import { generateEventTranslation } from "./lib/llm"
 import { findHeroCandidates } from "./lib/media"
 import { filterNeighborhoodSlugs } from "./lib/neighborhoods"
@@ -630,6 +631,7 @@ export const findHeroOptions = action({
     candidates: Array<HeroCandidate>
     diagnostics: HeroFinderDiagnostics
   }> => {
+    await requireEditorInAction(ctx)
     const event = await ctx.runQuery(api.events.getByIdAdmin, { id: eventId })
     if (!event) {
       return {

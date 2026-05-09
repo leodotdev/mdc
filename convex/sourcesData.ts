@@ -41,6 +41,57 @@ export const getForAdapter = query({
   },
 })
 
+// SSRF guard for editor-supplied source URLs. Blocks IP literals,
+// localhost, link-local, and private RFC1918 ranges so a malicious
+// URL can't probe internal infra. Special-cased schemes:
+//   - http://, https://: must resolve to public DNS (we don't DNS
+//     here; we just block raw-IP and known private hostnames).
+//   - bluesky://, at://: the bluesky adapter's own URL convention.
+//   - everything else: rejected.
+function assertSafeSourceUrl(url: string, type: string): void {
+  // Bluesky uses its own URL convention; the adapter constructs the
+  // actual HTTPS endpoint internally. No SSRF surface.
+  if (type === "bluesky") {
+    if (!/^bluesky:\/\//i.test(url) && !/^at:\/\//i.test(url)) {
+      throw new Error("Bluesky source URLs must start with bluesky:// or at://")
+    }
+    return
+  }
+  // YouTube source URLs are channel handles or playlist IDs handled
+  // server-side, not arbitrary URLs.
+  if (type === "youtube") return
+  // Wikipedia-OTD / data adapters may use specific URL schemes.
+  if (type === "wikipedia-otd") return
+
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    throw new Error(`Source URL is not a valid URL: ${url}`)
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw new Error(`Only http(s) source URLs allowed, got ${parsed.protocol}`)
+  }
+  const host = parsed.hostname.toLowerCase()
+  // Block IP literals (v4 + v6) — we want named hosts only so
+  // someone can't supply 127.0.0.1, 169.254.169.254, etc.
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(host) || host.includes(":")) {
+    throw new Error(`IP-literal source URLs not allowed: ${host}`)
+  }
+  // Block obvious internal hostnames.
+  const blocked = [
+    "localhost",
+    "localhost.localdomain",
+    "metadata.google.internal",
+  ]
+  if (blocked.includes(host)) {
+    throw new Error(`Internal hostname not allowed: ${host}`)
+  }
+  if (host.endsWith(".local") || host.endsWith(".internal")) {
+    throw new Error(`Internal hostname not allowed: ${host}`)
+  }
+}
+
 export const create = mutation({
   args: {
     name: v.string(),
@@ -49,6 +100,7 @@ export const create = mutation({
       v.literal("reddit"),
       v.literal("youtube"),
       v.literal("x"),
+      v.literal("bluesky"),
       v.literal("web"),
       v.literal("wikipedia-otd"),
       v.literal("ics"),
@@ -61,6 +113,7 @@ export const create = mutation({
   },
   handler: async (ctx, args) => {
     await requireEditor(ctx)
+    assertSafeSourceUrl(args.url, args.type)
     return await ctx.db.insert("sources", args)
   },
 })
@@ -76,6 +129,11 @@ export const update = mutation({
   },
   handler: async (ctx, { sourceId, ...patch }) => {
     await requireEditor(ctx)
+    if (patch.url !== undefined) {
+      const existing = await ctx.db.get(sourceId)
+      if (!existing) throw new Error("Source not found")
+      assertSafeSourceUrl(patch.url, existing.type)
+    }
     const cleaned: Record<string, unknown> = {}
     for (const [key, value] of Object.entries(patch)) {
       if (value !== undefined) cleaned[key] = value

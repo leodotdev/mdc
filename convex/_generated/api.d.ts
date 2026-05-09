@@ -35,6 +35,7 @@ import type * as lib_budget from "../lib/budget.js";
 import type * as lib_cronGate from "../lib/cronGate.js";
 import type * as lib_dataAdapters from "../lib/dataAdapters.js";
 import type * as lib_guard from "../lib/guard.js";
+import type * as lib_guardData from "../lib/guardData.js";
 import type * as lib_llm from "../lib/llm.js";
 import type * as lib_media from "../lib/media.js";
 import type * as lib_neighborhoods from "../lib/neighborhoods.js";
@@ -86,6 +87,7 @@ declare const fullApi: ApiFromModules<{
   "lib/cronGate": typeof lib_cronGate;
   "lib/dataAdapters": typeof lib_dataAdapters;
   "lib/guard": typeof lib_guard;
+  "lib/guardData": typeof lib_guardData;
   "lib/llm": typeof lib_llm;
   "lib/media": typeof lib_media;
   "lib/neighborhoods": typeof lib_neighborhoods;

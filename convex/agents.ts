@@ -1,4 +1,3 @@
-import { getAuthUserId } from "@convex-dev/auth/server"
 import { v } from "convex/values"
 import { api, internal } from "./_generated/api"
 import { action, internalAction } from "./_generated/server"
@@ -6,6 +5,7 @@ import {  fetchItems } from "./lib/adapters"
 import { fetchDataMetrics } from "./lib/dataAdapters"
 import { estimatedCallCents } from "./lib/budget"
 import { cronsEnabled } from "./lib/cronGate"
+import { requireEditorInAction } from "./lib/guard"
 import { generateDrafts } from "./lib/llm"
 import { resolveHero } from "./lib/media"
 import { filterNeighborhoodSlugs } from "./lib/neighborhoods"
@@ -554,8 +554,7 @@ export const runDesk = action({
     draftsCreated: number
     error?: string
   }> => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) throw new Error("Unauthenticated")
+    await requireEditorInAction(ctx)
     return await ctx.runAction(internal.agents.runDeskInternal, {
       agentSlug,
     })
@@ -1159,6 +1158,8 @@ export const runMegaDeskInternal = internalAction({
 })
 
 // Public mega-desk action — editor-triggered "Run desk" button.
+// Editor-gated, not just authenticated: any signed-in user could
+// otherwise force an Opus call and burn the daily budget.
 export const runMegaDesk = action({
   args: {},
   handler: async (
@@ -1170,8 +1171,7 @@ export const runMegaDesk = action({
     eventsCreated: number
     error?: string
   }> => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) throw new Error("Unauthenticated")
+    await requireEditorInAction(ctx)
     return await ctx.runAction(internal.agents.runMegaDeskInternal, {})
   },
 })
@@ -1233,8 +1233,7 @@ export const megaBackfill = action({
     itemsConsidered: number
     error?: string
   }> => {
-    const userId = await getAuthUserId(ctx)
-    if (!userId) throw new Error("Unauthenticated")
+    await requireEditorInAction(ctx)
     const totalDays = Math.max(1, Math.min(days ?? 30, 90))
     const r = await ctx.runAction(internal.agents.runMegaDeskInternal, {
       lookbackHoursOverride: totalDays * 24,

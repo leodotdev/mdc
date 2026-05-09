@@ -6,6 +6,7 @@ import { cleanTags } from "./agents"
 import { requireEditor } from "./lib/guard"
 import { estimatedCallCents } from "./lib/budget"
 import { cronsEnabled } from "./lib/cronGate"
+import { requireEditorInAction } from "./lib/guard"
 import { generateTranslation, verifyMerge } from "./lib/llm"
 import { findHeroCandidates } from "./lib/media"
 import { compareByImportance } from "./lib/scoring"
@@ -806,6 +807,7 @@ export const findHeroOptions = action({
     candidates: Array<HeroCandidate>
     diagnostics: HeroFinderDiagnostics
   }> => {
+    await requireEditorInAction(ctx)
     const article = await ctx.runQuery(api.articles.getById, { id: articleId })
     if (!article) {
       return {
