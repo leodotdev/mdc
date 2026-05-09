@@ -860,6 +860,11 @@ export const run = internalMutation({
     // venues, podcasts, more Bluesky journos). All verified.
     const expansionV3 = await installExpansionSources(ctx, EXPANSION_FEEDS_V3)
 
+    // 9. Round-4 expansion. Strict Miami-only (no statewide noise) —
+    // every TV station's remaining sub-verticals, neighborhood blogs,
+    // university athletics, more Bluesky journos. ~45 sources.
+    const expansionV4 = await installExpansionSources(ctx, EXPANSION_FEEDS_V4)
+
     return {
       sections: SECTIONS.length,
       personas: AGENT_PERSONAS.length,
@@ -868,6 +873,7 @@ export const run = internalMutation({
       expansionSources: expansion,
       expansionSourcesV2: expansionV2,
       expansionSourcesV3: expansionV3,
+      expansionSourcesV4: expansionV4,
     }
   },
 })
@@ -2909,4 +2915,346 @@ const EXPANSION_FEEDS_V3: ReadonlyArray<ExpansionFeed> = [
 export const seedExpansionSourcesV3 = internalMutation({
   args: {},
   handler: async (ctx) => installExpansionSources(ctx, EXPANSION_FEEDS_V3),
+})
+
+// =====================================================================
+// Round-4 expansion. Strict Miami-only — neighborhood blogs, hyperlocal
+// magazines, university athletics, more TV station verticals (Local 10
+// / NBC 6 / WSVN / Telemundo all have ~10 sub-verticals each, and they
+// all return 200 + valid RSS), more Bluesky journos. Every URL was
+// curl-probed against the live web.
+//
+// Excludes anything statewide/national that brings noise to the LLM
+// candidate queue.
+//
+// Run: `npx convex run seed:seedExpansionSourcesV4`
+// =====================================================================
+const EXPANSION_FEEDS_V4: ReadonlyArray<ExpansionFeed> = [
+  // ─── Local 10 sub-verticals ───
+  {
+    name: "Local 10 — Travel",
+    type: "rss",
+    url: "https://www.local10.com/arc/outboundfeeds/rss/category/travel/?outputType=xml",
+    sectionSlugs: ["things-to-do"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Local 10 — Tech",
+    type: "rss",
+    url: "https://www.local10.com/arc/outboundfeeds/rss/category/tech/?outputType=xml",
+    sectionSlugs: ["business", "science"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Local 10 — Health",
+    type: "rss",
+    url: "https://www.local10.com/arc/outboundfeeds/rss/category/health/?outputType=xml",
+    sectionSlugs: ["health", "science"],
+    pollMinutes: 120,
+  },
+  {
+    name: "Local 10 — Lifestyle",
+    type: "rss",
+    url: "https://www.local10.com/arc/outboundfeeds/rss/category/lifestyle/?outputType=xml",
+    sectionSlugs: ["food", "things-to-do"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Local 10 — Food",
+    type: "rss",
+    url: "https://www.local10.com/arc/outboundfeeds/rss/category/food/?outputType=xml",
+    sectionSlugs: ["food"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Local 10 — Pets",
+    type: "rss",
+    url: "https://www.local10.com/arc/outboundfeeds/rss/category/pets/?outputType=xml",
+    sectionSlugs: ["nature"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Local 10 — Education",
+    type: "rss",
+    url: "https://www.local10.com/arc/outboundfeeds/rss/category/education/?outputType=xml",
+    sectionSlugs: ["education"],
+    pollMinutes: 120,
+  },
+
+  // ─── NBC 6 sub-verticals ───
+  {
+    name: "NBC 6 — Health",
+    type: "rss",
+    url: "https://www.nbcmiami.com/news/health/?rss=y",
+    sectionSlugs: ["health"],
+    pollMinutes: 120,
+  },
+  {
+    name: "NBC 6 — Politics",
+    type: "rss",
+    url: "https://www.nbcmiami.com/news/politics/?rss=y",
+    sectionSlugs: ["politics"],
+    pollMinutes: 60,
+  },
+  {
+    name: "NBC 6 — Investigations",
+    type: "rss",
+    url: "https://www.nbcmiami.com/investigations/?rss=y",
+    sectionSlugs: ["news", "investigations"],
+    pollMinutes: 120,
+  },
+  {
+    name: "NBC 6 — Education",
+    type: "rss",
+    url: "https://www.nbcmiami.com/news/education/?rss=y",
+    sectionSlugs: ["education"],
+    pollMinutes: 120,
+  },
+  {
+    name: "NBC 6 — Real Estate",
+    type: "rss",
+    url: "https://www.nbcmiami.com/news/real-estate/?rss=y",
+    sectionSlugs: ["real-estate", "business"],
+    pollMinutes: 120,
+  },
+
+  // ─── WSVN sub-verticals ───
+  {
+    name: "WSVN — Politics",
+    type: "rss",
+    url: "https://wsvn.com/category/politics/feed/",
+    sectionSlugs: ["politics"],
+    pollMinutes: 60,
+  },
+  {
+    name: "WSVN — Health",
+    type: "rss",
+    url: "https://wsvn.com/category/health/feed/",
+    sectionSlugs: ["health"],
+    pollMinutes: 120,
+  },
+  {
+    name: "WSVN — Investigations",
+    type: "rss",
+    url: "https://wsvn.com/category/investigations/feed/",
+    sectionSlugs: ["news", "investigations"],
+    pollMinutes: 120,
+  },
+  {
+    name: "WSVN — Travel",
+    type: "rss",
+    url: "https://wsvn.com/category/travel/feed/",
+    sectionSlugs: ["things-to-do"],
+    pollMinutes: 240,
+  },
+  {
+    name: "WSVN — Food",
+    type: "rss",
+    url: "https://wsvn.com/category/food/feed/",
+    sectionSlugs: ["food"],
+    pollMinutes: 120,
+  },
+  {
+    name: "WSVN — Education",
+    type: "rss",
+    url: "https://wsvn.com/category/education/feed/",
+    sectionSlugs: ["education"],
+    pollMinutes: 120,
+  },
+  {
+    name: "WSVN — Weather",
+    type: "rss",
+    url: "https://wsvn.com/category/weather/feed/",
+    sectionSlugs: ["climate"],
+    pollMinutes: 60,
+  },
+
+  // ─── Telemundo 51 verticals ───
+  {
+    name: "Telemundo 51 — Salud",
+    type: "rss",
+    url: "https://www.telemundo51.com/salud/?rss=y",
+    sectionSlugs: ["health"],
+    pollMinutes: 120,
+  },
+  {
+    name: "Telemundo 51 — Entretenimiento",
+    type: "rss",
+    url: "https://www.telemundo51.com/entretenimiento/?rss=y",
+    sectionSlugs: ["arts", "music"],
+    pollMinutes: 120,
+  },
+  {
+    name: "Telemundo 51 — Estilo",
+    type: "rss",
+    url: "https://www.telemundo51.com/estilo/?rss=y",
+    sectionSlugs: ["food", "things-to-do"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Telemundo 51 — Gente",
+    type: "rss",
+    url: "https://www.telemundo51.com/gente/?rss=y",
+    sectionSlugs: ["news"],
+    pollMinutes: 120,
+  },
+
+  // ─── Hyperlocal Miami neighborhoods ───
+  {
+    name: "Gables Insider",
+    type: "rss",
+    url: "https://gablesinsider.com/feed/",
+    sectionSlugs: ["news"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Calle Ocho News (Little Havana)",
+    type: "rss",
+    url: "https://www.calleochonews.com/feed/",
+    sectionSlugs: ["news", "things-to-do"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Doral Family Journal",
+    type: "rss",
+    url: "https://doralfamilyjournal.com/feed/",
+    sectionSlugs: ["news"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Key Biscayne Magazine",
+    type: "rss",
+    url: "https://keybiscaynemag.com/feed/",
+    sectionSlugs: ["news", "things-to-do"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Miami Geographic",
+    type: "rss",
+    url: "https://miamigeographic.com/feed/",
+    sectionSlugs: ["news", "miami-history"],
+    pollMinutes: 240,
+  },
+
+  // ─── Events / lifestyle ───
+  {
+    name: "Soul of Miami (events)",
+    type: "rss",
+    url: "https://www.soulofmiami.org/feed/",
+    sectionSlugs: ["things-to-do", "music"],
+    pollMinutes: 60,
+  },
+  {
+    name: "Miami Mom Collective",
+    type: "rss",
+    url: "https://miamimomcollective.com/feed/",
+    sectionSlugs: ["things-to-do"],
+    pollMinutes: 240,
+  },
+
+  // ─── Health / hospitals ───
+  {
+    name: "South Florida Hospital News",
+    type: "rss",
+    url: "https://southfloridahospitalnews.com/feed/",
+    sectionSlugs: ["health"],
+    pollMinutes: 240,
+  },
+
+  // ─── University sports ───
+  {
+    name: "FIU Athletics",
+    type: "rss",
+    url: "https://fiusports.com/rss.aspx?path=general",
+    sectionSlugs: ["sports", "the-u"],
+    pollMinutes: 120,
+  },
+  {
+    name: "Miami Hurricanes — Basketball",
+    type: "rss",
+    url: "https://miamihurricanes.com/sports/m-baskbl/feed/",
+    sectionSlugs: ["sports", "the-u"],
+    pollMinutes: 120,
+  },
+
+  // ─── Pro sports ───
+  {
+    name: "Miami Marlins (MLB official)",
+    type: "rss",
+    url: "https://www.mlb.com/feeds/news/rss.xml?team_id=146",
+    sectionSlugs: ["sports", "marlins"],
+    pollMinutes: 60,
+  },
+
+  // ─── Climate / nature (Miami-relevant only) ───
+  {
+    name: "Sea Level Rise — Florida",
+    type: "rss",
+    url: "https://sealevelrise.org/states/florida/feed/",
+    sectionSlugs: ["climate"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Bonefish & Tarpon Trust",
+    type: "rss",
+    url: "https://www.bonefishtarpontrust.org/feed/",
+    sectionSlugs: ["nature", "climate"],
+    pollMinutes: 240,
+  },
+
+  // ─── Bluesky journos / orgs (verified handles) ───
+  {
+    name: "Aaron Liebowitz (Bluesky)",
+    type: "bluesky",
+    url: "bluesky://aaronliebowitz.bsky.social",
+    sectionSlugs: ["news"],
+    pollMinutes: 120,
+  },
+  {
+    name: "Jay Weaver — Miami Herald (Bluesky)",
+    type: "bluesky",
+    url: "bluesky://jayweaver.bsky.social",
+    sectionSlugs: ["news", "investigations"],
+    pollMinutes: 120,
+  },
+  {
+    name: "Linda Robertson — Miami Herald (Bluesky)",
+    type: "bluesky",
+    url: "bluesky://lindarobertson.bsky.social",
+    sectionSlugs: ["news", "sports"],
+    pollMinutes: 120,
+  },
+  {
+    name: "Calle Ocho News (Bluesky)",
+    type: "bluesky",
+    url: "bluesky://calleocho.bsky.social",
+    sectionSlugs: ["news", "things-to-do"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Miami-Dade County (Bluesky)",
+    type: "bluesky",
+    url: "bluesky://miamidade.bsky.social",
+    sectionSlugs: ["politics", "news"],
+    pollMinutes: 120,
+  },
+  {
+    name: "City of Miami Beach (Bluesky)",
+    type: "bluesky",
+    url: "bluesky://miamibeach.bsky.social",
+    sectionSlugs: ["politics", "news"],
+    pollMinutes: 120,
+  },
+  {
+    name: "City of Coral Gables (Bluesky)",
+    type: "bluesky",
+    url: "bluesky://coralgables.bsky.social",
+    sectionSlugs: ["news"],
+    pollMinutes: 240,
+  },
+]
+
+export const seedExpansionSourcesV4 = internalMutation({
+  args: {},
+  handler: async (ctx) => installExpansionSources(ctx, EXPANSION_FEEDS_V4),
 })
