@@ -39,8 +39,67 @@ export function recencyFactor(ts: number, now: number): number {
 export type ScorableArticle = {
   derivedFromItems: ReadonlyArray<unknown>
   citations: ReadonlyArray<unknown>
+  tags?: ReadonlyArray<string>
+  title?: string
   publishedAt?: number
   createdAt: number
+}
+
+// Tags that get a score multiplier applied — used to demote crime
+// stories from the lead slot unless their breadth/depth is genuinely
+// out-of-distribution. The editor can extend this list as more
+// patterns surface.
+//
+// Why bother: a single-source shooting story scoring 1.5 (one source,
+// no extra citations) was outranking a 4-source policy piece scoring
+// 9 because of recency. After 0.4× demotion, the shooting drops to
+// 0.6 — still visible on the page, just not the lead.
+const MUTED_TAGS = new Set([
+  "shooting",
+  "shooting-victim",
+  "shooting-death",
+  "police-shooting",
+  "mass-shooting",
+  "gun-violence",
+  "gunfire",
+  "homicide",
+  "murder",
+  "fatal",
+  "fatal-shooting",
+  "fatal-crash",
+  "stabbing",
+  "robbery",
+  "armed-robbery",
+  "drug-bust",
+  "narcotics-bust",
+  "assault",
+  "drive-by",
+  "crime",
+  "arrest",
+  "shot-and-killed",
+])
+const MUTED_TAG_MULTIPLIER = 0.4
+
+// Headline-keyword fallback. The LLM doesn't always tag crime-y stories
+// with the structured tags above — when a headline contains a strong
+// crime signal, demote the same way. Word-boundary regex so "shotgun"
+// doesn't trigger on "shot".
+const MUTED_HEADLINE_REGEX =
+  /\b(shot|shooting|killed|murder|murdered|stabb(?:ed|ing)|homicide|gunman|gunfire|gun violence|drive[- ]by|robbery|robbed|armed robbery|fatal(?:ly)? shot|police shooting)\b/i
+
+function mutedTagFactor(
+  tags: ReadonlyArray<string> | undefined,
+  title?: string,
+): number {
+  if (tags && tags.length > 0) {
+    for (const t of tags) {
+      if (MUTED_TAGS.has(t)) return MUTED_TAG_MULTIPLIER
+    }
+  }
+  if (title && MUTED_HEADLINE_REGEX.test(title)) {
+    return MUTED_TAG_MULTIPLIER
+  }
+  return 1
 }
 
 export function importanceScore(
@@ -51,7 +110,11 @@ export function importanceScore(
   const breadth = article.derivedFromItems.length
   const depth = article.citations.length
   const base = breadth * WEIGHT_BREADTH + depth * WEIGHT_DEPTH
-  return base * recencyFactor(ts, now)
+  return (
+    base *
+    recencyFactor(ts, now) *
+    mutedTagFactor(article.tags, article.title)
+  )
 }
 
 // Stable comparator: higher score wins, then more recent wins.
