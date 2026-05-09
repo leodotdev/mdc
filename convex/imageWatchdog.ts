@@ -17,7 +17,7 @@ import {
   internalMutation,
   query,
 } from "./_generated/server"
-import { findHeroCandidates } from "./lib/media"
+import { findHeroCandidates, isLowQualityHero } from "./lib/media"
 import type { Doc } from "./_generated/dataModel"
 
 const HEAD_TIMEOUT_MS = 5_000
@@ -63,7 +63,8 @@ export const articlesNeedingHeroCheck = query({
       if (
         !a.heroLastChecked ||
         now - a.heroLastChecked > STALE_AFTER_MS ||
-        a.heroLastStatus === "broken"
+        a.heroLastStatus === "broken" ||
+        isLowQualityHero(a.heroImage)
       ) {
         due.push(a)
       }
@@ -94,7 +95,8 @@ export const eventsNeedingHeroCheck = query({
       if (
         !e.heroLastChecked ||
         now - e.heroLastChecked > STALE_AFTER_MS ||
-        e.heroLastStatus === "broken"
+        e.heroLastStatus === "broken" ||
+        isLowQualityHero(e.heroImage)
       ) {
         due.push(e)
       }
@@ -200,7 +202,8 @@ export const cronTick = internalAction({
     for (const a of articles) {
       if (!a.heroImage) continue
       articlesChecked += 1
-      const status = await probeHero(a.heroImage)
+      const looksLogo = isLowQualityHero(a.heroImage)
+      const status = looksLogo ? "broken" : await probeHero(a.heroImage)
       if (status === "ok" || status === "unknown") {
         await ctx.runMutation(internal.imageWatchdog.stampArticleHero, {
           articleId: a._id,
@@ -208,7 +211,9 @@ export const cronTick = internalAction({
         })
         continue
       }
-      // Broken — re-resolve via the same hero finder used at draft time.
+      // Broken (or logo-y) — re-resolve via the same hero finder used
+      // at draft time. The new resolveHero already demotes social-card
+      // logos, so the second attempt should land on a real photo.
       let sectionLabel = "Miami"
       const sec = await ctx.runQuery(api.sections.getById, {
         id: a.sectionId,
@@ -251,7 +256,8 @@ export const cronTick = internalAction({
     for (const e of events) {
       if (!e.heroImage) continue
       eventsChecked += 1
-      const status = await probeHero(e.heroImage)
+      const looksLogo = isLowQualityHero(e.heroImage)
+      const status = looksLogo ? "broken" : await probeHero(e.heroImage)
       if (status === "ok" || status === "unknown") {
         await ctx.runMutation(internal.imageWatchdog.stampEventHero, {
           eventId: e._id,

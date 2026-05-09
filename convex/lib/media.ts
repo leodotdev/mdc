@@ -34,14 +34,107 @@ async function extractOgImage(url: string): Promise<string | undefined> {
   }
 }
 
+// Social-media share-card detector. Bluesky/X/Threads/Reddit pages
+// for cross-posted news links return the publisher's LOGO as their
+// og:image, not the actual story photo. So when a citation list mixes
+// social and news URLs, news wins.
+const SOCIAL_HOSTS = new Set([
+  "bsky.app",
+  "twitter.com",
+  "x.com",
+  "threads.net",
+  "reddit.com",
+  "old.reddit.com",
+])
+function isSocialUrl(url: string): boolean {
+  try {
+    return SOCIAL_HOSTS.has(new URL(url).hostname.replace(/^www\./, ""))
+  } catch {
+    return false
+  }
+}
+
+// Path-based logo detector. Catches images like
+// `cdn.example.com/static/logo.png`, `branding/header.svg`, etc.
+// Cheap to run, no fetch required. Doesn't catch every logo (some
+// publishers use timestamped filenames) but eliminates the obvious
+// share-card cases.
+function looksLikeLogo(imageUrl: string): boolean {
+  const u = imageUrl.toLowerCase()
+  return (
+    /\/(?:logo|logos|branding|favicon|icon|share-card|sharecard)\b/.test(u) ||
+    /-logo\.(?:png|jpg|jpeg|svg|webp)/.test(u) ||
+    /default-share/.test(u)
+  )
+}
+
+// HEAD-check Content-Length as a proxy for image quality. Logos are
+// typically <50KB; real photos run 200KB-2MB. We HEAD instead of GET
+// so we don't blow bandwidth on a quality probe. Some CDNs block
+// HEAD — those return 0 here and we just trust the candidate.
+async function imageByteSize(url: string): Promise<number> {
+  try {
+    const res = await fetch(url, {
+      method: "HEAD",
+      headers: {
+        "user-agent": "miami.community/1.0 (+https://miami.community)",
+      },
+    })
+    if (!res.ok) return 0
+    const len = Number(res.headers.get("content-length") ?? "0")
+    return Number.isFinite(len) ? len : 0
+  } catch {
+    return 0
+  }
+}
+
+const MIN_GOOD_IMAGE_BYTES = 30_000 // ~30KB cutoff under which we treat as logo-y
+
 export async function resolveHero(
   citationUrls: Array<string>,
   fallbackQuery: string,
 ): Promise<HeroResolution> {
-  for (const url of citationUrls.slice(0, 4)) {
-    const og = await extractOgImage(url)
-    if (og) return { source: "source", url: og }
+  // Layer 1: rank citations — news domains first, social as last resort.
+  const candidates = citationUrls.slice(0, 6)
+  const newsCitations = candidates.filter((u) => !isSocialUrl(u))
+  const socialCitations = candidates.filter((u) => isSocialUrl(u))
+  const ordered = [...newsCitations, ...socialCitations]
+
+  // Walk the ordered list; for each citation extract its og:image; skip
+  // any that look like logos by URL pattern (Layer 2). Collect the
+  // surviving candidates so we can score them by size below (Layer 3).
+  type Candidate = { url: string; cite: string; isSocial: boolean }
+  const surviving: Array<Candidate> = []
+  for (const cite of ordered) {
+    const og = await extractOgImage(cite)
+    if (!og) continue
+    if (looksLikeLogo(og)) continue
+    surviving.push({ url: og, cite, isSocial: isSocialUrl(cite) })
+    // Cap: 4 candidates is enough; prevents runaway HEAD probes.
+    if (surviving.length >= 4) break
   }
+
+  // Layer 3: HEAD-check each candidate, pick the largest. News-citation
+  // candidates start with a +50% bonus so we don't accidentally promote
+  // a high-byte social-card logo over a smaller-but-real news photo.
+  if (surviving.length > 0) {
+    const scored = await Promise.all(
+      surviving.map(async (c) => {
+        const bytes = await imageByteSize(c.url)
+        const score = bytes * (c.isSocial ? 0.5 : 1.0)
+        return { ...c, bytes, score }
+      }),
+    )
+    scored.sort((a, b) => b.score - a.score)
+    const best = scored[0]
+    // If even the best one is under the logo-byte cutoff, treat as
+    // unusable and fall through to Wikimedia. Logos shouldn't sneak
+    // in — but if every candidate HEADed at <30KB, it probably is one.
+    if (best.bytes === 0 || best.bytes >= MIN_GOOD_IMAGE_BYTES) {
+      return { source: "source", url: best.url }
+    }
+  }
+
   // Wikimedia Commons fallback — public-domain / CC-licensed photos
   // of civic landmarks, places, public figures, museums. Higher signal
   // than stock photography for the kind of stories this paper covers.
@@ -55,6 +148,12 @@ export async function resolveHero(
     }
   }
   return { source: "none" }
+}
+
+// Public — let other server modules ask "is this hero image probably
+// a logo / share-card?" so the watchdog can re-resolve known-bad cases.
+export function isLowQualityHero(url: string): boolean {
+  return looksLikeLogo(url)
 }
 
 // =====================================================================
@@ -263,6 +362,10 @@ export async function findHeroCandidates(opts: {
     if (images.length > 0) sourcesWithImage += 1
     for (const img of images) {
       if (seen.has(img)) continue
+      // Drop logos / share-cards before they ever surface to the
+      // editor — they're never the right hero. Same heuristic
+      // resolveHero uses at draft time.
+      if (looksLikeLogo(img)) continue
       seen.add(img)
       ogCandidates.push({
         url: img,
