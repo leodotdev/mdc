@@ -3258,3 +3258,54 @@ export const seedExpansionSourcesV4 = internalMutation({
   args: {},
   handler: async (ctx) => installExpansionSources(ctx, EXPANSION_FEEDS_V4),
 })
+
+// One-shot pruner — flips `enabled: false` on sources whose coverage
+// is statewide or national, not Miami-specific. The LLM was already
+// filtering them out at draft time but they still cost input tokens
+// and crowd local items out of the per-source-capped 50-item batch.
+//
+// Idempotent: running twice is harmless. Only matches by exact URL
+// to avoid accidentally disabling something we don't mean to.
+//
+// Run: `npx convex run seed:disableNonMiamiSources --prod`
+export const disableNonMiamiSources = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const targets = [
+      // Florida Phoenix — Tallahassee-focused statewide news.
+      "https://floridaphoenix.com/feed/",
+      "bluesky://floridaphoenix.com",
+      "bluesky://floridapolitics.bsky.social",
+      // Florida Politics — Tallahassee/Orlando.
+      "https://floridapolitics.com/feed/",
+      "https://feeds.feedburner.com/floridapolitics",
+      // NBC 6 national/international — by definition non-Miami.
+      "https://www.nbcmiami.com/news/national-international/?rss=y",
+      // Sun Sentinel statewide — Broward + statewide political feed.
+      "https://www.sun-sentinel.com/news/politics/feed/",
+    ]
+    const targetSet = new Set(targets)
+    const all = await ctx.db.query("sources").collect()
+    const now = Date.now()
+    let disabled = 0
+    let alreadyDisabled = 0
+    for (const s of all) {
+      if (!targetSet.has(s.url)) continue
+      if (!s.enabled) {
+        alreadyDisabled += 1
+        continue
+      }
+      await ctx.db.patch(s._id, {
+        enabled: false,
+        autoDisabledAt: now,
+        autoDisabledReason: "non-Miami coverage (manual prune)",
+      })
+      disabled += 1
+    }
+    return {
+      disabled,
+      alreadyDisabled,
+      targetCount: targets.length,
+    }
+  },
+})
