@@ -1049,6 +1049,122 @@ export async function generateWidgetBatch(opts: {
 }
 
 // =====================================================================
+// Bulk backlog generator — produces N entries for ONE widget kind in
+// a single LLM call. Used by the seedBacklog action to pre-populate
+// the right-rail history so chevron navigation has somewhere to walk
+// before the daily cron has accumulated a backlog organically.
+// =====================================================================
+
+type WidgetKind = WidgetEntry["kind"]
+
+const widgetBacklogTool: Anthropic.Tool = {
+  name: "submit_widget_backlog",
+  description:
+    "Submit N unique widget entries for a single kind. Each entry should be distinct from every other in the batch AND from the existing entries listed in the prompt.",
+  input_schema: {
+    type: "object",
+    properties: {
+      entries: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            title: { type: "string" },
+            body: { type: "string" },
+            attribution: { type: ["string", "null"] },
+            imageHint: { type: ["string", "null"] },
+          },
+          required: ["title", "body"],
+        },
+      },
+    },
+    required: ["entries"],
+  },
+}
+
+const KIND_SPEC: Record<WidgetKind, string> = {
+  "fun-fact":
+    "Surprising, verifiably-true facts about Miami-Dade. Body ≤25 words. Title can be left as 'Did you know' (the widget already labels itself).",
+  "on-this-day":
+    "Real historical events that happened in Miami-Dade. Title: 'YYYY · Short headline'. Body: 1-2 sentences. Skip days you can't verify.",
+  landmark:
+    "Miami-Dade landmarks with brief history notes. Title: landmark name. Body: 2-3 sentences. imageHint: Wikimedia search query.",
+  "animal-fact":
+    "Local Miami-area wildlife. Title: animal common name. Body: 2 sentences on Miami-specific behavior, habitat, or seasonal relevance. imageHint: Wikimedia search query.",
+  quote:
+    "Real quotes from historical or contemporary Miamians (writers, activists, athletes, politicians, musicians). Title: speaker's name. Body: the exact quote. attribution: speaker's name.",
+}
+
+export async function generateWidgetBacklog(opts: {
+  model: string
+  kind: WidgetKind
+  count: number
+  /** Already-known titles to avoid re-emitting. Lowercased on the
+   *  client; we pass them verbatim and the LLM is told not to repeat. */
+  existingTitles: ReadonlyArray<string>
+}): Promise<Array<WidgetEntry>> {
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set in Convex env")
+  const client = new Anthropic({ apiKey })
+
+  const existingBlock =
+    opts.existingTitles.length > 0
+      ? [
+          ``,
+          `Already in the database — DO NOT repeat any of these titles or substantially overlap their content:`,
+          ...opts.existingTitles.slice(0, 60).map((t) => `- ${t}`),
+        ].join("\n")
+      : ""
+
+  const prompt = [
+    `Generate ${opts.count} UNIQUE entries of kind "${opts.kind}" for miami.community's right-rail backlog.`,
+    ``,
+    `Spec: ${KIND_SPEC[opts.kind]}`,
+    ``,
+    `Hard rules:`,
+    `- All ${opts.count} entries must be distinct from each other and from the existing list (when provided).`,
+    `- Never fabricate quotes, dates, or events. If you can't reach ${opts.count} verifiable entries, return fewer.`,
+    `- Scope: Miami-Dade County and immediately adjacent (Broward, Monroe, the Keys, the Everglades).`,
+    `- Return strictly via the submit_widget_backlog tool.`,
+    existingBlock,
+  ]
+    .filter(Boolean)
+    .join("\n")
+
+  const response = await client.messages.create({
+    model: opts.model,
+    // ~30 entries × ~80 tokens each + tool overhead ≈ 3-4k. 8k gives
+    // headroom on the high-token kinds (landmarks, on-this-day).
+    max_tokens: 8192,
+    tools: [widgetBacklogTool],
+    tool_choice: { type: "tool", name: "submit_widget_backlog" },
+    messages: [{ role: "user", content: prompt }],
+  })
+
+  const toolUse = response.content.find(
+    (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
+  )
+  if (!toolUse) return []
+  const input = toolUse.input as { entries?: Array<unknown> }
+  const out: Array<WidgetEntry> = []
+  for (const raw of input.entries ?? []) {
+    if (!raw || typeof raw !== "object") continue
+    const r = raw as Record<string, unknown>
+    const title = typeof r.title === "string" ? r.title.trim() : ""
+    const body = typeof r.body === "string" ? r.body.trim() : ""
+    if (!title || !body) continue
+    out.push({
+      kind: opts.kind,
+      title,
+      body,
+      attribution: typeof r.attribution === "string" ? r.attribution : null,
+      imageHint: typeof r.imageHint === "string" ? r.imageHint : null,
+    })
+  }
+  return out
+}
+
+// =====================================================================
 // Merge verification — cheap Haiku call that confirms whether two
 // articles cover the same news event. Used by the post-publish merge
 // sweep to gate auto-merges so high-confidence-overlap pairs that are

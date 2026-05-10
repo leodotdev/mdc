@@ -4,11 +4,12 @@ import { internal } from "./_generated/api"
 import {
   internalAction,
   internalMutation,
+  internalQuery,
   query,
 } from "./_generated/server"
 import { estimatedCallCents } from "./lib/budget"
 import { cronsEnabled } from "./lib/cronGate"
-import { generateWidgetBatch } from "./lib/llm"
+import { generateWidgetBacklog, generateWidgetBatch } from "./lib/llm"
 import type { WidgetEntry } from "./lib/llm"
 
 // =====================================================================
@@ -251,8 +252,35 @@ export const insertEntries = internalMutation({
     ),
   },
   handler: async (ctx, { entries }) => {
+    // Dedupe-on-insert. We compare by lowercased title within each
+    // kind's existing rows — the LLM occasionally emits a title we
+    // already have, especially for `on-this-day` (same date next year)
+    // or `landmark` (favorite-itis). Skip the duplicates rather than
+    // letting the chevron rail repeat.
     const now = Date.now()
+    let inserted = 0
+    let skipped = 0
+    // Cache existing titles by kind so we only scan once per call.
+    const existingByKind = new Map<string, Set<string>>()
+    const titleKey = (s: string) =>
+      s.toLowerCase().replace(/\s+/g, " ").trim()
     for (const e of entries) {
+      let existing = existingByKind.get(e.kind)
+      if (!existing) {
+        const rows = await ctx.db
+          .query("widgetContent")
+          .withIndex("by_kind_generated", (q) => q.eq("kind", e.kind))
+          .order("desc")
+          .take(200)
+        existing = new Set(rows.map((r) => titleKey(r.title)))
+        existingByKind.set(e.kind, existing)
+      }
+      const key = titleKey(e.title)
+      if (existing.has(key)) {
+        skipped += 1
+        continue
+      }
+      existing.add(key)
       await ctx.db.insert("widgetContent", {
         kind: e.kind,
         title: e.title,
@@ -261,8 +289,33 @@ export const insertEntries = internalMutation({
         imageHint: e.imageHint,
         generatedAt: now,
       })
+      inserted += 1
     }
-    return { inserted: entries.length }
+    return { inserted, skipped }
+  },
+})
+
+// Returns the most-recent N titles for one kind. Used by the backlog
+// generator to tell the LLM which titles it must NOT repeat.
+export const recentTitlesByKind = internalQuery({
+  args: {
+    kind: v.union(
+      v.literal("fun-fact"),
+      v.literal("on-this-day"),
+      v.literal("landmark"),
+      v.literal("animal-fact"),
+      v.literal("quote"),
+    ),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, { kind, limit }) => {
+    const cap = Math.max(1, Math.min(limit ?? 100, 200))
+    const rows = await ctx.db
+      .query("widgetContent")
+      .withIndex("by_kind_generated", (q) => q.eq("kind", kind))
+      .order("desc")
+      .take(cap)
+    return rows.map((r) => r.title)
   },
 })
 
@@ -319,5 +372,92 @@ export const dailyRefresh = internalAction({
     const seen = new Set(entries.map((e) => e.kind))
     const skipped = KINDS.filter((k) => !seen.has(k))
     return { inserted: entries.length, skipped }
+  },
+})
+
+// =====================================================================
+// One-shot backlog seed. Pre-populates the right-rail history so the
+// chevron navigation has 30 entries per kind from day one rather than
+// waiting 30 days for the daily cron to accumulate. Skips kinds that
+// already have ≥ targetCount entries; safe to re-run.
+//
+// Cost: 5 Sonnet calls (one per kind), ~10-15¢ each → ~50-75¢
+// one-time. Each call passes the existing titles so the model knows
+// what NOT to repeat, and the insertEntries mutation also dedupes by
+// title as a belt-and-suspenders.
+//
+// Editor-triggered manually:
+//   `npx convex run widgets:seedBacklog --prod`
+// =====================================================================
+const BACKLOG_MODEL = "claude-sonnet-4-6"
+const BACKLOG_TARGET = 30
+
+export const seedBacklog = internalAction({
+  args: {},
+  handler: async (
+    ctx,
+  ): Promise<{
+    perKind: Record<string, { existing: number; inserted: number; skipped: number }>
+    totalInserted: number
+  }> => {
+    const result: Record<
+      string,
+      { existing: number; inserted: number; skipped: number }
+    > = {}
+    let totalInserted = 0
+    for (const kind of KINDS) {
+      const existingTitles = await ctx.runQuery(
+        internal.widgets.recentTitlesByKind,
+        { kind, limit: 100 },
+      )
+      const need = Math.max(0, BACKLOG_TARGET - existingTitles.length)
+      if (need === 0) {
+        result[kind] = {
+          existing: existingTitles.length,
+          inserted: 0,
+          skipped: 0,
+        }
+        continue
+      }
+      // Budget gate per call so a kind that goes over-budget doesn't
+      // poison the whole batch.
+      const reservation = await ctx.runMutation(internal.budget.reserve, {
+        estimatedCents: estimatedCallCents(BACKLOG_MODEL),
+        label: `widgetsBacklog:${kind}`,
+      })
+      if (!reservation.allowed) {
+        result[kind] = {
+          existing: existingTitles.length,
+          inserted: 0,
+          skipped: need,
+        }
+        continue
+      }
+      const generated = await generateWidgetBacklog({
+        model: BACKLOG_MODEL,
+        kind,
+        count: need,
+        existingTitles,
+      })
+      const insertResult = await ctx.runMutation(
+        internal.widgets.insertEntries,
+        {
+          entries: generated.map((e) => ({
+            kind: e.kind,
+            title: e.title,
+            body: e.body,
+            attribution: e.attribution ?? undefined,
+            imageHint: e.imageHint ?? undefined,
+          })),
+        },
+      )
+      result[kind] = {
+        existing: existingTitles.length,
+        inserted: insertResult.inserted,
+        skipped: insertResult.skipped,
+      }
+      totalInserted += insertResult.inserted
+    }
+    return { perKind: result, totalInserted }
   },
 })
