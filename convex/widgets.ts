@@ -171,6 +171,42 @@ const WIDGET_MODEL = "claude-sonnet-4-6"
 // Skipped kinds (the LLM omitted them on the latest run) fall back to
 // the previous run's entry automatically because we sort desc and take
 // the first match.
+// Last N entries for a given widget kind, newest first. Lets the
+// public widgets surface chevron buttons so a reader can cycle back
+// through earlier days' fun-facts / landmarks / wildlife / quotes.
+// Index 0 of the returned array = latest (today's entry); higher
+// indices walk backward through the history.
+export const recentByKind = query({
+  args: {
+    kind: v.union(
+      v.literal("fun-fact"),
+      v.literal("on-this-day"),
+      v.literal("landmark"),
+      v.literal("animal-fact"),
+      v.literal("quote"),
+    ),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, { kind, limit }) => {
+    const cap = Math.max(1, Math.min(limit ?? 30, 90))
+    const rows = await ctx.db
+      .query("widgetContent")
+      .withIndex("by_kind_generated", (q) => q.eq("kind", kind))
+      .order("desc")
+      .take(cap)
+    return rows.map((row) => ({
+      _id: row._id,
+      kind: row.kind,
+      title: row.title,
+      body: row.body,
+      attribution: row.attribution,
+      imageHint: row.imageHint,
+      imageUrl: row.imageUrl,
+      generatedAt: row.generatedAt,
+    }))
+  },
+})
+
 export const current = query({
   args: {},
   handler: async (ctx) => {

@@ -3,22 +3,24 @@ import { useQuery } from "@tanstack/react-query"
 import {
   BookOpen,
   CalendarClock,
+  ChevronLeft,
+  ChevronRight,
   Lightbulb,
   Quote,
   Squirrel,
 } from "lucide-react"
+import { useState } from "react"
 
 import { api } from "../../../convex/_generated/api"
 import { SectionHeaderCell } from "@/components/editorial/section-header-cell"
 import { Skeleton } from "@/components/ui/skeleton"
 import { WildlifeIllustration } from "@/components/widgets/wildlife-illustration"
 
-// Right-rail widget set fed by `widgetContent`. One Convex query reads
-// all five kinds in a single subscription; each component picks its
-// own row from the result. Daily refresh runs at 04:30 ET via cron;
-// when a kind doesn't refresh on a given day, the previous day's row
-// continues to show because `current` returns the most-recent per
-// kind.
+// Right-rail widget set fed by `widgetContent`. Daily refresh runs at
+// 04:30 ET via cron and produces one new row per kind. The UI shows
+// today's entry by default, with ‹ › chevrons that walk backward
+// through the historical entries (most-recent first; chevron-left
+// goes one day older, chevron-right returns to newer).
 
 const KIND_META = {
   "fun-fact": {
@@ -52,31 +54,74 @@ type Entry = {
   imageUrl?: string
 }
 
-function useEntry(kind: WidgetKind): Entry | undefined | null {
-  // null = loaded but absent; undefined = still loading.
-  const { data } = useQuery(convexQuery(api.widgets.current, {}))
-  if (!data) return undefined
-  const row = data[kind]
-  if (!row) return null
+function useEntries(kind: WidgetKind):
+  | { entries: Array<Entry>; loading: false }
+  | { entries: null; loading: true } {
+  const { data } = useQuery(
+    convexQuery(api.widgets.recentByKind, { kind, limit: 30 }),
+  )
+  if (!data) return { entries: null, loading: true }
   return {
-    title: row.title,
-    body: row.body,
-    attribution: row.attribution,
-    imageUrl: row.imageUrl,
+    entries: data.map((row) => ({
+      title: row.title,
+      body: row.body,
+      attribution: row.attribution,
+      imageUrl: row.imageUrl,
+    })),
+    loading: false,
   }
 }
 
 function WidgetShell({
   kind,
+  cursor,
+  total,
+  onPrev,
+  onNext,
   children,
 }: {
   kind: WidgetKind
+  /** Zero-indexed position into the history (0 = today). Hidden when
+   *  total ≤ 1 because there's nowhere to navigate. */
+  cursor?: number
+  total?: number
+  onPrev?: () => void
+  onNext?: () => void
   children: React.ReactNode
 }) {
   const { label } = KIND_META[kind]
+  const showNav = total !== undefined && total > 1
+  const canPrev = showNav && cursor !== undefined && cursor < total - 1
+  const canNext = showNav && cursor !== undefined && cursor > 0
   return (
     <div>
-      <SectionHeaderCell title={label} />
+      <SectionHeaderCell
+        title={label}
+        right={
+          showNav ? (
+            <div className="flex items-center gap-0.5">
+              <button
+                type="button"
+                onClick={onPrev}
+                disabled={!canPrev}
+                aria-label={`Older ${label}`}
+                className="grid size-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
+              >
+                <ChevronLeft className="size-3.5" aria-hidden />
+              </button>
+              <button
+                type="button"
+                onClick={onNext}
+                disabled={!canNext}
+                aria-label={`Newer ${label}`}
+                className="grid size-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
+              >
+                <ChevronRight className="size-3.5" aria-hidden />
+              </button>
+            </div>
+          ) : null
+        }
+      />
       <div className="pt-3 pb-1">{children}</div>
     </div>
   )
@@ -138,11 +183,25 @@ function QuoteBody({ entry }: { entry: Entry }) {
 }
 
 function GenericWidget({ kind }: { kind: WidgetKind }) {
-  const entry = useEntry(kind)
-  if (entry === undefined) return <WidgetSkeleton kind={kind} />
-  if (entry === null) return null
+  const result = useEntries(kind)
+  const [cursor, setCursor] = useState(0)
+  if (result.loading) return <WidgetSkeleton kind={kind} />
+  const entries = result.entries
+  if (entries.length === 0) return null
+  // Clamp cursor to current bounds — entries can shrink between renders
+  // (e.g. cron purges old rows), so anchor to the last valid index.
+  const safeCursor = Math.min(cursor, entries.length - 1)
+  const entry = entries[safeCursor]
   return (
-    <WidgetShell kind={kind}>
+    <WidgetShell
+      kind={kind}
+      cursor={safeCursor}
+      total={entries.length}
+      onPrev={() =>
+        setCursor((c) => Math.min(entries.length - 1, c + 1))
+      }
+      onNext={() => setCursor((c) => Math.max(0, c - 1))}
+    >
       {kind === "quote" ? (
         <QuoteBody entry={entry} />
       ) : kind === "animal-fact" ? (
