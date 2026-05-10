@@ -252,35 +252,49 @@ export const insertEntries = internalMutation({
     ),
   },
   handler: async (ctx, { entries }) => {
-    // Dedupe-on-insert. We compare by lowercased title within each
-    // kind's existing rows — the LLM occasionally emits a title we
-    // already have, especially for `on-this-day` (same date next year)
-    // or `landmark` (favorite-itis). Skip the duplicates rather than
-    // letting the chevron rail repeat.
+    // Dedupe-on-insert. The fun-fact widget uses a generic title
+    // ("Did you know") on every row, so we have to dedupe by body
+    // for that kind; for the others (landmark, animal-fact,
+    // on-this-day, quote), the title carries the unique identifier
+    // and is more reliable than body — bodies can vary slightly even
+    // when the underlying entity is the same. So: dedupe by title
+    // first; if the kind's title is generic (fun-fact), fall back
+    // to body. We also dedupe by body across all kinds as a second
+    // line of defense — protects against the LLM rewording the same
+    // fact under different titles.
     const now = Date.now()
     let inserted = 0
     let skipped = 0
-    // Cache existing titles by kind so we only scan once per call.
-    const existingByKind = new Map<string, Set<string>>()
-    const titleKey = (s: string) =>
-      s.toLowerCase().replace(/\s+/g, " ").trim()
+    const norm = (s: string) =>
+      s.toLowerCase().replace(/\s+/g, " ").trim().slice(0, 200)
+    type Caches = { titles: Set<string>; bodies: Set<string> }
+    const cacheByKind = new Map<string, Caches>()
+    const usesGenericTitle = (kind: string) => kind === "fun-fact"
     for (const e of entries) {
-      let existing = existingByKind.get(e.kind)
-      if (!existing) {
+      let cache = cacheByKind.get(e.kind)
+      if (!cache) {
         const rows = await ctx.db
           .query("widgetContent")
           .withIndex("by_kind_generated", (q) => q.eq("kind", e.kind))
           .order("desc")
           .take(200)
-        existing = new Set(rows.map((r) => titleKey(r.title)))
-        existingByKind.set(e.kind, existing)
+        cache = {
+          titles: new Set(rows.map((r) => norm(r.title))),
+          bodies: new Set(rows.map((r) => norm(r.body))),
+        }
+        cacheByKind.set(e.kind, cache)
       }
-      const key = titleKey(e.title)
-      if (existing.has(key)) {
+      const titleKey = norm(e.title)
+      const bodyKey = norm(e.body)
+      const isDup = usesGenericTitle(e.kind)
+        ? cache.bodies.has(bodyKey)
+        : cache.titles.has(titleKey) || cache.bodies.has(bodyKey)
+      if (isDup) {
         skipped += 1
         continue
       }
-      existing.add(key)
+      cache.titles.add(titleKey)
+      cache.bodies.add(bodyKey)
       await ctx.db.insert("widgetContent", {
         kind: e.kind,
         title: e.title,
