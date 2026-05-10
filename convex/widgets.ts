@@ -411,12 +411,29 @@ export const seedBacklog = internalAction({
   handler: async (
     ctx,
   ): Promise<{
-    perKind: Record<string, { existing: number; inserted: number; skipped: number }>
+    perKind: Record<
+      string,
+      {
+        existing: number
+        generated: number
+        inserted: number
+        skipped: number
+        sampleTitle?: string
+        sampleBody?: string
+      }
+    >
     totalInserted: number
   }> => {
     const result: Record<
       string,
-      { existing: number; inserted: number; skipped: number }
+      {
+        existing: number
+        generated: number
+        inserted: number
+        skipped: number
+        sampleTitle?: string
+        sampleBody?: string
+      }
     > = {}
     let totalInserted = 0
     for (const kind of KINDS) {
@@ -428,31 +445,28 @@ export const seedBacklog = internalAction({
       if (need === 0) {
         result[kind] = {
           existing: existingTitles.length,
+          generated: 0,
           inserted: 0,
           skipped: 0,
         }
         continue
       }
-      // Budget gate per call so a kind that goes over-budget doesn't
-      // poison the whole batch.
-      const reservation = await ctx.runMutation(internal.budget.reserve, {
-        estimatedCents: estimatedCallCents(BACKLOG_MODEL),
-        label: `widgetsBacklog:${kind}`,
-      })
-      if (!reservation.allowed) {
-        result[kind] = {
-          existing: existingTitles.length,
-          inserted: 0,
-          skipped: need,
-        }
-        continue
-      }
+      // No budget gate — this is an editor-triggered one-shot
+      // backlog seed. Cost is bounded (5 Sonnet calls, ~50-75¢ total)
+      // and predictable; gating it behind the daily mega-desk cap
+      // would block the seed for whole days at a time.
       const generated = await generateWidgetBacklog({
         model: BACKLOG_MODEL,
         kind,
         count: need,
         existingTitles,
       })
+      console.log(
+        `[seedBacklog] ${kind}: LLM returned ${generated.length} entries. First:`,
+        generated[0]
+          ? `title="${generated[0].title}" body="${generated[0].body.slice(0, 100)}"`
+          : "(none)",
+      )
       const insertResult = await ctx.runMutation(
         internal.widgets.insertEntries,
         {
@@ -467,8 +481,11 @@ export const seedBacklog = internalAction({
       )
       result[kind] = {
         existing: existingTitles.length,
+        generated: generated.length,
         inserted: insertResult.inserted,
         skipped: insertResult.skipped,
+        sampleTitle: generated[0]?.title,
+        sampleBody: generated[0]?.body?.slice(0, 120),
       }
       totalInserted += insertResult.inserted
     }
