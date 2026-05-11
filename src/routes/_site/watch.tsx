@@ -167,21 +167,21 @@ function PlayerColumn({
       if (ended) onEndedRef.current()
     }
 
+    function send(command: Record<string, unknown>) {
+      iframe?.contentWindow?.postMessage(
+        JSON.stringify({ ...command, id: 1, channel: "watch" }),
+        "*",
+      )
+    }
     function subscribe() {
-      iframe?.contentWindow?.postMessage(
-        JSON.stringify({ event: "listening", id: 1, channel: "watch" }),
-        "*",
-      )
-      iframe?.contentWindow?.postMessage(
-        JSON.stringify({
-          event: "command",
-          func: "addEventListener",
-          args: ["onStateChange"],
-          id: 1,
-          channel: "watch",
-        }),
-        "*",
-      )
+      send({ event: "listening" })
+      send({ event: "command", func: "addEventListener", args: ["onStateChange"] })
+      // `mute=1` in the URL parameter sometimes leaves the underlying
+      // volume at 0, so when the user clicks unmute they still hear
+      // nothing. Explicitly set the volume to 100 (player stays muted
+      // via the URL flag), so the unmute click yields audible sound.
+      send({ event: "command", func: "setVolume", args: [100] })
+      send({ event: "command", func: "mute", args: [] })
     }
 
     window.addEventListener("message", handleMessage)
