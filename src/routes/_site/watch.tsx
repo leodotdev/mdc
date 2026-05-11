@@ -135,6 +135,11 @@ function PlayerColumn({
 }) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const onEndedRef = useRef(onEnded)
+  // Once the user unmutes a single clip we remember the preference for
+  // the rest of the session and unmute every subsequent autoplay.
+  // Browsers grant the page user-activation after that first click, so
+  // programmatic unMute() on later iframes is allowed.
+  const userUnmutedRef = useRef(false)
   useEffect(() => {
     onEndedRef.current = onEnded
   }, [onEnded])
@@ -143,11 +148,20 @@ function PlayerColumn({
   // only emits state-change events to a parent that has explicitly
   // subscribed, so we send a `listening` + `addEventListener` pair
   // after each iframe loads. When playerState === 0 the clip ended,
-  // and we advance to the next item in the queue.
+  // and we advance to the next item in the queue. We also watch every
+  // infoDelivery message for muted=false so we can persist the
+  // unmuted preference across videos.
   useEffect(() => {
     if (article.videoEmbed?.provider !== "youtube") return
     const iframe = iframeRef.current
     if (!iframe) return
+
+    function send(command: Record<string, unknown>) {
+      iframe?.contentWindow?.postMessage(
+        JSON.stringify({ ...command, id: 1, channel: "watch" }),
+        "*",
+      )
+    }
 
     function handleMessage(e: MessageEvent) {
       if (e.source !== iframe?.contentWindow) return
@@ -165,24 +179,41 @@ function PlayerColumn({
           data.info !== null &&
           (data.info as { playerState?: number }).playerState === 0)
       if (ended) onEndedRef.current()
+      if (
+        data.event === "infoDelivery" &&
+        typeof data.info === "object" &&
+        data.info !== null
+      ) {
+        const info = data.info as { muted?: boolean }
+        if (info.muted === false) userUnmutedRef.current = true
+      }
     }
 
-    function send(command: Record<string, unknown>) {
-      iframe?.contentWindow?.postMessage(
-        JSON.stringify({ ...command, id: 1, channel: "watch" }),
-        "*",
-      )
-    }
     function subscribe() {
       send({ event: "listening" })
       send({ event: "command", func: "addEventListener", args: ["onStateChange"] })
-      // `mute=1` in the URL parameter sometimes leaves the underlying
-      // volume at 0, so when the user clicks unmute they still hear
-      // nothing. Explicitly set the volume to 100 (player stays muted
-      // via the URL flag), so the unmute click yields audible sound.
+      // Volume floor — `mute=1` in the URL sometimes leaves the
+      // underlying volume at 0, so clicking the speaker icon to unmute
+      // reveals silence. Set it explicitly to 100 first.
       send({ event: "command", func: "setVolume", args: [100] })
-      send({ event: "command", func: "mute", args: [] })
+      if (userUnmutedRef.current) {
+        send({ event: "command", func: "unMute", args: [] })
+      } else {
+        send({ event: "command", func: "mute", args: [] })
+      }
     }
+
+    // Poll the player's muted state once a second for the first 8
+    // seconds — some YouTube embeds don't push infoDelivery on
+    // user-initiated mute toggles, so we ask directly.
+    let polls = 0
+    const pollId = window.setInterval(() => {
+      polls += 1
+      send({ event: "command", func: "getMuted", args: [] })
+      if (polls >= 8 || userUnmutedRef.current) {
+        window.clearInterval(pollId)
+      }
+    }, 1000)
 
     window.addEventListener("message", handleMessage)
     iframe.addEventListener("load", subscribe)
@@ -194,6 +225,7 @@ function PlayerColumn({
       window.removeEventListener("message", handleMessage)
       iframe.removeEventListener("load", subscribe)
       clearTimeout(t)
+      window.clearInterval(pollId)
     }
   }, [article._id, article.videoEmbed?.provider])
 
