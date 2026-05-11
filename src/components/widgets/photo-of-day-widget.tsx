@@ -1,4 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
+import { ChevronLeft, ChevronRight } from "lucide-react"
+import { useState } from "react"
 
 import { SectionHeaderCell } from "@/components/editorial/section-header-cell"
 import { HeroImg } from "@/components/site/hero-img"
@@ -106,21 +108,73 @@ function miamiDayOfYear(): number {
   return Math.floor((today - start) / 86_400_000) + 1
 }
 
+// Fetch every query bucket in parallel and concatenate. Yields ~60
+// distinct photos (6 queries × 10) for the user to walk through with
+// chevrons. Deduped by image URL.
+async function fetchAllPhotos(): Promise<Array<Photo>> {
+  const buckets = await Promise.all(QUERIES.map((q) => fetchPhotos(q)))
+  const seen = new Set<string>()
+  const all: Array<Photo> = []
+  for (const bucket of buckets) {
+    for (const p of bucket) {
+      if (seen.has(p.url)) continue
+      seen.add(p.url)
+      all.push(p)
+    }
+  }
+  return all
+}
+
 export function PhotoOfDayWidget() {
   const dayOfYear = miamiDayOfYear()
-  const queryIndex = dayOfYear % QUERIES.length
-  const queryString = QUERIES[queryIndex]
 
   const { data: photos } = useQuery({
-    queryKey: ["wikimedia-photo-of-day", queryString],
-    queryFn: () => fetchPhotos(queryString),
+    queryKey: ["wikimedia-photo-of-day", "all"],
+    queryFn: fetchAllPhotos,
     staleTime: 24 * 60 * 60 * 1000,
     refetchOnWindowFocus: false,
   })
 
+  // Default to a deterministic "today's pick" — every visitor sees
+  // the same hero on the same day. ‹ › walks the user back/forward
+  // through the rest of the catalog within the session.
+  const total = photos?.length ?? 0
+  const todayIdx = total > 0 ? dayOfYear % total : 0
+  const [cursor, setCursor] = useState<number | null>(null)
+  const idx = cursor ?? todayIdx
+  const showNav = total > 1
+  const canPrev = showNav && idx > 0
+  const canNext = showNav && idx < total - 1
+
   return (
     <div>
-      <SectionHeaderCell title="Photo of the day" />
+      <SectionHeaderCell
+        title="Photo of the day"
+        right={
+          showNav ? (
+            <div className="flex items-center gap-0.5">
+              <button
+                type="button"
+                onClick={() => setCursor(Math.max(0, idx - 1))}
+                disabled={!canPrev}
+                aria-label="Previous photo"
+                className="grid size-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
+              >
+                <ChevronLeft className="size-3.5" aria-hidden />
+              </button>
+              <button
+                type="button"
+                onClick={() => setCursor(Math.min(total - 1, idx + 1))}
+                disabled={!canNext}
+                aria-label="Next photo"
+                className="grid size-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
+              >
+                <ChevronRight className="size-3.5" aria-hidden />
+              </button>
+            </div>
+          ) : null
+        }
+      />
       <div className="pt-3 pb-1">
         {!photos ? (
           <div className="flex flex-col gap-2">
@@ -129,10 +183,8 @@ export function PhotoOfDayWidget() {
           </div>
         ) : photos.length === 0 ? null : (
           (() => {
-            // Pick the Nth photo within the day's query bucket so the
-            // selection drifts across days even within the same query.
-            const idx = Math.floor(dayOfYear / QUERIES.length) % photos.length
             const photo = photos[idx]
+            if (!photo) return null
             return (
               <figure>
                 <a

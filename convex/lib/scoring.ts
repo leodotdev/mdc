@@ -55,6 +55,8 @@ export type ScorableArticle = {
 // 9 because of recency. After 0.4× demotion, the shooting drops to
 // 0.6 — still visible on the page, just not the lead.
 const MUTED_TAGS = new Set([
+  // Crime — demote unless genuinely lead-worthy (multi-source, broad
+  // public-interest signal).
   "shooting",
   "shooting-victim",
   "shooting-death",
@@ -77,15 +79,37 @@ const MUTED_TAGS = new Set([
   "crime",
   "arrest",
   "shot-and-killed",
+  // Non-Miami national/global noise — wire copy that occasionally
+  // slips past the Miami-test filter at draft time gets shoved off the
+  // lead at ranking time as a backstop.
+  "national-news",
+  "national-sports",
+  "national-politics",
+  "national-economy",
+  "wire-copy",
+  "international",
+  "oil-markets",
+  "oil-prices",
+  "wall-street",
+  "federal-reserve",
+  // National sports teams that aren't Miami franchises — used when the
+  // LLM still drafts a Knicks/Cowboys/Yankees recap.
+  "cowboys",
+  "giants",
+  "knicks",
+  "76ers",
+  "yankees",
+  "lakers",
 ])
 const MUTED_TAG_MULTIPLIER = 0.4
 
-// Headline-keyword fallback. The LLM doesn't always tag crime-y stories
+// Headline-keyword fallback. The LLM doesn't always tag stories
 // with the structured tags above — when a headline contains a strong
-// crime signal, demote the same way. Word-boundary regex so "shotgun"
-// doesn't trigger on "shot".
+// non-local OR crime signal, demote the same way. Word-boundary
+// regex so "shotgun" doesn't trigger on "shot", and "Heat" doesn't
+// match Iran "heat-up".
 const MUTED_HEADLINE_REGEX =
-  /\b(shot|shooting|killed|murder|murdered|stabb(?:ed|ing)|homicide|gunman|gunfire|gun violence|drive[- ]by|robbery|robbed|armed robbery|fatal(?:ly)? shot|police shooting)\b/i
+  /\b(shot|shooting|killed|murder|murdered|stabb(?:ed|ing)|homicide|gunman|gunfire|gun violence|drive[- ]by|robbery|robbed|armed robbery|fatal(?:ly)? shot|police shooting|cowboys|giants|knicks|76ers|yankees|lakers|nebraska|iran|denver|wall street|oil markets?|hantavirus|federal reserve)\b/i
 
 function mutedTagFactor(
   tags: ReadonlyArray<string> | undefined,
