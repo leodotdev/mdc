@@ -206,10 +206,13 @@
 /* --- Editorial prose ----------------------------------------------------- */
 @layer components {
     /* WaPo-style page container: full-bleed on mobile, then capped at
-       628 / 760 / 1024 / 1288 across sm / md / lg / xl breakpoints. Use
+       628 / 760 / 1024 across sm / md / lg, holding 1024 until ≥1440
+       where it expands to 1288. Tailwind's `xl:` (1280) kicked in at
+       exactly the 1280 viewport and jumped straight to 1288, which made
+       a 1280 laptop feel as cramped as a true desktop. Use this rule
        wherever a max-w-screen-* container was before. */
     .container-page {
-        @apply mx-auto w-full px-4 sm:max-w-[628px] md:max-w-[760px] lg:max-w-[1024px] xl:max-w-[1288px];
+        @apply mx-auto w-full px-4 sm:max-w-[628px] md:max-w-[760px] lg:max-w-[1024px] min-[1440px]:max-w-[1288px];
     }
 
     /* Break out of the page container — used by the calendar week / month
