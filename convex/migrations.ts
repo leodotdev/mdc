@@ -677,3 +677,152 @@ export const seedAssociatedTags = internalMutation({
     return { sections: all.length, patched }
   },
 })
+
+// =====================================================================
+// 2026-05 hard prune of story-gathering sources. The events-only pivot
+// shifted the editorial product from news+events to calendar-only —
+// pure-news feeds now produce zero events per fetch in 90% of cases,
+// they just consume input tokens. This migration flips
+// enabled=false on every source that isn't in the event-rich
+// allowlist below.
+//
+// Reversible: rows stay in place, only `enabled` flips. Re-enable in
+// /admin/sources by URL when needed.
+//
+// Run dev:  npx convex run migrations:pruneNonEventSources
+// Run prod: npx convex run migrations:pruneNonEventSources --prod
+// Idempotent — re-running is a no-op for sources already disabled.
+// =====================================================================
+
+// URL is event-rich when ANY predicate hits:
+//   - URL contains `?ical=1`, `.ics`, or `&feed=calendar` (iCal feed)
+//   - URL contains `/events/` or `/calendar/` in the path
+//   - URL exactly matches one of EVENT_RICH_URLS (events-html scrapers,
+//     curated event RSS feeds)
+//
+// Bluesky accounts of venues / event-promoters are kept by exact URL.
+// Reddit + YouTube are blanket-disabled (no calendar shape, mostly
+// discussion or news clips).
+const EVENT_RICH_URLS: ReadonlyArray<string> = [
+  // events-html JSON-LD scrapers
+  "https://vizcaya.org/calendar/",
+  "https://deeringestate.org/events/",
+
+  // Curated event-rich RSS — outlets with strong calendar focus
+  "https://miamionthecheap.com/feed/",
+  "https://miami.eater.com/rss/index.xml",
+  "https://www.miaminewtimes.com/miami/Rss.xml",
+  "https://www.miaminewtimes.com/music.rss",
+  "https://www.miaminewtimes.com/arts.rss",
+  "https://www.miaminewtimes.com/restaurants.rss",
+  "https://www.timeout.com/miami/feed",
+  "https://www.timeout.com/miami/feed.rss",
+  "https://refreshmiami.com/feed/",
+  "https://artburstmiami.com/feed",
+  "https://artburstmiami.com/feed/",
+  "https://miamitodaynews.com/feed/",
+  "https://miamitodaynews.com/arts-and-culture/feed/",
+  "https://www.miamijazzsociety.com/feed/",
+  "https://miami.aiga.org/feed/",
+  "https://miamibookfair.com/feed/",
+  "https://www.miamibookfair.com/feed/",
+  "https://www.miamibookfaironline.com/feed/",
+  "https://youngarts.org/feed/",
+  "https://www.miamiopen.com/feed/",
+  "https://www.universemiami.com/?feed=rss2",
+  "https://www.theatlanticcurrent.com/feed/",
+  "https://www.coconutgrove.com/feed/",
+  "https://www.coconutgrovespotlight.com/feed",
+  "https://www.cgaf.com/feed/",
+  "https://www.miamibeachchamber.com/feed/",
+  "https://miamifoundation.org/feed/",
+  "https://www.knightfoundation.org/feed/",
+  "https://endeavormiami.org/feed/",
+  "https://www.cic.com/feed/?location=miami",
+  "https://thebass.org/feed/",
+  "https://www.frostscience.org/feed/",
+  "https://miamilightproject.com/feed/",
+  "https://www.miamilightproject.com/feed/",
+  "https://elportalvillage.com/feed/",
+  "https://www.virginiagardens-fl.gov/feed/",
+  "https://www.soulofmiami.org/feed/",
+  "https://miamimomcollective.com/feed/",
+  "https://www.calleochonews.com/feed/",
+  "https://www.communitynewspapers.com/feed/",
+  "https://gablesinsider.com/feed/",
+  "https://doralfamilyjournal.com/feed/",
+  "https://keybiscaynemag.com/feed/",
+  "https://miamigeographic.com/feed/",
+  "https://www.brickellmag.com/feed/",
+  "https://coralgablesmagazine.com/feed/",
+
+  // Bluesky — venues, civic accounts, event promoters
+  "bluesky://intermiamicf.com",
+  "bluesky://miamiheat.bsky.social",
+  "bluesky://miamidade.bsky.social",
+  "bluesky://miamibeach.bsky.social",
+  "bluesky://coralgables.bsky.social",
+  "bluesky://calleocho.bsky.social",
+]
+
+const EVENT_RICH_URL_SET = new Set(EVENT_RICH_URLS)
+
+function isEventRichUrl(url: string): boolean {
+  if (EVENT_RICH_URL_SET.has(url)) return true
+  // iCal pattern variants — iCalendar.aspx (CivicEngage), `?ical=1`
+  // (Yoast / WP plugins), `.ics` file extension.
+  if (url.includes("?ical=1") || url.includes("&ical=1")) return true
+  if (url.includes(".ics")) return true
+  if (url.includes("/iCalendar.aspx")) return true
+  if (url.includes("&feed=calendar")) return true
+  // Path-based heuristics — venues that expose `/events/` or
+  // `/calendar/` URLs typically have JSON-LD or RSS event content
+  // even when we haven't curated them individually.
+  if (/\/events\/?($|\?|#)/i.test(url)) return true
+  if (/\/calendar\/?($|\?|#)/i.test(url)) return true
+  // Specific UM / FIU events host names.
+  if (url.startsWith("https://events.miami.edu/")) return true
+  if (url.startsWith("https://calendar.fiu.edu/")) return true
+  return false
+}
+
+export const pruneNonEventSources = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const all = await ctx.db.query("sources").collect()
+    const now = Date.now()
+    let disabled = 0
+    let kept = 0
+    let alreadyDisabled = 0
+    const disabledByType: Record<string, number> = {}
+    const keptSample: Array<string> = []
+    for (const s of all) {
+      const eventRich = isEventRichUrl(s.url)
+      if (eventRich) {
+        kept += 1
+        if (keptSample.length < 10) keptSample.push(s.name)
+        continue
+      }
+      if (!s.enabled) {
+        alreadyDisabled += 1
+        continue
+      }
+      await ctx.db.patch(s._id, {
+        enabled: false,
+        autoDisabledAt: now,
+        autoDisabledReason:
+          "story-gathering source (events-only pivot prune)",
+      })
+      disabled += 1
+      disabledByType[s.type] = (disabledByType[s.type] ?? 0) + 1
+    }
+    return {
+      totalSources: all.length,
+      kept,
+      disabled,
+      alreadyDisabled,
+      disabledByType,
+      keptSample,
+    }
+  },
+})

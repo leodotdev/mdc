@@ -3478,6 +3478,110 @@ export const seedExpansionSourcesV5 = internalMutation({
   handler: async (ctx) => installExpansionSources(ctx, EXPANSION_FEEDS_V5),
 })
 
+// =====================================================================
+// Round-6 expansion. Events-only pivot push: targeted at the user's
+// "every event under the sun" for Miami, Coconut Grove, Coral Gables,
+// South Miami. Every URL was curl-probed; only the ones that returned
+// a non-trivial RSS or ICS payload made it in. Sources that exist but
+// are Cloudflare/Imperva-blocked (miamigov.com, miamidda.com,
+// pinecrest-fl.gov, cityofdoral.com) or React-rendered without an
+// embedded feed (Arsht Center calendar, Adrienne Arsht events,
+// Fillmore Miami Beach, miamiandbeaches.com) are deferred — they
+// need either a headless-browser fetcher or per-venue JSON-LD pages
+// to be useful.
+//
+// Run: `npx convex run seed:seedExpansionSourcesV6`
+// =====================================================================
+const EXPANSION_FEEDS_V6: ReadonlyArray<ExpansionFeed> = [
+  // ─── South Miami ───
+  {
+    name: "City of South Miami — events (iCal)",
+    type: "ics",
+    url: "https://www.southmiamifl.gov/common/modules/iCalendar/iCalendar.aspx?catID=14&feed=calendar",
+    sectionSlugs: ["politics"],
+    pollMinutes: 360,
+  },
+  {
+    name: "City of South Miami — news (RSS)",
+    type: "rss",
+    url: "https://www.southmiamifl.gov/RSSFeed.aspx?ModID=58&CID=All-0",
+    sectionSlugs: ["politics"],
+    pollMinutes: 360,
+  },
+
+  // ─── Coral Gables venues ───
+  {
+    name: "Coral Gables Museum — events (iCal)",
+    type: "ics",
+    url: "https://coralgablesmuseum.org/?ical=1",
+    sectionSlugs: ["museums", "history"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Coral Gables Museum (RSS)",
+    type: "rss",
+    url: "https://coralgablesmuseum.org/feed/",
+    sectionSlugs: ["museums"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Biltmore Hotel — events (iCal)",
+    type: "ics",
+    url: "https://www.biltmorehotel.com/?ical=1",
+    sectionSlugs: ["food", "arts"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Actors' Playhouse (Coral Gables) — RSS",
+    type: "rss",
+    url: "https://www.actorsplayhouse.org/feed/",
+    sectionSlugs: ["theater"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Books & Books (Coral Gables) — RSS",
+    type: "rss",
+    url: "https://www.booksandbooks.com/feed/",
+    sectionSlugs: ["books"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Coral Gables Art Cinema — calendar (RSS)",
+    type: "rss",
+    url: "https://gablescinema.com/calendar/feed/",
+    sectionSlugs: ["film"],
+    pollMinutes: 240,
+  },
+  {
+    name: "GableStage (Coral Gables) — RSS",
+    type: "rss",
+    url: "https://gablestage.org/feed/",
+    sectionSlugs: ["theater"],
+    pollMinutes: 240,
+  },
+
+  // ─── Miami music + culture ───
+  {
+    name: "North Beach Bandshell — events (iCal)",
+    type: "ics",
+    url: "https://www.northbeachbandshell.com/?ical=1",
+    sectionSlugs: ["music", "arts"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Fundarte (Miami arts non-profit) — RSS",
+    type: "rss",
+    url: "https://www.fundarte.us/feed/",
+    sectionSlugs: ["arts", "music"],
+    pollMinutes: 360,
+  },
+]
+
+export const seedExpansionSourcesV6 = internalMutation({
+  args: {},
+  handler: async (ctx) => installExpansionSources(ctx, EXPANSION_FEEDS_V6),
+})
+
 // One-shot pruner — flips `enabled: false` on sources whose coverage
 // is statewide or national, not Miami-specific. The LLM was already
 // filtering them out at draft time but they still cost input tokens
