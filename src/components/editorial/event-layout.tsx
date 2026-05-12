@@ -174,7 +174,36 @@ export function EventLayout({ rawEvent }: { rawEvent: EventDoc }) {
 
         </div>
 
-        {heroImage ? (
+        {event.videoEmbed ? (
+          // Video embed takes priority over the hero image. Video is
+          // no longer first-class via a separate /watch route — when an
+          // event arrives with a YouTube/Vimeo reference (e.g. a Local 10
+          // segment about the event, or a stream from the venue), the
+          // player renders in the hero slot instead of the photo.
+          <figure className="mt-8">
+            <div className="relative aspect-video w-full overflow-hidden bg-black">
+              <iframe
+                src={
+                  event.videoEmbed.provider === "youtube"
+                    ? `https://www.youtube.com/embed/${event.videoEmbed.id}?rel=0&modestbranding=1&playsinline=1`
+                    : `https://player.vimeo.com/video/${event.videoEmbed.id}`
+                }
+                title={event.title}
+                allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                allowFullScreen
+                className="absolute inset-0 h-full w-full"
+              />
+            </div>
+            {event.heroCaption ? (
+              <figcaption className="mt-2 text-sm">
+                <HeroCaption
+                  caption={event.heroCaption}
+                  citations={event.citations}
+                />
+              </figcaption>
+            ) : null}
+          </figure>
+        ) : heroImage ? (
           <figure className="mt-8">
             <HeroImg
               url={heroImage}

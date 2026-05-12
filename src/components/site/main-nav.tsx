@@ -90,14 +90,12 @@ export function MainNav() {
           </li>
         ))}
         {/* Vertical divider between section beats and the standalone
-            anchors (Watch, Neighborhoods). Keeps them visually distinct
-            from the news/lifestyle row. The /events anchor was retired
-            in the events-only pivot — the homepage IS the events feed. */}
+            Neighborhoods anchor. The /events and /watch anchors were
+            retired in the events-only pivot — the homepage IS the
+            events feed, and video embeds render inline on event pages
+            instead of getting their own destination. */}
         <li aria-hidden className="px-1">
           <span className="block h-5 w-px bg-foreground/20" />
-        </li>
-        <li>
-          <WatchLink label="Watch" activeAccent={activeAccent} />
         </li>
         <li>
           <NeighborhoodsMenu
@@ -226,26 +224,6 @@ function brandVars(_activeAccent: string | null): React.CSSProperties {
   }
 }
 
-
-function WatchLink({
-  label,
-  activeAccent,
-}: {
-  label: string
-  activeAccent: string | null
-}) {
-  return (
-    <Link
-      to="/watch"
-      className={linkClass}
-      activeProps={{ "data-nav-state": "active" }}
-      data-nav-state="inactive"
-      style={brandVars(activeAccent)}
-    >
-      {label}
-    </Link>
-  )
-}
 
 // Neighborhoods is a dropdown rather than a route — there's no
 // /neighborhoods index page; each entry deep-links straight into

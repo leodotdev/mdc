@@ -16,57 +16,36 @@ const SECTIONS: Array<{
   parentSlug?: string
 }> = [
   {
-    slug: "news",
-    name: "News",
-    description:
-      "What happened in Miami-Dade today, why it matters, and who's affected.",
-    accentColor: "oklch(0.546 0.245 262.881)", // blue-600
-    order: 10,
-  },
-  {
     slug: "politics",
     name: "Politics",
     description:
-      "Inside City Hall, the county commission, and Tallahassee — the votes, the players, the deals.",
+      "Civic life in Miami-Dade — commission meetings, town halls, candidate forums, neighborhood-association meetups, public-comment nights.",
     accentColor: "oklch(0.586 0.253 17.585)", // rose-600
-    order: 20,
-    parentSlug: "news",
+    order: 10,
   },
   {
     slug: "business",
     name: "Business",
     description:
-      "How money moves in Miami — tech, hospitality, the port, the people building things.",
+      "Business events across Miami — conferences, ribbon-cuttings, mixers, networking, port and trade.",
     accentColor: "oklch(0.596 0.145 163.225)", // emerald-600
-    order: 30,
-    parentSlug: "news",
+    order: 20,
+  },
+  {
+    slug: "tech",
+    name: "Tech",
+    description:
+      "Tech meetups, hackathons, demo days, founder gatherings — Refresh Miami, eMerge, CIC, Endeavor.",
+    accentColor: "oklch(0.546 0.245 262.881)", // blue-600
+    order: 25,
   },
   {
     slug: "real-estate",
     name: "Real Estate",
     description:
-      "Sales, developments, condos, the rental market — Miami's most consequential beat.",
+      "Open houses, developer briefings, broker meetups, real-estate panels and tours.",
     accentColor: "oklch(0.609 0.126 221.723)", // cyan-600
-    order: 32,
-    parentSlug: "news",
-  },
-  {
-    slug: "opinion",
-    name: "Opinion",
-    description:
-      "Editorials, op-eds, and letters from Miamians who care enough to write.",
-    accentColor: "oklch(0.511 0.262 276.966)", // indigo-600
-    order: 35,
-    parentSlug: "news",
-  },
-  {
-    slug: "investigations",
-    name: "Investigations",
-    description:
-      "Stories that demand more than a headline — cross-source reporting on what doesn't add up.",
-    accentColor: "oklch(0.666 0.179 58.318)", // amber-600
-    order: 38,
-    parentSlug: "news",
+    order: 30,
   },
   {
     slug: "sports",
@@ -189,7 +168,7 @@ const SECTIONS: Array<{
     slug: "arts",
     name: "Arts & Culture",
     description:
-      "What's on the walls, the stages, the screens, the streets — Miami's creative pulse.",
+      "Concerts, exhibitions, theater, film, gallery openings, street art — Miami's creative pulse on stage, on screen, on the walls.",
     accentColor: "oklch(0.646 0.222 41.116)", // orange-600
     order: 50,
   },
@@ -199,14 +178,6 @@ const SECTIONS: Array<{
     description: "Concerts, clubs, local artists, festivals.",
     accentColor: "oklch(0.541 0.281 293.009)", // violet-600
     order: 70,
-    parentSlug: "arts",
-  },
-  {
-    slug: "museums",
-    name: "Museums",
-    description: "PAMM, Frost, Bass, Vizcaya, ICA, the Wolf.",
-    accentColor: "oklch(0.588 0.158 241.966)", // sky-600
-    order: 72,
     parentSlug: "arts",
   },
   {
@@ -254,37 +225,47 @@ const SECTIONS: Array<{
     parentSlug: "arts",
   },
   {
-    slug: "miami-history",
-    name: "Miami History",
-    description:
-      "How Miami got here — neighborhoods, people, eras that built the city.",
-    accentColor: "oklch(0.6 0.118 184.704)", // teal-600
-    order: 70,
-  },
-  {
     slug: "science",
     name: "Science",
     description:
-      "How South Florida's environment, ecosystems, and research are changing — climate, nature, public health.",
+      "Museum nights, lectures, history walks, climate panels, nature programs — Miami's research and learning beats. Sub-sections: museums, history, climate, nature.",
     accentColor: "oklch(0.627 0.194 149.214)", // green-600
-    order: 65,
+    order: 80,
+  },
+  {
+    slug: "museums",
+    name: "Museums",
+    description:
+      "PAMM, Frost, Bass, Vizcaya, ICA, HistoryMiami — exhibition openings, members nights, lectures, family days.",
+    accentColor: "oklch(0.588 0.158 241.966)", // sky-600
+    order: 82,
+    parentSlug: "science",
+  },
+  {
+    slug: "history",
+    name: "History",
+    description:
+      "Historical events — heritage walks, archival exhibits, talks on Miami's past. Replaces the old standalone Miami History section.",
+    accentColor: "oklch(0.6 0.118 184.704)", // teal-600
+    order: 84,
+    parentSlug: "science",
   },
   {
     slug: "climate",
     name: "Climate",
     description:
-      "Sea level rise, hurricanes, flooding, building codes, insurance — Miami's defining 21st-century beat.",
+      "Climate-focused events — sea-level-rise talks, hurricane prep, sustainability panels, resilience workshops.",
     accentColor: "oklch(0.627 0.194 149.214)", // green-600 (matches parent)
-    order: 67,
+    order: 86,
     parentSlug: "science",
   },
   {
     slug: "nature",
     name: "Nature",
     description:
-      "Wildlife, parks, beaches, the reef, the Everglades — what surrounds the city.",
+      "Everglades programs, wildlife events, beach cleanups, bird walks, reef and park talks.",
     accentColor: "oklch(0.596 0.145 163.225)", // emerald-600
-    order: 68,
+    order: 88,
     parentSlug: "science",
   },
 ]

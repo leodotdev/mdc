@@ -4,9 +4,9 @@ import type { Lang } from "./strings"
 // English `name` from the section doc when the slug isn't in this table or
 // the locale isn't available. Less invasive than a schema migration for v1.
 const SECTION_NAMES: Record<string, Record<Lang, string>> = {
-  news: { en: "News", es: "Noticias" },
   politics: { en: "Politics", es: "Política" },
   business: { en: "Business", es: "Negocios" },
+  tech: { en: "Tech", es: "Tecnología" },
   "real-estate": { en: "Real Estate", es: "Bienes raíces" },
   sports: { en: "Sports", es: "Deportes" },
   dolphins: { en: "Dolphins", es: "Dolphins" },
@@ -20,48 +20,46 @@ const SECTION_NAMES: Record<string, Record<Lang, string>> = {
   food: { en: "Food", es: "Comida" },
   arts: { en: "Arts & Culture", es: "Arte y cultura" },
   music: { en: "Music", es: "Música" },
-  museums: { en: "Museums", es: "Museos" },
   film: { en: "Film", es: "Cine" },
   theater: { en: "Theater", es: "Teatro" },
   galleries: { en: "Galleries", es: "Galerías" },
   books: { en: "Books", es: "Libros" },
   "street-art": { en: "Street Art", es: "Arte urbano" },
-  opinion: { en: "Opinion", es: "Opinión" },
-  investigations: { en: "Investigations", es: "Investigaciones" },
-  "miami-history": { en: "Miami History", es: "Historia de Miami" },
   science: { en: "Science", es: "Ciencia" },
+  museums: { en: "Museums", es: "Museos" },
+  history: { en: "History", es: "Historia" },
   climate: { en: "Climate", es: "Clima" },
   nature: { en: "Nature", es: "Naturaleza" },
 }
 
 const SECTION_DESCRIPTIONS: Record<string, Record<Lang, string>> = {
-  news: {
-    en: "What happened in Miami-Dade today, why it matters, and who's affected.",
-    es: "Lo que pasó hoy en Miami-Dade, por qué importa y a quién afecta.",
-  },
   politics: {
-    en: "Inside City Hall, the county commission, and Tallahassee — the votes, the players, the deals.",
-    es: "Dentro del ayuntamiento, la comisión del condado y Tallahassee — votos, protagonistas, acuerdos.",
+    en: "Civic life in Miami-Dade — commission meetings, town halls, candidate forums, neighborhood-association meetups, public-comment nights.",
+    es: "Vida cívica en Miami-Dade — reuniones de la comisión, asambleas, foros de candidatos, encuentros vecinales, audiencias públicas.",
   },
   business: {
-    en: "How money moves in Miami — tech, hospitality, the port, the people building things.",
-    es: "Cómo se mueve el dinero en Miami — tecnología, hospitalidad, el puerto, quienes construyen.",
+    en: "Business events across Miami — conferences, ribbon-cuttings, mixers, networking, port and trade.",
+    es: "Eventos de negocios en Miami — conferencias, inauguraciones, mixers, networking, puerto y comercio.",
+  },
+  tech: {
+    en: "Tech meetups, hackathons, demo days, founder gatherings — Refresh Miami, eMerge, CIC, Endeavor.",
+    es: "Meetups de tecnología, hackathons, demo days y encuentros de founders — Refresh Miami, eMerge, CIC, Endeavor.",
   },
   "real-estate": {
-    en: "Sales, developments, condos, the rental market — Miami's most consequential beat.",
-    es: "Ventas, desarrollos, condominios, alquileres — el tema más decisivo de Miami.",
+    en: "Open houses, developer briefings, broker meetups, real-estate panels and tours.",
+    es: "Open houses, presentaciones de developers, encuentros de brokers, paneles y recorridos inmobiliarios.",
   },
   sports: {
     en: "Every Miami franchise, every season — from the Dolphins on Sundays to the Hurricanes in Coral Gables.",
     es: "Cada franquicia de Miami, cada temporada — desde los Dolphins los domingos hasta los Hurricanes en Coral Gables.",
   },
   food: {
-    en: "Where Miami eats — new openings, neighborhood spots, Cuban coffee, the city's restaurant culture.",
-    es: "Dónde come Miami — nuevas aperturas, lugares de barrio, café cubano, la cultura gastronómica de la ciudad.",
+    en: "Food events across Miami — restaurant openings, markets, festivals, tastings.",
+    es: "Eventos gastronómicos en Miami — aperturas de restaurantes, mercados, festivales, catas.",
   },
   arts: {
-    en: "What's on the walls, the stages, the screens, the streets — Miami's creative pulse.",
-    es: "Lo que pasa en paredes, escenarios, pantallas y calles — el pulso creativo de Miami.",
+    en: "Concerts, exhibitions, theater, film, gallery openings, street art — Miami's creative pulse on stage, on screen, on the walls.",
+    es: "Conciertos, exposiciones, teatro, cine, inauguraciones de galerías, arte urbano — el pulso creativo de Miami en escenarios, pantallas y paredes.",
   },
   music: {
     en: "Concerts, clubs, local artists, festivals.",
@@ -83,29 +81,25 @@ const SECTION_DESCRIPTIONS: Record<string, Record<Lang, string>> = {
     en: "Murals, public installations, Wynwood Walls, the artists painting Miami's exteriors.",
     es: "Murales, instalaciones públicas, Wynwood Walls y los artistas que pintan las fachadas de Miami.",
   },
-  opinion: {
-    en: "Editorials, op-eds, and letters from Miamians who care enough to write.",
-    es: "Editoriales, columnas y cartas de miamenses que se preocupan lo suficiente para escribir.",
-  },
-  investigations: {
-    en: "Stories that demand more than a headline — cross-source reporting on what doesn't add up.",
-    es: "Historias que exigen más que un titular — reporteo multifuente sobre lo que no cuadra.",
-  },
-  "miami-history": {
-    en: "How Miami got here — neighborhoods, people, eras that built the city.",
-    es: "Cómo llegó Miami hasta aquí — barrios, personas y épocas que construyeron la ciudad.",
-  },
   science: {
-    en: "How South Florida's environment, ecosystems, and research are changing — climate, nature, public health.",
-    es: "Cómo cambian el medio ambiente, los ecosistemas y la investigación del sur de Florida — clima, naturaleza, salud pública.",
+    en: "Museum nights, lectures, history walks, climate panels, nature programs — Miami's research and learning beats. Sub-sections: museums, history, climate, nature.",
+    es: "Noches de museo, charlas, caminatas históricas, paneles climáticos, programas de naturaleza — los temas de investigación y aprendizaje de Miami. Sub-secciones: museos, historia, clima, naturaleza.",
+  },
+  museums: {
+    en: "PAMM, Frost, Bass, Vizcaya, ICA, HistoryMiami — exhibition openings, members nights, lectures, family days.",
+    es: "PAMM, Frost, Bass, Vizcaya, ICA, HistoryMiami — inauguraciones, noches de miembros, charlas, días familiares.",
+  },
+  history: {
+    en: "Historical events — heritage walks, archival exhibits, talks on Miami's past.",
+    es: "Eventos históricos — caminatas patrimoniales, exposiciones de archivo, charlas sobre el pasado de Miami.",
   },
   climate: {
-    en: "Sea level rise, hurricanes, flooding, building codes, insurance — Miami's defining 21st-century beat.",
-    es: "Aumento del nivel del mar, huracanes, inundaciones, códigos de construcción, seguros — el tema definitorio del siglo XXI en Miami.",
+    en: "Climate-focused events — sea-level-rise talks, hurricane prep, sustainability panels, resilience workshops.",
+    es: "Eventos sobre el clima — charlas sobre el aumento del nivel del mar, preparación para huracanes, paneles de sostenibilidad, talleres de resiliencia.",
   },
   nature: {
-    en: "Wildlife, parks, beaches, the reef, the Everglades — what surrounds the city.",
-    es: "Vida silvestre, parques, playas, el arrecife, los Everglades — lo que rodea a la ciudad.",
+    en: "Everglades programs, wildlife events, beach cleanups, bird walks, reef and park talks.",
+    es: "Programas en los Everglades, eventos de vida silvestre, limpiezas de playa, recorridos de aves, charlas sobre el arrecife y los parques.",
   },
 }
 

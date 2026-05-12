@@ -241,9 +241,11 @@ export const inRange = query({
 // ───────── Newspaper-style queries ─────────
 // Phase-1 events-only pivot: these queries mirror the article-side
 // shape (articles.latest / topStories / topInSection / listBySection /
-// recentVideos / listByNeighborhood / listByTag) so the homepage and
-// section pages can swap article queries for event queries without
-// reshaping their consumers.
+// listByNeighborhood / listByTag) so the homepage and section pages
+// can swap article queries for event queries without reshaping their
+// consumers. `recentVideos` briefly lived here to drive /watch — the
+// route was retired in the section-restructure pass, and video embeds
+// now render inline on event pages alongside the hero image.
 
 // Scan ceiling for ranking queries — same shape as articles, large
 // enough that a 7-day window of importance-ranked events isn't
@@ -392,41 +394,6 @@ export const listBySection = query({
       result.page.map((e) => hydrate(ctx, e)),
     )
     return { ...result, page: hydrated }
-  },
-})
-
-// Events with a video embed — drives the /watch route. Same scan-then-
-// filter pattern as `articles.recentVideos`.
-export const recentVideos = query({
-  args: { limit: v.optional(v.number()), sectionSlug: v.optional(v.string()) },
-  handler: async (ctx, { limit, sectionSlug }) => {
-    const cap = limit ?? 24
-    const candidates = await ctx.db
-      .query("events")
-      .withIndex("by_status_published", (q) => q.eq("status", "approved"))
-      .order("desc")
-      .take(cap * 10)
-    const filtered = candidates.filter((e) => !!e.videoEmbed)
-    let scoped = filtered
-    if (sectionSlug) {
-      const section = await ctx.db
-        .query("sections")
-        .withIndex("by_slug", (q) => q.eq("slug", sectionSlug))
-        .unique()
-      if (!section) return []
-      const childIds = new Set(
-        (
-          await ctx.db
-            .query("sections")
-            .withIndex("by_parent", (q) => q.eq("parentId", section._id))
-            .collect()
-        ).map((c) => c._id),
-      )
-      scoped = filtered.filter(
-        (e) => e.sectionId === section._id || childIds.has(e.sectionId!),
-      )
-    }
-    return await Promise.all(scoped.slice(0, cap).map((e) => hydrate(ctx, e)))
   },
 })
 

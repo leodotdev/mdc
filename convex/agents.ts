@@ -485,9 +485,12 @@ export const runMegaDeskInternal = internalAction({
       }
 
       // Section fallback — every event must land in a real section.
-      // News is the universal fallback for items the LLM didn't route.
+      // Politics is now the catch-all for civic items the LLM didn't
+      // route (the old "news" parent is gone post-events-pivot). Falls
+      // through to the first available section if politics is also
+      // missing, so a fresh deploy still inserts.
       const fallbackSectionId =
-        sectionIdBySlug.get("news") ?? allSections[0]?._id
+        sectionIdBySlug.get("politics") ?? allSections[0]?._id
       if (!fallbackSectionId) {
         throw new Error("No sections configured — cannot insert events")
       }
