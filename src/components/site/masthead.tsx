@@ -63,8 +63,8 @@ export function Masthead() {
         </div>
       </div>
 
-      {/* ───── Nameplate + tagline ───── */}
-      <div className="container-page pt-6 pb-3 md:pt-9 md:pb-4">
+      {/* ───── Nameplate ───── */}
+      <div className="container-page pt-6 pb-6 md:pt-9 md:pb-8">
         <div className="flex flex-col items-center text-center">
           <Link
             to="/"
