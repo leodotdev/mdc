@@ -24,7 +24,7 @@ function humanize(slug: string): string {
 export const Route = createFileRoute("/_site/tag/$slug")({
   loader: async ({ context, params }) => {
     await context.queryClient.ensureQueryData(
-      convexQuery(api.articles.listByTag, { tag: params.slug, limit: 60 }),
+      convexQuery(api.events.listByTag, { tag: params.slug, limit: 60 }),
     )
   },
   head: ({ params }) => ({
@@ -36,7 +36,7 @@ export const Route = createFileRoute("/_site/tag/$slug")({
 function TagPage() {
   const { slug } = Route.useParams()
   const { data } = useSuspenseQuery(
-    convexSuspenseQuery(api.articles.listByTag, { tag: slug, limit: 60 }),
+    convexSuspenseQuery(api.events.listByTag, { tag: slug, limit: 60 }),
   )
 
   // Same wave layout as section pages: hero split → xl rows → long
@@ -47,11 +47,11 @@ function TagPage() {
   const xlRows = data.slice(3, 8)
   const longTail = data.slice(8)
 
-  // Co-occurring tags: tags that appear on the same articles. Useful
+  // Co-occurring tags: tags that appear on the same items. Useful
   // rail content + helps readers navigate the tag graph.
   const tagFreq = new Map<string, number>()
   for (const a of data) {
-    for (const t of a.tags) {
+    for (const t of a.tags ?? []) {
       if (t === slug) continue
       tagFreq.set(t, (tagFreq.get(t) ?? 0) + 1)
     }

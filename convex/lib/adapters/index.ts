@@ -1,4 +1,5 @@
 import { fetchBluesky } from "./bluesky"
+import { fetchEventsHtml } from "./eventsHtml"
 import { fetchIcs } from "./ics"
 import { fetchReddit } from "./reddit"
 import { fetchRss } from "./rss"
@@ -30,6 +31,8 @@ export async function fetchItems(
       return await fetchWikipediaOtd(source)
     case "ics":
       return await fetchIcs(source)
+    case "events-html":
+      return await fetchEventsHtml(source)
     case "data":
       // Data sources are routed through `convex/lib/dataAdapters.ts`
       // before they reach this dispatcher — they never produce

@@ -10,6 +10,7 @@ import {
 } from "./_generated/server"
 import { cleanTags } from "./agents"
 import { attachParentAccent } from "./articles"
+import { compareByImportance } from "./lib/scoring"
 import { requireEditor } from "./lib/guard"
 import { estimatedCallCents } from "./lib/budget"
 import { cronsEnabled } from "./lib/cronGate"
@@ -41,13 +42,28 @@ const citationValidator = v.object({
 const SCAN_CAP = 500
 
 // Maximal write shape from `insertExtracted`. Mirrors articles in the
-// fields it accepts (slug, sectionId, tags, hero triplet, citations,
-// related links). All fields except title/description/startsAt/allDay
+// fields it accepts. All fields except title/description/startsAt/allDay
 // are optional so the LLM can omit pieces it didn't extract.
+//
+// Phase-1 additions (events-as-primary): `dek`, `body`, `kind`, and
+// `videoEmbed` carry the newspaper-style editorial treatment that used
+// to live on the articles table. `kind="reported"` events have full
+// dek+body; `kind="scheduled"` events usually leave them empty.
 const eventInputValidator = v.object({
   slug: v.optional(v.string()),
   title: v.string(),
   description: v.string(),
+  dek: v.optional(v.string()),
+  body: v.optional(v.string()),
+  kind: v.optional(
+    v.union(v.literal("scheduled"), v.literal("reported")),
+  ),
+  videoEmbed: v.optional(
+    v.object({
+      provider: v.union(v.literal("youtube"), v.literal("vimeo")),
+      id: v.string(),
+    }),
+  ),
   startsAt: v.number(),
   endsAt: v.optional(v.number()),
   allDay: v.boolean(),
@@ -106,8 +122,12 @@ function buildSearchableText(
   title: string,
   description: string,
   tags: ReadonlyArray<string> = [],
+  dek?: string,
+  body?: string,
 ): string {
-  return [title, description, tags.join(" ")].filter(Boolean).join(" ")
+  return [title, dek ?? "", description, body ?? "", tags.join(" ")]
+    .filter(Boolean)
+    .join(" ")
 }
 
 // Cheap djb2 hash of an event's EN copy. Stored as
@@ -138,7 +158,11 @@ async function hydrate(ctx: QueryCtx, event: Doc<"events">) {
     article && article.status === "published"
       ? { _id: article._id, slug: article.slug, title: article.title }
       : null
-  return { ...event, section, article: publishedArticle }
+  // Public surface guarantees a non-empty slug. Legacy rows that pre-
+  // date the slug column fall back to the document id so cards still
+  // route somewhere predictable.
+  const slug = event.slug ?? (event._id as string)
+  return { ...event, slug, section, article: publishedArticle }
 }
 
 // ───────── Public queries ─────────
@@ -211,6 +235,231 @@ export const inRange = query({
       filtered = filtered.filter((e) => e.sectionId === section._id)
     }
     return await Promise.all(filtered.map((e) => hydrate(ctx, e)))
+  },
+})
+
+// ───────── Newspaper-style queries ─────────
+// Phase-1 events-only pivot: these queries mirror the article-side
+// shape (articles.latest / topStories / topInSection / listBySection /
+// recentVideos / listByNeighborhood / listByTag) so the homepage and
+// section pages can swap article queries for event queries without
+// reshaping their consumers.
+
+// Scan ceiling for ranking queries — same shape as articles, large
+// enough that a 7-day window of importance-ranked events isn't
+// truncated even on a busy news day.
+const TOP_EVENTS_SCAN = 200
+
+// `ScorableArticle`-compatible adapter for events. The events table's
+// `derivedFromItems` + `citations` are optional, but the scoring
+// helper expects arrays — default to empty so the comparator works
+// without throwing on legacy rows.
+function asScorable(e: Doc<"events">): {
+  derivedFromItems: ReadonlyArray<unknown>
+  citations: ReadonlyArray<unknown>
+  tags?: ReadonlyArray<string>
+  title?: string
+  publishedAt?: number
+  createdAt: number
+} {
+  return {
+    derivedFromItems: e.derivedFromItems ?? [],
+    citations: e.citations ?? [],
+    tags: e.tags ?? [],
+    title: e.title,
+    publishedAt: e.publishedAt,
+    createdAt: e.createdAt,
+  }
+}
+
+// Latest approved events sorted by publishedAt DESC — the newspaper's
+// chronological feed. Mirrors `articles.latest`.
+export const latestEditorial = query({
+  args: { limit: v.number() },
+  handler: async (ctx, { limit }) => {
+    const events = await ctx.db
+      .query("events")
+      .withIndex("by_status_published", (q) => q.eq("status", "approved"))
+      .order("desc")
+      .take(limit)
+    return await Promise.all(events.map((e) => hydrate(ctx, e)))
+  },
+})
+
+// Importance-ranked recent events — the homepage hero. Same recency-
+// decay × breadth × depth ranking as `articles.topStories`. Reported
+// events with multiple cited sources naturally rise to the lead;
+// scheduled events with strong cross-citation can too.
+export const topToday = query({
+  args: {
+    limit: v.number(),
+    lookbackHours: v.optional(v.number()),
+  },
+  handler: async (ctx, { limit, lookbackHours }) => {
+    const now = Date.now()
+    const since = now - (lookbackHours ?? 168) * 3_600_000
+    const candidates = await ctx.db
+      .query("events")
+      .withIndex("by_status_published", (q) => q.eq("status", "approved"))
+      .order("desc")
+      .take(TOP_EVENTS_SCAN)
+    const ranked = candidates
+      .filter((e) => (e.publishedAt ?? e.createdAt) >= since)
+      .sort((a, b) => compareByImportance(asScorable(a), asScorable(b), now))
+      .slice(0, limit)
+    return await Promise.all(ranked.map((e) => hydrate(ctx, e)))
+  },
+})
+
+// Section top: importance-ranked recent events scoped to a section
+// (plus its child sub-sections). Mirrors `articles.topInSection`.
+export const topInSection = query({
+  args: {
+    sectionSlug: v.string(),
+    limit: v.number(),
+    lookbackHours: v.optional(v.number()),
+  },
+  handler: async (ctx, { sectionSlug, limit, lookbackHours }) => {
+    const section = await ctx.db
+      .query("sections")
+      .withIndex("by_slug", (q) => q.eq("slug", sectionSlug))
+      .unique()
+    if (!section) return []
+    const childIds = (
+      await ctx.db
+        .query("sections")
+        .withIndex("by_parent", (q) => q.eq("parentId", section._id))
+        .collect()
+    ).map((c) => c._id)
+    const scopedSectionIds = new Set<Id<"sections">>([section._id, ...childIds])
+    const now = Date.now()
+    const since = now - (lookbackHours ?? 168) * 3_600_000
+    // Pull each section's top slice via the indexed query, union, rank.
+    // Cheap for the typical 1 parent + ≤5 children case.
+    const buckets = await Promise.all(
+      [...scopedSectionIds].map((sid) =>
+        ctx.db
+          .query("events")
+          .withIndex("by_section_status_published", (q) =>
+            q.eq("sectionId", sid).eq("status", "approved"),
+          )
+          .order("desc")
+          .take(TOP_EVENTS_SCAN),
+      ),
+    )
+    const seen = new Set<string>()
+    const merged: Array<Doc<"events">> = []
+    for (const bucket of buckets) {
+      for (const e of bucket) {
+        if (seen.has(e._id as string)) continue
+        if ((e.publishedAt ?? e.createdAt) < since) continue
+        seen.add(e._id as string)
+        merged.push(e)
+      }
+    }
+    merged.sort((a, b) => compareByImportance(asScorable(a), asScorable(b), now))
+    return await Promise.all(
+      merged.slice(0, limit).map((e) => hydrate(ctx, e)),
+    )
+  },
+})
+
+// Paginated events by section, ordered by publishedAt DESC. Mirrors
+// `articles.listBySection`. Uses Convex pagination so the section
+// page's long-tail grid can scroll.
+export const listBySection = query({
+  args: {
+    sectionSlug: v.string(),
+    paginationOpts: v.object({
+      numItems: v.number(),
+      cursor: v.union(v.string(), v.null()),
+    }),
+  },
+  handler: async (ctx, { sectionSlug, paginationOpts }) => {
+    const section = await ctx.db
+      .query("sections")
+      .withIndex("by_slug", (q) => q.eq("slug", sectionSlug))
+      .unique()
+    if (!section) return { page: [], isDone: true, continueCursor: "" }
+    const result = await ctx.db
+      .query("events")
+      .withIndex("by_section_status_published", (q) =>
+        q.eq("sectionId", section._id).eq("status", "approved"),
+      )
+      .order("desc")
+      .paginate(paginationOpts)
+    const hydrated = await Promise.all(
+      result.page.map((e) => hydrate(ctx, e)),
+    )
+    return { ...result, page: hydrated }
+  },
+})
+
+// Events with a video embed — drives the /watch route. Same scan-then-
+// filter pattern as `articles.recentVideos`.
+export const recentVideos = query({
+  args: { limit: v.optional(v.number()), sectionSlug: v.optional(v.string()) },
+  handler: async (ctx, { limit, sectionSlug }) => {
+    const cap = limit ?? 24
+    const candidates = await ctx.db
+      .query("events")
+      .withIndex("by_status_published", (q) => q.eq("status", "approved"))
+      .order("desc")
+      .take(cap * 10)
+    const filtered = candidates.filter((e) => !!e.videoEmbed)
+    let scoped = filtered
+    if (sectionSlug) {
+      const section = await ctx.db
+        .query("sections")
+        .withIndex("by_slug", (q) => q.eq("slug", sectionSlug))
+        .unique()
+      if (!section) return []
+      const childIds = new Set(
+        (
+          await ctx.db
+            .query("sections")
+            .withIndex("by_parent", (q) => q.eq("parentId", section._id))
+            .collect()
+        ).map((c) => c._id),
+      )
+      scoped = filtered.filter(
+        (e) => e.sectionId === section._id || childIds.has(e.sectionId!),
+      )
+    }
+    return await Promise.all(scoped.slice(0, cap).map((e) => hydrate(ctx, e)))
+  },
+})
+
+// Events with the given neighborhood slug — mirrors
+// `articles.listByNeighborhood`. Neighborhoods is an array, so we
+// scan a recent window and filter.
+export const listByNeighborhood = query({
+  args: { slug: v.string(), limit: v.number() },
+  handler: async (ctx, { slug, limit }) => {
+    const candidates = await ctx.db
+      .query("events")
+      .withIndex("by_status_published", (q) => q.eq("status", "approved"))
+      .order("desc")
+      .take(limit * 10)
+    const matches = candidates.filter((e) =>
+      (e.neighborhoods ?? []).includes(slug),
+    )
+    return await Promise.all(matches.slice(0, limit).map((e) => hydrate(ctx, e)))
+  },
+})
+
+// Events with the given tag — mirrors `articles.listByTag`. Tags is an
+// array, same scan-and-filter pattern.
+export const listByTag = query({
+  args: { tag: v.string(), limit: v.number() },
+  handler: async (ctx, { tag, limit }) => {
+    const candidates = await ctx.db
+      .query("events")
+      .withIndex("by_status_published", (q) => q.eq("status", "approved"))
+      .order("desc")
+      .take(limit * 10)
+    const matches = candidates.filter((e) => (e.tags ?? []).includes(tag))
+    return await Promise.all(matches.slice(0, limit).map((e) => hydrate(ctx, e)))
   },
 })
 
@@ -889,7 +1138,13 @@ export const insertExtracted = internalMutation({
       slug,
       tags,
       neighborhoods,
-      searchableText: buildSearchableText(event.title, event.description, tags),
+      searchableText: buildSearchableText(
+        event.title,
+        event.description,
+        tags,
+        event.dek,
+        event.body,
+      ),
       status: "approved",
       publishedAt: now,
       agentSlug,
@@ -903,5 +1158,164 @@ export const insertExtracted = internalMutation({
       { eventId: id, lang: "es" },
     )
     return id
+  },
+})
+
+// Candidates the mega-desk LLM picks from when populating an event's
+// `relatedEventIndices` or `updateOfRelatedIndex`. Returns recent
+// approved events with the same section boosted to the front. Capped
+// tight to keep the LLM prompt small + prompt-cache friendly.
+export const recentForLinking = query({
+  args: {
+    sectionId: v.optional(v.id("sections")),
+    limit: v.optional(v.number()),
+    lookbackHours: v.optional(v.number()),
+  },
+  handler: async (ctx, { sectionId, limit, lookbackHours }) => {
+    const cap = limit ?? 25
+    const since = Date.now() - (lookbackHours ?? 336) * 3_600_000
+    const sameSection = sectionId
+      ? await ctx.db
+          .query("events")
+          .withIndex("by_section_status_published", (q) =>
+            q.eq("sectionId", sectionId).eq("status", "approved"),
+          )
+          .order("desc")
+          .take(cap)
+      : []
+    const overall = await ctx.db
+      .query("events")
+      .withIndex("by_status_published", (q) => q.eq("status", "approved"))
+      .order("desc")
+      .take(cap)
+    const seen = new Set<string>()
+    const merged: Array<Doc<"events">> = []
+    for (const e of [...sameSection, ...overall]) {
+      const key = e._id as string
+      if (seen.has(key)) continue
+      const ts = e.publishedAt ?? e.createdAt
+      if (ts < since) continue
+      seen.add(key)
+      merged.push(e)
+      if (merged.length >= cap) break
+    }
+    return await Promise.all(
+      merged.map(async (e) => {
+        const section = e.sectionId ? await ctx.db.get(e.sectionId) : null
+        return {
+          _id: e._id,
+          title: e.title,
+          // Dek when present (kind=reported); fall back to description
+          // so the LLM always has a one-liner to disambiguate by.
+          dek: e.dek ?? e.description,
+          publishedAt: e.publishedAt,
+          startsAt: e.startsAt,
+          section: section
+            ? { name: section.name, slug: section.slug }
+            : null,
+          tags: e.tags ?? [],
+          neighborhoods: e.neighborhoods ?? [],
+        }
+      }),
+    )
+  },
+})
+
+// Phase-1 helper: dedupe via merge into an existing event. Called when
+// the LLM emits an event with `updateOfRelatedIndex` pointing at one of
+// the related candidates — same dedupe shape as `articles.augmentArticle`,
+// just over the events table. Citations + derivedFromItems are unioned
+// (URL/id-set semantics, no dupes). When the target is still
+// pending_review the editorial copy can be refreshed; published events
+// keep editor-approved text and only accumulate citations.
+export const augmentEvent = mutation({
+  args: {
+    eventId: v.id("events"),
+    newCitations: v.array(citationValidator),
+    newSourceItems: v.array(v.id("ingestedItems")),
+    patch: v.optional(
+      v.object({
+        title: v.optional(v.string()),
+        dek: v.optional(v.string()),
+        body: v.optional(v.string()),
+        description: v.optional(v.string()),
+      }),
+    ),
+    agentSlug: v.string(),
+    agentRunId: v.id("agentRuns"),
+  },
+  handler: async (
+    ctx,
+    { eventId, newCitations, newSourceItems, patch },
+  ) => {
+    const target = await ctx.db.get(eventId)
+    if (!target) return { merged: false as const }
+    if (target.status === "rejected" || target.status === "archived") {
+      return { merged: false as const }
+    }
+    const existingCitations = target.citations ?? []
+    const existingUrls = new Set(existingCitations.map((c) => c.url))
+    const addedCitations = newCitations.filter(
+      (c) => !existingUrls.has(c.url),
+    )
+    const existingItems = new Set(
+      (target.derivedFromItems ?? []).map((id) => id as string),
+    )
+    const addedItems = newSourceItems.filter(
+      (id) => !existingItems.has(id as string),
+    )
+    const updates: Record<string, unknown> = {
+      citations: [...existingCitations, ...addedCitations],
+      derivedFromItems: [...(target.derivedFromItems ?? []), ...addedItems],
+    }
+    const changedFields: Array<string> = []
+    if (target.status === "pending_review" && patch) {
+      const nextTitle =
+        patch.title && patch.title !== target.title ? patch.title : target.title
+      const nextDek =
+        patch.dek !== undefined && patch.dek !== target.dek
+          ? patch.dek
+          : target.dek
+      const nextBody =
+        patch.body !== undefined && patch.body !== target.body
+          ? patch.body
+          : target.body
+      const nextDescription =
+        patch.description && patch.description !== target.description
+          ? patch.description
+          : target.description
+      if (nextTitle !== target.title) {
+        updates.title = nextTitle
+        changedFields.push("title")
+      }
+      if (nextDek !== target.dek) {
+        updates.dek = nextDek
+        changedFields.push("dek")
+      }
+      if (nextBody !== target.body) {
+        updates.body = nextBody
+        changedFields.push("body")
+      }
+      if (nextDescription !== target.description) {
+        updates.description = nextDescription
+        changedFields.push("description")
+      }
+      if (changedFields.length > 0) {
+        updates.searchableText = buildSearchableText(
+          nextTitle,
+          nextDescription,
+          target.tags ?? [],
+          nextDek,
+          nextBody,
+        )
+      }
+    }
+    await ctx.db.patch(eventId, updates)
+    return {
+      merged: true as const,
+      citationsAdded: addedCitations.length,
+      sourceItemsAdded: addedItems.length,
+      contentUpdated: changedFields.length > 0,
+    }
   },
 })

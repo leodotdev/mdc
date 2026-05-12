@@ -89,13 +89,12 @@ export function MainNav() {
             />
           </li>
         ))}
-        {/* Vertical divider between section beats and the Events anchor.
-            Keeps Events visually distinct from the news/lifestyle row. */}
+        {/* Vertical divider between section beats and the standalone
+            anchors (Watch, Neighborhoods). Keeps them visually distinct
+            from the news/lifestyle row. The /events anchor was retired
+            in the events-only pivot — the homepage IS the events feed. */}
         <li aria-hidden className="px-1">
           <span className="block h-5 w-px bg-foreground/20" />
-        </li>
-        <li>
-          <EventsLink label={t("nav.events")} activeAccent={activeAccent} />
         </li>
         <li>
           <WatchLink label="Watch" activeAccent={activeAccent} />
@@ -227,25 +226,6 @@ function brandVars(_activeAccent: string | null): React.CSSProperties {
   }
 }
 
-function EventsLink({
-  label,
-  activeAccent,
-}: {
-  label: string
-  activeAccent: string | null
-}) {
-  return (
-    <Link
-      to="/events"
-      className={linkClass}
-      activeProps={{ "data-nav-state": "active" }}
-      data-nav-state="inactive"
-      style={brandVars(activeAccent)}
-    >
-      {label}
-    </Link>
-  )
-}
 
 function WatchLink({
   label,

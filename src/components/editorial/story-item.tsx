@@ -3,12 +3,16 @@ import { cva } from "class-variance-authority"
 
 import { SectionBadge } from "./section-badge"
 import type { VariantProps } from "class-variance-authority"
-import type { ArticleWithRelations } from "@/lib/article-types"
+import type { StoryCardItem } from "@/lib/article-types"
+import { isEventCard } from "@/lib/article-types"
 import { useTranslation } from "@/lib/i18n/context"
 import { HeroImg } from "@/components/site/hero-img"
 import { relativeTime } from "@/lib/dates"
-import { localizedArticle } from "@/lib/localized-article"
-import { useOpenArticleDrawer } from "@/lib/use-open-article-drawer"
+import { localizedCard } from "@/lib/localized-article"
+import {
+  useOpenArticleDrawer,
+  useOpenEventDrawer,
+} from "@/lib/use-open-article-drawer"
 import { cn } from "@/lib/utils"
 
 // Single editorial card. Replaces WapoStoryItem, StoryCard, GridStoryCard,
@@ -70,7 +74,11 @@ type StoryItemLayout =
 type StoryItemSize = VariantProps<typeof titleVariants>["size"]
 
 type StoryItemProps = {
-  article: ArticleWithRelations
+  // Accepts either a hydrated article (legacy /article/$slug records)
+  // or a hydrated event (the post-Phase-1 primary content type). The
+  // component detects which it is via `isEventCard` and switches the
+  // route + drawer accordingly.
+  article: StoryCardItem
   layout?: StoryItemLayout
   size?: StoryItemSize
   showKicker?: boolean
@@ -104,7 +112,8 @@ export function StoryItem({
   className,
 }: StoryItemProps) {
   const { lang } = useTranslation()
-  const article = localizedArticle(rawArticle, lang)
+  const article = localizedCard(rawArticle, lang)
+  const isEvent = isEventCard(article)
   const sizeKey = (size ?? "default") as NonNullable<StoryItemSize>
   // Dek defaults: shown for the larger sizes, hidden for the small ones.
   // Callers can force either way with `showDek`.
@@ -112,12 +121,30 @@ export function StoryItem({
     showDek ?? (sizeKey === "hero" || sizeKey === "feature" || sizeKey === "lead")
   const hasImage =
     showImage && !!article.heroImage && layout !== "text-only"
-  const openInDrawer = useOpenArticleDrawer()
-  const linkProps = {
-    to: "/article/$slug" as const,
-    params: { slug: article.slug },
-    onClick: (e: React.MouseEvent) => openInDrawer(article.slug, e),
-  }
+  // Drawer + route pick depends on the card's kind. Events route to
+  // /event/$slug + EventDrawer; legacy articles still route to
+  // /article/$slug + ArticleDrawer.
+  const openArticleInDrawer = useOpenArticleDrawer()
+  const openEventInDrawer = useOpenEventDrawer()
+  // Cards display `dek` for both shapes — events fall back to
+  // `description` when `dek` is empty (kind=scheduled).
+  const displayDek = article.dek ?? (isEvent ? article.description : "")
+  // Ensure slug exists (events.slug is optional in the schema; legacy
+  // event rows that pre-date the slug column would render to "" — skip
+  // those by hiding the link in dev, but in practice every new event
+  // gets a slug from `uniqueSlug` at insert time).
+  const slug = article.slug ?? ""
+  const linkProps = isEvent
+    ? ({
+        to: "/event/$slug" as const,
+        params: { slug },
+        onClick: (e: React.MouseEvent) => openEventInDrawer(slug, e),
+      } as const)
+    : ({
+        to: "/article/$slug" as const,
+        params: { slug },
+        onClick: (e: React.MouseEvent) => openArticleInDrawer(slug, e),
+      } as const)
 
   // Kicker line: section badge (or custom kicker / nothing) + a relative
   // time stamp in muted color, sized to match the kicker. The time stamp
@@ -187,14 +214,14 @@ export function StoryItem({
   )
 
   const Dek =
-    dekVisible && article.dek ? (
+    dekVisible && displayDek ? (
       <p
         className={cn(
           "font-sans font-normal text-muted-foreground",
           dekSizeFor[sizeKey],
         )}
       >
-        {article.dek}
+        {displayDek}
       </p>
     ) : null
 
@@ -319,9 +346,9 @@ export function StoryItem({
         >
           {KickerLine}
           {Headline}
-          {article.dek ? (
+          {displayDek ? (
             <p className="font-sans text-base font-normal text-muted-foreground">
-              {article.dek}
+              {displayDek}
             </p>
           ) : null}
         </div>

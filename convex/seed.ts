@@ -865,6 +865,12 @@ export const run = internalMutation({
     // university athletics, more Bluesky journos. ~45 sources.
     const expansionV4 = await installExpansionSources(ctx, EXPANSION_FEEDS_V4)
 
+    // 10. Round-5 expansion. Events-first push — every iCal feed we
+    // could verify, major university calendars, civic/chamber, arts
+    // verticals. ~28 sources, heavy on `ics` type for date-accurate
+    // event extraction.
+    const expansionV5 = await installExpansionSources(ctx, EXPANSION_FEEDS_V5)
+
     return {
       sections: SECTIONS.length,
       personas: AGENT_PERSONAS.length,
@@ -874,6 +880,7 @@ export const run = internalMutation({
       expansionSourcesV2: expansionV2,
       expansionSourcesV3: expansionV3,
       expansionSourcesV4: expansionV4,
+      expansionSourcesV5: expansionV5,
     }
   },
 })
@@ -1755,7 +1762,7 @@ export const seedDataSources = internalMutation({
 // expansion sources after one command.
 type ExpansionFeed = {
   name: string
-  type: "rss" | "reddit" | "youtube" | "bluesky"
+  type: "rss" | "reddit" | "youtube" | "bluesky" | "ics" | "events-html"
   url: string
   sectionSlugs: ReadonlyArray<string>
   pollMinutes?: number
@@ -3257,6 +3264,264 @@ const EXPANSION_FEEDS_V4: ReadonlyArray<ExpansionFeed> = [
 export const seedExpansionSourcesV4 = internalMutation({
   args: {},
   handler: async (ctx) => installExpansionSources(ctx, EXPANSION_FEEDS_V4),
+})
+
+// =====================================================================
+// Round-5 expansion. Events-first push: every entry was curl-probed and
+// confirmed to return a non-trivial body (RSS, Atom, or iCal with at
+// least one VEVENT). Heavy on iCal feeds because RFC 5545 VEVENT blocks
+// carry the date / location / title verbatim — the events extractor
+// gets exact start times instead of having to parse free-form HTML.
+//
+// Coverage areas added in this round:
+//   - Museum / cultural-venue iCals (Bass, Frost, YoungArts, Refresh)
+//   - University events (UM + FIU) — these calendars alone publish
+//     hundreds of upcoming events at any time
+//   - Municipal iCals for Homestead / Aventura (CivicEngage platform)
+//   - Hyperlocal villages (El Portal, Virginia Gardens)
+//   - Civic / chamber / foundation activity feeds
+//   - Arts / theater / music / books verticals (YoungArts blog, AIGA
+//     Miami, Miami Jazz Society, Book Fair)
+//   - Sports calendars (Miami Open)
+//   - Things-to-do magazines (Universe Miami, Atlantic Current)
+//
+// Excludes anything blocked by Cloudflare/Imperva on a HEAD/GET probe
+// even with a realistic UA. Those venues live on the admin-side
+// shortlist for manual triage instead.
+//
+// Run: `npx convex run seed:seedExpansionSourcesV5`
+// =====================================================================
+const EXPANSION_FEEDS_V5: ReadonlyArray<ExpansionFeed> = [
+  // ─── JSON-LD scraped venues (no RSS/iCal exposed, but Event schema
+  //     is embedded in their calendar pages — the eventsHtml adapter
+  //     extracts it. Each yields ~10-15 upcoming events on first fetch) ───
+  {
+    name: "Vizcaya Museum & Gardens — events (JSON-LD)",
+    type: "events-html",
+    url: "https://vizcaya.org/calendar/",
+    sectionSlugs: ["museums", "arts"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Deering Estate — events (JSON-LD)",
+    type: "events-html",
+    url: "https://deeringestate.org/events/",
+    sectionSlugs: ["museums", "nature"],
+    pollMinutes: 240,
+  },
+
+  // ─── Museum / cultural-venue iCalendars (events-first) ───
+  {
+    name: "The Bass — events (iCal)",
+    type: "ics",
+    url: "https://www.thebass.org/?ical=1",
+    sectionSlugs: ["museums", "arts"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Frost Science — events (iCal)",
+    type: "ics",
+    url: "https://www.frostscience.org/events/?ical=1",
+    sectionSlugs: ["science", "museums"],
+    pollMinutes: 240,
+  },
+  {
+    name: "YoungArts — events (iCal)",
+    type: "ics",
+    url: "https://youngarts.org/?ical=1",
+    sectionSlugs: ["arts", "music"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Refresh Miami — events (iCal)",
+    type: "ics",
+    url: "https://refreshmiami.com/?ical=1",
+    sectionSlugs: ["business"],
+    pollMinutes: 240,
+  },
+
+  // ─── University events (large catalogs — hundreds of items each) ───
+  {
+    name: "University of Miami — events (iCal)",
+    type: "ics",
+    url: "https://events.miami.edu/calendar.ics",
+    sectionSlugs: ["the-u", "arts"],
+    pollMinutes: 360,
+  },
+  {
+    name: "University of Miami — events (RSS)",
+    type: "rss",
+    url: "https://events.miami.edu/calendar.xml",
+    sectionSlugs: ["the-u", "news"],
+    pollMinutes: 360,
+  },
+  {
+    name: "FIU — events calendar",
+    type: "rss",
+    url: "https://calendar.fiu.edu/calendar.xml",
+    sectionSlugs: ["news", "arts"],
+    pollMinutes: 360,
+  },
+
+  // ─── Municipal iCalendars (CivicEngage platform — catID=14 is
+  //     the public-events bucket for most cities on this CMS) ───
+  {
+    name: "City of Homestead — events (iCal)",
+    type: "ics",
+    url: "https://www.cityofhomestead.com/common/modules/iCalendar/iCalendar.aspx?catID=14&feed=calendar",
+    sectionSlugs: ["news"],
+    pollMinutes: 360,
+  },
+  {
+    name: "City of Homestead — recreation (iCal)",
+    type: "ics",
+    url: "https://www.cityofhomestead.com/common/modules/iCalendar/iCalendar.aspx?catID=24&feed=calendar",
+    sectionSlugs: ["news"],
+    pollMinutes: 360,
+  },
+  {
+    name: "City of Aventura — events (iCal)",
+    type: "ics",
+    url: "https://www.cityofaventura.com/common/modules/iCalendar/iCalendar.aspx?catID=14&feed=calendar",
+    sectionSlugs: ["news"],
+    pollMinutes: 360,
+  },
+  {
+    name: "City of Aventura — commission (iCal)",
+    type: "ics",
+    url: "https://www.cityofaventura.com/common/modules/iCalendar/iCalendar.aspx?catID=26&feed=calendar",
+    sectionSlugs: ["politics", "news"],
+    pollMinutes: 360,
+  },
+
+  // ─── Hyperlocal villages / municipalities ───
+  {
+    name: "Village of El Portal (RSS)",
+    type: "rss",
+    url: "https://elportalvillage.com/feed/",
+    sectionSlugs: ["news"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Village of Virginia Gardens (RSS)",
+    type: "rss",
+    url: "https://www.virginiagardens-fl.gov/feed/",
+    sectionSlugs: ["news"],
+    pollMinutes: 360,
+  },
+
+  // ─── Neighborhood / district magazines ───
+  {
+    name: "Coconut Grove (RSS)",
+    type: "rss",
+    url: "https://www.coconutgrove.com/feed/",
+    sectionSlugs: ["news", "arts"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Coral Gables Art Festival",
+    type: "rss",
+    url: "https://www.cgaf.com/feed/",
+    sectionSlugs: ["arts"],
+    pollMinutes: 240,
+  },
+
+  // ─── Civic / chamber / foundation calendars ───
+  {
+    name: "Miami Beach Chamber",
+    type: "rss",
+    url: "https://www.miamibeachchamber.com/feed/",
+    sectionSlugs: ["business"],
+    pollMinutes: 240,
+  },
+  {
+    name: "The Miami Foundation",
+    type: "rss",
+    url: "https://miamifoundation.org/feed/",
+    sectionSlugs: ["news", "business"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Knight Foundation (Miami HQ)",
+    type: "rss",
+    url: "https://www.knightfoundation.org/feed/",
+    sectionSlugs: ["news", "business"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Endeavor Miami",
+    type: "rss",
+    url: "https://endeavormiami.org/feed/",
+    sectionSlugs: ["business"],
+    pollMinutes: 240,
+  },
+  {
+    name: "CIC Miami",
+    type: "rss",
+    url: "https://www.cic.com/feed/?location=miami",
+    sectionSlugs: ["business"],
+    pollMinutes: 240,
+  },
+
+  // ─── Arts / music / theater / books verticals ───
+  {
+    name: "YoungArts (blog)",
+    type: "rss",
+    url: "https://youngarts.org/feed/",
+    sectionSlugs: ["arts"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Miami Jazz Society",
+    type: "rss",
+    url: "https://www.miamijazzsociety.com/feed/",
+    sectionSlugs: ["music"],
+    pollMinutes: 240,
+  },
+  {
+    name: "AIGA Miami (design events)",
+    type: "rss",
+    url: "https://miami.aiga.org/feed/",
+    sectionSlugs: ["arts"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Miami Book Fair",
+    type: "rss",
+    url: "https://miamibookfair.com/feed/",
+    sectionSlugs: ["books", "arts"],
+    pollMinutes: 240,
+  },
+
+  // ─── Sports calendars ───
+  {
+    name: "Miami Open (tennis)",
+    type: "rss",
+    url: "https://www.miamiopen.com/feed/",
+    sectionSlugs: ["sports"],
+    pollMinutes: 240,
+  },
+
+  // ─── Things-to-do magazines (general-interest events) ───
+  {
+    name: "Universe Miami — events",
+    type: "rss",
+    url: "https://www.universemiami.com/?feed=rss2",
+    sectionSlugs: ["arts", "music"],
+    pollMinutes: 240,
+  },
+  {
+    name: "The Atlantic Current",
+    type: "rss",
+    url: "https://www.theatlanticcurrent.com/feed/",
+    sectionSlugs: ["arts", "news"],
+    pollMinutes: 240,
+  },
+]
+
+export const seedExpansionSourcesV5 = internalMutation({
+  args: {},
+  handler: async (ctx) => installExpansionSources(ctx, EXPANSION_FEEDS_V5),
 })
 
 // One-shot pruner — flips `enabled: false` on sources whose coverage

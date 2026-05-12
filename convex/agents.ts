@@ -1,31 +1,16 @@
 import { v } from "convex/values"
 import { api, internal } from "./_generated/api"
 import { action, internalAction } from "./_generated/server"
-import {  fetchItems } from "./lib/adapters"
+import { fetchItems } from "./lib/adapters"
 import { fetchDataMetrics } from "./lib/dataAdapters"
 import { estimatedCallCents } from "./lib/budget"
 import { cronsEnabled } from "./lib/cronGate"
 import { requireEditorInAction } from "./lib/guard"
-import { generateDrafts } from "./lib/llm"
+import { generateDrafts, verifyEventRubric } from "./lib/llm"
 import { resolveHero } from "./lib/media"
 import { filterNeighborhoodSlugs } from "./lib/neighborhoods"
-import type {SourceForAdapter} from "./lib/adapters";
 import type { DraftItem, RelatedCandidate } from "./lib/llm"
 import type { Id } from "./_generated/dataModel"
-import type { FunctionReturnType } from "convex/server"
-
-type Candidates = FunctionReturnType<
-  typeof api.agentsData.unconsumedItemsForAgent
->
-
-// Model tiering for the $20/month budget:
-//   - Drafts: Sonnet 4.6 across the board (~$0.014/draft). Investigations
-//     desk overrides via `agent.model` to opt up to Opus for the
-//     hardest-to-write copy.
-//   - Translation: Sonnet 4.6 (overridden in articles.ts / events.ts).
-// Per-desk overrides are honored from the `agents.model` column when set;
-// blank/missing → DEFAULT_MODEL.
-const DEFAULT_MODEL = "claude-sonnet-4-6"
 
 // Tags that add no signal (every story is local to Miami-Dade by definition).
 // Stripped from every draft before insert so they never reach the public site
@@ -98,468 +83,6 @@ function hostname(url: string): string {
   }
 }
 
-// Internal version — no auth check. Called by:
-//   - The public `runDesk` action (after editor auth check), and
-//   - The cron tick that fires every few hours.
-// The cron path runs without an authenticated user, so the auth check
-// lives one layer up in the public wrapper instead of here.
-export const runDeskInternal = internalAction({
-  args: {
-    agentSlug: v.string(),
-    // Optional override for the desk's `lookbackHours`. The 30-day
-    // backfill uses this to widen the window without mutating the
-    // agent row. Falls back to `agent.lookbackHours` when omitted.
-    lookbackHoursOverride: v.optional(v.number()),
-  },
-  handler: async (
-    ctx,
-    { agentSlug, lookbackHoursOverride },
-  ): Promise<{
-    runId: Id<"agentRuns">
-    itemsConsidered: number
-    draftsCreated: number
-    error?: string
-  }> => {
-
-    const agent = await ctx.runQuery(api.agentsData.getBySlug, {
-      slug: agentSlug,
-    })
-    if (!agent) throw new Error(`Agent "${agentSlug}" not found`)
-    const effectiveLookbackHours =
-      lookbackHoursOverride ?? agent.lookbackHours
-
-    const runId = await ctx.runMutation(api.agentsData.startRun, {
-      agentId: agent._id,
-    })
-
-    const log = (line: string) =>
-      ctx.runMutation(api.agentsData.appendLog, { runId, line })
-
-    let itemsConsidered = 0
-    let draftsCreated = 0
-
-    try {
-      // 1. Fetch all enabled sources for this desk (refresh ingestedItems)
-      const sources = await ctx.runQuery(
-        api.agentsData.enabledSourcesForAgent,
-        { agentId: agent._id },
-      )
-      await log(`Refreshing ${sources.length} sources`)
-      for (const src of sources) {
-        try {
-          const adapterInput: SourceForAdapter = {
-            type: src.type,
-            url: src.url,
-            config: src.config,
-          }
-          const items = await fetchItems(adapterInput)
-          const result = await ctx.runMutation(api.sourcesData.recordFetch, {
-            sourceId: src._id,
-            items,
-            status: "ok",
-          })
-          await log(
-            `[${src.name}] fetched ${items.length}, new ${result.inserted}`,
-          )
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err)
-          await ctx.runMutation(api.sourcesData.recordFetch, {
-            sourceId: src._id,
-            items: [],
-            status: "error",
-            error: msg,
-          })
-          await log(`[${src.name}] FAILED: ${msg}`)
-        }
-      }
-
-      // 2. Pull unconsumed items
-      const sinceMs = Date.now() - effectiveLookbackHours * 60 * 60 * 1000
-      const candidates: Candidates = await ctx.runQuery(
-        api.agentsData.unconsumedItemsForAgent,
-        {
-          agentId: agent._id,
-          sinceMs,
-          limit: agent.maxItemsPerRun,
-        },
-      )
-      itemsConsidered = candidates.length
-      await log(`Selected ${candidates.length} unconsumed items`)
-
-      // Skip the LLM call when there's too little to draft from. One or two
-      // items rarely yield a story worth the round-trip; the items stay
-      // unconsumed for the next run when more accumulate.
-      const MIN_CANDIDATES_FOR_DRAFT = 3
-      if (candidates.length < MIN_CANDIDATES_FOR_DRAFT) {
-        await log(
-          `Skipped LLM call — ${candidates.length} candidates is below the ${MIN_CANDIDATES_FOR_DRAFT}-item threshold`,
-        )
-        await ctx.runMutation(api.agentsData.finishRun, {
-          runId,
-          status: "succeeded",
-          itemsConsidered,
-          draftsCreated,
-        })
-        return { runId, itemsConsidered, draftsCreated }
-      }
-
-      // 3. Build prompt items + recent-articles candidate set + call LLM
-      const draftItems: Array<DraftItem> = candidates.map((c, idx) => ({
-        index: idx,
-        source: c.sourceName,
-        url: c.item.url,
-        title: c.item.title,
-        publishedAt: c.item.publishedAt
-          ? new Date(c.item.publishedAt).toISOString().slice(0, 10)
-          : undefined,
-        body: (c.item.body ?? c.item.snippet ?? "").slice(0, 3000),
-      }))
-
-      // Sections this desk can file under: primary + every direct child.
-      // Lets the LLM pick a sub-section per draft (e.g. Arts desk → music
-      // for a concert review) while staying within the desk's tree.
-      const allowedSections = await ctx.runQuery(
-        api.agentsData.allowedSectionsForAgent,
-        { agentId: agent._id },
-      )
-      const sectionIdBySlug = new Map<string, Id<"sections">>()
-      for (const s of allowedSections) sectionIdBySlug.set(s.slug, s._id)
-      const sectionChoices = allowedSections.map((s) => ({
-        slug: s.slug,
-        name: s.name,
-        description: s.description,
-      }))
-
-      const relatedPool = await ctx.runQuery(api.articles.recentForLinking, {
-        sectionId: agent.sectionId,
-        limit: 15,
-        lookbackHours: 336, // 14 days — long enough to catch follow-ups
-      })
-      const relatedCandidates: Array<RelatedCandidate> = relatedPool.map(
-        (a, idx) => ({
-          index: idx,
-          section: a.section?.name ?? "—",
-          title: a.title,
-          dek: a.dek,
-          publishedAt: a.publishedAt
-            ? new Date(a.publishedAt).toISOString().slice(0, 10)
-            : undefined,
-        }),
-      )
-
-      const model = agent.model && agent.model.length > 0
-        ? agent.model
-        : DEFAULT_MODEL
-
-      // Daily budget gate. Bails the desk when the day's cap is hit so
-      // the system stays within ~$20/month even on burst-y news days.
-      const reservation = await ctx.runMutation(internal.budget.reserve, {
-        estimatedCents: estimatedCallCents(model),
-        label: `runDesk:${agent.slug}`,
-      })
-      if (!reservation.allowed) {
-        await log(
-          `Skipped LLM call — daily budget hit (${reservation.centsSpent}¢ / ${reservation.capCents}¢)`,
-        )
-        await ctx.runMutation(api.agentsData.finishRun, {
-          runId,
-          status: "succeeded",
-          itemsConsidered,
-          draftsCreated,
-        })
-        return { runId, itemsConsidered, draftsCreated }
-      }
-
-      await log(`Calling ${model} (${reservation.centsSpent}¢ today)`)
-      const { drafts, events } = await generateDrafts({
-        systemPrompt: agent.systemPrompt,
-        model,
-        items: draftItems,
-        maxDrafts: agent.maxDraftsPerRun,
-        relatedCandidates,
-        sectionChoices,
-      })
-      // Per-section runDeskInternal is the legacy fan-out path; mega
-      // desk handles metrics in its own section. Discarding the
-      // metrics array from this older call site is intentional.
-      await log(
-        `LLM returned ${drafts.length} drafts, ${events.length} events`,
-      )
-
-      // 4. Insert each draft (track positional index → article id so events
-      // can deep-link via relatedDraftIndex).
-      const draftToArticleId = new Map<number, Id<"articles">>()
-      let draftIndex = -1
-      let augmentedCount = 0
-      for (const draft of drafts) {
-        draftIndex += 1
-        const validIndices = draft.citationItemIndices.filter(
-          (i) => i >= 0 && i < candidates.length,
-        )
-        if (validIndices.length === 0) {
-          await log(`Skipped draft "${draft.title}" — no valid citations`)
-          continue
-        }
-        const citedCandidates = validIndices.map((i) => candidates[i])
-        const citations = citedCandidates.map((c) => ({
-          url: c.item.url,
-          title: c.item.title,
-          publisher: c.sourceName,
-          fetchedAt: c.item.fetchedAt,
-          snippet: c.item.snippet,
-        }))
-
-        // Dedup path: when the LLM flags this as the same story we already
-        // covered, augment the existing article instead of inserting a new
-        // one. Citations + source items get merged; pending-review content
-        // can be refreshed; published content stays editor-approved.
-        if (
-          draft.updateOfRelatedIndex !== undefined &&
-          draft.updateOfRelatedIndex >= 0 &&
-          draft.updateOfRelatedIndex < relatedPool.length
-        ) {
-          const target = relatedPool[draft.updateOfRelatedIndex]
-          const result = await ctx.runMutation(
-            api.articles.augmentArticle,
-            {
-              articleId: target._id,
-              newCitations: citations,
-              newSourceItems: citedCandidates.map((c) => c.item._id),
-              patch: {
-                title: draft.title,
-                dek: draft.dek,
-                body: toSingleParagraph(draft.body),
-              },
-              agentSlug: agent.slug,
-              agentRunId: runId,
-            },
-          )
-          if (result.merged) {
-            await ctx.runMutation(api.agentsData.markItemsConsumed, {
-              itemIds: citedCandidates.map((c) => c.item._id),
-            })
-            augmentedCount += 1
-            await log(
-              `Augmented "${target.title}" (+${result.citationsAdded} citations${
-                result.contentUpdated ? ", content refreshed" : ""
-              })`,
-            )
-            continue
-          }
-          // result.merged === false (target was rejected/archived) → fall
-          // through to normal insert path so the story gets coverage.
-        }
-
-        const hero = await resolveHero(
-          citations.map((c) => c.url),
-          draft.title,
-        )
-
-        // Resolve the LLM's per-draft section choice. Falls back to the
-        // desk's primary section when the LLM omits it or picks something
-        // outside the allowed tree.
-        const chosenSectionId =
-          (draft.sectionSlug
-            ? sectionIdBySlug.get(draft.sectionSlug)
-            : undefined) ?? agent.sectionId
-
-        const article = {
-          slug: slugify(draft.suggestedSlug || draft.title),
-          title: draft.title,
-          dek: draft.dek,
-          body: toSingleParagraph(draft.body),
-          sectionId: chosenSectionId,
-          tags: cleanTags(draft.tags),
-          neighborhoods: filterNeighborhoodSlugs(draft.neighborhoodSlugs ?? []),
-          heroImage: hero.source !== "none" ? hero.url : undefined,
-          heroCaption:
-            hero.source === "source"
-              ? `Image: ${hostname(citations[0].url)}`
-              : hero.source === "wikimedia"
-                ? hero.caption
-                : undefined,
-          heroSource: hero.source,
-          citations,
-          agentSlug: agent.slug,
-          agentRunId: runId,
-          derivedFromItems: citedCandidates.map((c) => c.item._id),
-          publishedAt:
-            citedCandidates
-              .map((c) => c.item.publishedAt)
-              .filter((d): d is number => d != null)
-              .sort((a, b) => b - a)[0] ?? undefined,
-        }
-
-        const relatedIds = (draft.relatedArticleIndices ?? [])
-          .filter((i) => i >= 0 && i < relatedPool.length)
-          .map((i) => relatedPool[i]._id)
-
-        const articleId: Id<"articles"> = await ctx.runMutation(
-          api.agentsData.insertDraft,
-          {
-            article,
-            authorIds: [agent.authorId],
-            relatedIds: relatedIds.length > 0 ? relatedIds : undefined,
-          },
-        )
-        draftToArticleId.set(draftIndex, articleId)
-
-        await ctx.runMutation(api.agentsData.markItemsConsumed, {
-          itemIds: citedCandidates.map((c) => c.item._id),
-        })
-
-        draftsCreated += 1
-        await log(`Drafted "${draft.title}"`)
-      }
-
-      // 5. Insert extracted events — auto-approved on the way in, same
-      // policy as articles. Strict gate: drop any event whose ISO start
-      // time can't be parsed or whose citations don't resolve to a real
-      // source item. Quality issues are caught after the fact via
-      // `events.recentAnomalies` on the admin dashboard, mirroring the
-      // article anomaly flow. Events carry the same data shape as
-      // articles: slug, sectionId, tags, citations, neighborhoods, hero
-      // triplet, related links.
-      let eventsCreated = 0
-      for (const ev of events) {
-        const validIndices = ev.citationItemIndices.filter(
-          (i) => i >= 0 && i < candidates.length,
-        )
-        if (validIndices.length === 0) continue
-        const startsAt = new Date(ev.startsAtIso).getTime()
-        if (Number.isNaN(startsAt)) continue
-        const endsAt = ev.endsAtIso
-          ? new Date(ev.endsAtIso).getTime()
-          : undefined
-        const directDraftLink =
-          ev.relatedDraftIndex !== undefined
-            ? draftToArticleId.get(ev.relatedDraftIndex)
-            : undefined
-        const llmRelated = (ev.relatedArticleIndices ?? [])
-          .filter((i) => i >= 0 && i < relatedPool.length)
-          .map((i) => relatedPool[i]._id)
-        const relatedArticleIds = Array.from(
-          new Set<Id<"articles">>(
-            [
-              ...(directDraftLink ? [directDraftLink] : []),
-              ...llmRelated,
-            ],
-          ),
-        )
-        const sourceItemIds = validIndices.map(
-          (i) => candidates[i].item._id,
-        )
-        const citedCandidates = validIndices.map((i) => candidates[i])
-        const eventCitations = citedCandidates.map((c) => ({
-          url: c.item.url,
-          title: c.item.title,
-          publisher: c.sourceName,
-          fetchedAt: c.item.fetchedAt,
-          snippet: c.item.snippet,
-        }))
-        // Resolve a hero image: prefer OG image from the citation source,
-        // then the event's own URL, then Unsplash fallback. Same pipeline
-        // as articles so events read as visually rich.
-        const eventCitationUrls = [
-          ...(ev.url ? [ev.url] : []),
-          ...validIndices.map((i) => candidates[i].item.url),
-        ]
-        const eventHero = await resolveHero(
-          eventCitationUrls,
-          `Miami ${ev.title}`,
-        )
-        // Resolve the LLM's per-event section pick from the desk's allowed
-        // tree (same map as drafts). Falls back to the desk's primary.
-        const eventSectionId =
-          (ev.sectionSlug
-            ? sectionIdBySlug.get(ev.sectionSlug)
-            : undefined) ?? agent.sectionId
-        try {
-          await ctx.runMutation(internal.events.insertExtracted, {
-            event: {
-              slug: slugify(ev.suggestedSlug || ev.title),
-              title: ev.title,
-              description: ev.description,
-              startsAt,
-              endsAt: Number.isFinite(endsAt) ? endsAt : undefined,
-              allDay: ev.allDay,
-              locationName: ev.locationName,
-              neighborhoods: filterNeighborhoodSlugs(
-                ev.neighborhoodSlugs ?? [],
-              ),
-              url: ev.url,
-              price: ev.price,
-              heroImage:
-                eventHero.source !== "none" ? eventHero.url : undefined,
-              heroSource: eventHero.source,
-              heroCaption:
-                eventHero.source === "source"
-                  ? `Image: ${hostname(eventCitations[0]?.url ?? "")}`
-                  : eventHero.source === "wikimedia"
-                    ? eventHero.caption
-                    : undefined,
-              sectionId: eventSectionId,
-              tags: cleanTags(ev.tags ?? []),
-              relatedArticleIds:
-                relatedArticleIds.length > 0 ? relatedArticleIds : undefined,
-              citations: eventCitations,
-            },
-            agentSlug: agent.slug,
-            agentRunId: runId,
-            derivedFromItems: sourceItemIds,
-          })
-          eventsCreated += 1
-        } catch (e) {
-          await log(
-            `Skipped event "${ev.title}": ${e instanceof Error ? e.message : String(e)}`,
-          )
-        }
-      }
-      if (eventsCreated > 0) {
-        await log(`Queued ${eventsCreated} events for review`)
-      }
-
-      await ctx.runMutation(api.agentsData.finishRun, {
-        runId,
-        status: "succeeded",
-        itemsConsidered,
-        draftsCreated,
-      })
-      return { runId, itemsConsidered, draftsCreated }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      await log(`FAILED: ${msg}`)
-      await ctx.runMutation(api.agentsData.finishRun, {
-        runId,
-        status: "failed",
-        itemsConsidered,
-        draftsCreated,
-        errorMessage: msg,
-      })
-      return { runId, itemsConsidered, draftsCreated, error: msg }
-    }
-  },
-})
-
-// Public action — editor-triggered "Run all" / "Run desk" button. Wraps
-// the internal action so the cron path can call without auth.
-export const runDesk = action({
-  args: { agentSlug: v.string() },
-  handler: async (
-    ctx,
-    { agentSlug },
-  ): Promise<{
-    runId: Id<"agentRuns">
-    itemsConsidered: number
-    draftsCreated: number
-    error?: string
-  }> => {
-    await requireEditorInAction(ctx)
-    return await ctx.runAction(internal.agents.runDeskInternal, {
-      agentSlug,
-    })
-  },
-})
 
 // ============================================================================
 // Mega-desk — single agent that handles every section in one pass.
@@ -600,30 +123,41 @@ MISSION (read this first; every rule below serves it):
 2. HOLD LOCAL POWER ACCOUNTABLE — surface corruption, scrutinize city/county/PD decisions, follow the money, name the people making calls.
 3. SKIP anything that isn't materially about Miami-Dade. We are not a wire-service mirror.
 
-THE MIAMI TEST. Before publishing any item, ask: "would a Miami reader read this because something is happening HERE?" Not "Miami is in the headline," not "the flight was Miami-bound," not "a Miami fan would care about this national thing." HERE means: an event, person, decision, building, business, agency, or trend in Miami-Dade County or the immediately-adjacent areas (Broward, Monroe, the Keys, the Everglades). **If you can write the article without naming a Miami-Dade location, person, or institution, SKIP it.**
+THE MIAMI TEST. Before publishing any item, ask: "would a Miami reader read this because something is happening HERE?" Not "Miami is in the headline," not "the flight was Miami-bound," not "a Miami fan would care about this national thing." HERE means: an event, person, decision, building, business, agency, or trend in Miami-Dade County. Broward / Monroe / the Keys / the Everglades are adjacent — they can be a Miami story when the angle clearly ties back (a Broward hospital that Miami patients use; the Keys road that floods after a Miami-area storm). Palm Beach is NOT Miami-adjacent; treat it the same as Tampa or Orlando — skip unless the angle is explicitly Miami-Dade. **If you can write the article without naming a Miami-Dade location, person, or institution, SKIP it.**
 
-Anti-patterns — DO NOT publish:
-- "Miami-bound flight crashed in Denver" → the news is Denver.
-- "Cowboys vs. Giants Week 1 prime-time slot" → no Miami team.
+THE INTEREST TEST. Even when an item passes the Miami test, ask: "is there a reader, a community, a beat, an institution, or an ongoing story this connects to?" Concretely: does this connect to any of the recently-published events in the related-candidates list? Does it name a public official, a recognizable business, a neighborhood under coverage, a beat we already track (housing, transit, schools, courts, climate, immigration policy, named sports franchises)? A one-off police-blotter incident with no named victim, no named officer, no policy angle, no follow-up — even when it happens in Miami-Dade — is wire-noise. SKIP it.
+
+Anti-patterns — DO NOT publish (concrete examples drawn from real wire copy we've over-published):
+- "Miami-bound flight crashed in Denver" / "Frontier jet kills pedestrian on Denver runway" → the news is Denver. Skip even if the carrier happens to serve MIA.
+- "ICE arrests suspected MS-13 member in Palm Beach" → Palm Beach. Skip. (An ICE arrest IN Miami-Dade with a named subject or a clear local policy angle could pass — but generic out-of-county ICE blotter doesn't.)
+- "Car pulled from Hialeah canal, no one inside" → Miami-Dade, but no victim, no name, no cause, no follow-up, no public-interest angle. Wire noise even though the location is local.
+- "Cowboys vs. Giants Week 1 prime-time slot" / "Knicks vs. 76ers score" → no Miami team.
 - "Iran-US impasse keeps oil markets jumpy" → unless local prices, a local port/refinery, or a named Miami business is the angle.
-- "Hantavirus quarantine in Nebraska" → the news is Nebraska; revisit if a Miami port-of-call outbreak follows.
-- "Knicks vs. 76ers score" → not a Miami team.
-- Any "national news that mentions Florida once" wire copy.
-- National political horserace coverage with no Miami-Dade impact.
+- "Hantavirus quarantine in Nebraska" → revisit only if a Miami port-of-call outbreak follows.
+- "National political horserace coverage" with no Miami-Dade impact — skip.
+- Any "national news that mentions Florida once" wire copy — skip.
+- Routine police-blotter (no name, no cause, no charge, no community impact) — skip.
 
 When a national story DOES have a real Miami angle, LEAD WITH THAT ANGLE. Don't bury it. "Iran oil tensions push PortMiami crude prices up 8%" works; "oil markets jumpy" doesn't.
+
+RELATED-CANDIDATES AS A SIGNAL. The related-candidates list is the catalog of what miami.community currently covers — beats, recurring institutions, ongoing stories. Use it actively: (1) if an incoming item clearly extends or duplicates a candidate, set updateOfRelatedIndex or relatedEventIndices; (2) if an incoming item has NO plausible tie to any candidate AND has no other obvious local hook (named Miami person / agency / business / neighborhood), that absence is itself a signal that the story isn't ours — SKIP it. Don't manufacture a tie that isn't there.
 
 LAW ENFORCEMENT COVERAGE. Treat police press statements as one source, not as truth. Attribute every claim ("MDPD said," "according to the sheriff's office," "the department's account"). Never write a use-of-force or fatal-encounter story as fact-from-police; write it as "Police account: X. Family/witnesses dispute: Y. Body-cam footage shows Z." Prioritize court filings, body-cam footage, civilian witnesses, and independent reporting over PIO statements. Default framing for police-involved incidents is neutral and skeptical — not press-release-summarizing. Skip routine "arrest happened" wire copy unless there's a public-interest angle (corruption, pattern of force, prominent person, named institution, civil-rights concern).
 
 ACCOUNTABILITY BIAS. When sources offer both an institutional account and a community/civilian account of the same event, foreground the civilian one and contextualize the institutional one. When a public body announces something (rezoning, contract award, salary, fee), surface who benefits and who pays. When a developer or business says X, ask what the cited reporting shows about previous claims.
 
-PUBLISH WHEN IT'S MIAMI. If an item passes the Miami test, publish it. Short factual coverage of small things (a new opening, a Heat schedule announcement, a school-board vote, a Miami-Dade arrest, a feature on a Miami YouTuber) is exactly the paper. Fold same-event coverage with updateOfRelatedIndex; otherwise draft. **An empty articles array means everything you saw was non-Miami wire copy — possible, but rare.**
+EVERY OUTPUT IS AN EVENT. miami.community has deprecated stand-alone articles — every published item is an event. Two flavors share the same output shape:
+- kind="scheduled" — a future happening (concert, opening, vote, exhibition, market, game, meeting). \`startsAtIso\` = when it happens. Calendar-style \`description\`; \`dek\` + \`body\` usually empty. Many of your input items come from iCal feeds (museums, universities, city governments) — those are pure scheduled events.
+- kind="reported" — a news event that already occurred (a vote was passed, a trade was announced, an arrest made, a record broken). \`startsAtIso\` = when the news event happened. \`dek\` (≤120 chars) + \`body\` (30-60 words, ONE paragraph) carry full newspaper-style editorial copy. The newspaper UI leads with these.
+For an iCal-sourced listing: emit ONE scheduled event, body empty. For a news wire item: emit ONE reported event with full editorial dek+body. When the SAME thing arrives from multiple sources, emit ONE row with all matching citationItemIndices — do not duplicate.
+
+PUBLISH WHEN IT'S MIAMI. If an item passes the Miami test, publish it. Short factual coverage of small things (a new opening, a Heat schedule announcement, a school-board vote, a Miami-Dade arrest, a feature on a Miami YouTuber) is exactly the paper. Fold same-event coverage with updateOfRelatedIndex. **An empty events array means everything you saw was non-Miami wire copy — possible, but rare.** Bias toward MORE events, not fewer; the bar is "has a date" + "happens in / is about Miami-Dade".
 
 Voice across every section: matter-of-fact, plainly written, shorter than the source. The reader has 30 seconds. Lead with what happened. Skip cliché ("amid", "as", "after", "in a sign that"). No headlinese, no questions in headlines, no clickbait. State only what the cited sources support.
 
-You will be told what sections exist and which one each draft should file under. Pick the most specific section that fits. Tone shifts subtly by section (urgent for breaking news, sensory for food, even-handed for politics) but voice stays one — the smart-friend register, no AI tells, no PR speak.
+You will be told what sections exist and which one each event should file under. Pick the most specific section that fits. Tone shifts subtly by section (urgent for breaking news, sensory for food, even-handed for politics) but voice stays one — the smart-friend register, no AI tells, no PR speak.
 
-Beyond drafts and events, you also surface FIRST-CLASS METRICS — numerical or statistical artifacts about Miami that deserve their own widget on the homepage and inline embeds in articles. Use the \`metrics\` tool field for these. Only promote a number when:
+Beyond events, you also surface FIRST-CLASS METRICS — numerical or statistical artifacts about Miami that deserve their own widget on the homepage and inline embeds in event bodies. Use the \`metrics\` tool field for these. Only promote a number when:
 - The cited source EXPLICITLY states it (never compute, estimate, or aggregate across sources)
 - It's locally relevant (Miami-Dade, Miami metro, South Florida, sometimes statewide)
 - It's a number a reader might actually want to see — population counts, median home prices, unemployment rates, ranking-list mentions, demographic breakdowns, climate readings, attendance figures
@@ -810,21 +344,27 @@ export const runMegaDeskInternal = internalAction({
         description: s.description,
       }))
 
-      // Related pool spans all sections too — the mega-desk needs to
-      // dedupe against the whole catalog, not one beat.
-      const relatedPool = await ctx.runQuery(api.articles.recentForLinking, {
-        limit: 25,
+      // Related pool spans all sections — the mega-desk dedupes
+      // against the full event catalog, not one beat. 40 entries over
+      // 14 days gives the Miami-Test signal (no plausible tie ⇒ skip)
+      // a meaningful slice of recent coverage to compare against.
+      // Switched from articles.recentForLinking → events.recentForLinking
+      // as part of the events-only pivot.
+      const relatedPool = await ctx.runQuery(api.events.recentForLinking, {
+        limit: 40,
         lookbackHours: 336,
       })
       const relatedCandidates: Array<RelatedCandidate> = relatedPool.map(
-        (a, idx) => ({
+        (e, idx) => ({
           index: idx,
-          section: a.section?.name ?? "—",
-          title: a.title,
-          dek: a.dek,
-          publishedAt: a.publishedAt
-            ? new Date(a.publishedAt).toISOString().slice(0, 10)
+          section: e.section?.name ?? "—",
+          title: e.title,
+          dek: e.dek,
+          publishedAt: e.publishedAt
+            ? new Date(e.publishedAt).toISOString().slice(0, 10)
             : undefined,
+          tags: e.tags,
+          neighborhoods: e.neighborhoods,
         }),
       )
 
@@ -862,50 +402,119 @@ export const runMegaDeskInternal = internalAction({
       }))
 
       await log(`Calling ${model} (${reservation.centsSpent}¢ today)`)
-      const { drafts, events, metrics, rawDraftCount, stopReason, rawInputSnippet } = await generateDrafts({
-        systemPrompt: MEGA_SYSTEM_PROMPT,
-        model,
-        items: draftItems,
-        maxDrafts: MEGA_MAX_DRAFTS,
-        relatedCandidates,
-        sectionChoices,
-        metricCatalog,
-      })
-      const dropped = rawDraftCount - drafts.length
+      const { events, metrics, rawEventCount, stopReason, rawInputSnippet } =
+        await generateDrafts({
+          systemPrompt: MEGA_SYSTEM_PROMPT,
+          model,
+          items: draftItems,
+          maxDrafts: MEGA_MAX_DRAFTS,
+          relatedCandidates,
+          sectionChoices,
+          metricCatalog,
+        })
+      const dropped = rawEventCount - events.length
       await log(
-        `LLM returned ${drafts.length} articles (${rawDraftCount} raw, ${dropped} dropped in validation), ${events.length} events, ${metrics.length} metrics`,
+        `LLM returned ${events.length} events (${rawEventCount} raw, ${dropped} dropped in validation), ${metrics.length} metrics`,
       )
-      if (rawDraftCount === 0) {
-        await log(`Empty articles diagnostic — stop_reason=${stopReason} input=${rawInputSnippet}`)
+      if (rawEventCount === 0) {
+        await log(
+          `Empty events diagnostic — stop_reason=${stopReason} input=${rawInputSnippet}`,
+        )
       }
 
-      // Mark every candidate the LLM saw as consumed — whether it made
-      // it into a draft or not. Without this, items the LLM rejects
-      // (national wire copy, generic feed noise, items that just
-      // weren't a fit) recycle endlessly on the unconsumed queue and
-      // crowd out fresh items. The mega-desk has now seen them; if
-      // they were drafts, they'll get consumed below as part of the
-      // draft-insertion loop too (idempotent patch). If they weren't,
-      // we're saying "we considered these and passed."
+      // Mark every candidate the LLM saw as consumed — whether it
+      // became an event or not. Items the LLM rejected (non-Miami
+      // wire copy, generic feed noise, items below the bar) won't
+      // recycle endlessly on the unconsumed queue.
       await ctx.runMutation(api.agentsData.markItemsConsumed, {
         itemIds: candidates.map((c) => c.item._id),
       })
 
-      // 5. Insert drafts (same dedup-via-augment + hero-resolve flow as
-      //    runDeskInternal). No author IDs — bylines moved to "From sources"
-      //    in the article header per the rip-and-replace plan.
-      const draftToArticleId = new Map<number, Id<"articles">>()
-      let draftIndex = -1
-      for (const draft of drafts) {
-        draftIndex += 1
-        const validIndices = draft.citationItemIndices.filter(
+      // 4.5. Rubric grader gate. Each candidate event gets a separate
+      //      Haiku call with a clean context window — the writer's
+      //      reasoning chain doesn't influence the verdict. Modeled on
+      //      Anthropic's "Outcomes" pattern: the writer optimizes for
+      //      editorial flow, the grader checks policy compliance.
+      //      Borderline cases pass; only obvious rubric breaks (out-of-
+      //      county wire, blotter without hook, missing editorial body)
+      //      get filtered. Grader failures (network error, malformed
+      //      response) default to PASS so the gate never blocks on its
+      //      own unreliability.
+      //
+      //      Runs in parallel — 20 events ≈ 1s wall time, ~$0.01/run.
+      const GRADER_MODEL = "claude-haiku-4-5-20251001"
+      const grades =
+        events.length > 0
+          ? await Promise.all(
+              events.map((ev) =>
+                verifyEventRubric({
+                  model: GRADER_MODEL,
+                  event: {
+                    title: ev.title,
+                    dek: ev.dek,
+                    body: ev.body,
+                    description: ev.description,
+                    kind: ev.kind,
+                    locationName: ev.locationName,
+                    neighborhoodSlugs: ev.neighborhoodSlugs,
+                    tags: ev.tags,
+                    sectionSlug: ev.sectionSlug,
+                  },
+                }).catch(() => null),
+              ),
+            )
+          : []
+      const graderRejects: Array<{ title: string; reason: string }> = []
+      const passed = events.filter((ev, i) => {
+        const verdict = grades[i]
+        if (verdict && !verdict.passes) {
+          graderRejects.push({ title: ev.title, reason: verdict.reason })
+          return false
+        }
+        return true
+      })
+      if (events.length > 0) {
+        const rejectSample = graderRejects
+          .slice(0, 5)
+          .map((r) => `  • "${r.title.slice(0, 60)}" — ${r.reason}`)
+          .join("\n")
+        await log(
+          `Grader passed ${passed.length}/${events.length}` +
+            (rejectSample ? `; rejected:\n${rejectSample}` : ""),
+        )
+      }
+
+      // Section fallback — every event must land in a real section.
+      // News is the universal fallback for items the LLM didn't route.
+      const fallbackSectionId =
+        sectionIdBySlug.get("news") ?? allSections[0]?._id
+      if (!fallbackSectionId) {
+        throw new Error("No sections configured — cannot insert events")
+      }
+
+      // 5. Insert events. Single loop now handles both kind=scheduled
+      //    (calendar items) and kind=reported (news events with full
+      //    editorial dek+body). Dedupe via augmentEvent when the LLM
+      //    flags updateOfRelatedIndex; otherwise hero-resolve + insert
+      //    new.
+      for (const ev of passed) {
+        const validIndices = ev.citationItemIndices.filter(
           (i) => i >= 0 && i < candidates.length,
         )
         if (validIndices.length === 0) {
-          await log(`Skipped draft "${draft.title}" — no valid citations`)
+          await log(`Skipped event "${ev.title}" — no valid citations`)
           continue
         }
+        const startsAt = new Date(ev.startsAtIso).getTime()
+        if (Number.isNaN(startsAt)) {
+          await log(`Skipped event "${ev.title}" — bad startsAtIso`)
+          continue
+        }
+        const endsAt = ev.endsAtIso
+          ? new Date(ev.endsAtIso).getTime()
+          : undefined
         const citedCandidates = validIndices.map((i) => candidates[i])
+        const sourceItemIds = citedCandidates.map((c) => c.item._id)
         const citations = citedCandidates.map((c) => ({
           url: c.item.url,
           title: c.item.title,
@@ -914,28 +523,27 @@ export const runMegaDeskInternal = internalAction({
           snippet: c.item.snippet,
         }))
 
+        // Dedupe path — same shape as the legacy article augment.
         if (
-          draft.updateOfRelatedIndex !== undefined &&
-          draft.updateOfRelatedIndex >= 0 &&
-          draft.updateOfRelatedIndex < relatedPool.length
+          ev.updateOfRelatedIndex !== undefined &&
+          ev.updateOfRelatedIndex >= 0 &&
+          ev.updateOfRelatedIndex < relatedPool.length
         ) {
-          const target = relatedPool[draft.updateOfRelatedIndex]
-          const result = await ctx.runMutation(api.articles.augmentArticle, {
-            articleId: target._id,
+          const target = relatedPool[ev.updateOfRelatedIndex]
+          const result = await ctx.runMutation(api.events.augmentEvent, {
+            eventId: target._id,
             newCitations: citations,
-            newSourceItems: citedCandidates.map((c) => c.item._id),
+            newSourceItems: sourceItemIds,
             patch: {
-              title: draft.title,
-              dek: draft.dek,
-              body: toSingleParagraph(draft.body),
+              title: ev.title,
+              dek: ev.dek,
+              body: ev.body ? toSingleParagraph(ev.body) : undefined,
+              description: ev.description,
             },
             agentSlug: MEGA_DESK_SLUG,
             agentRunId: runId,
           })
           if (result.merged) {
-            await ctx.runMutation(api.agentsData.markItemsConsumed, {
-              itemIds: citedCandidates.map((c) => c.item._id),
-            })
             await log(
               `Augmented "${target.title}" (+${result.citationsAdded} citations${
                 result.contentUpdated ? ", content refreshed" : ""
@@ -943,131 +551,45 @@ export const runMegaDeskInternal = internalAction({
             )
             continue
           }
+          // Fall through if the target was archived/rejected.
         }
 
-        const hero = await resolveHero(
-          citations.map((c) => c.url),
-          draft.title,
-        )
-
-        // Section pick falls back to "news" for any draft the LLM doesn't
-        // route — every site has a news section by convention.
-        const fallbackSectionId =
-          sectionIdBySlug.get("news") ?? allSections[0]?._id
-        if (!fallbackSectionId) {
-          throw new Error("No sections configured — cannot insert draft")
-        }
-        const chosenSectionId =
-          (draft.sectionSlug
-            ? sectionIdBySlug.get(draft.sectionSlug)
-            : undefined) ?? fallbackSectionId
-
-        const article = {
-          slug: slugify(draft.suggestedSlug || draft.title),
-          title: draft.title,
-          dek: draft.dek,
-          body: toSingleParagraph(draft.body),
-          sectionId: chosenSectionId,
-          tags: cleanTags(draft.tags),
-          neighborhoods: filterNeighborhoodSlugs(draft.neighborhoodSlugs ?? []),
-          heroImage: hero.source !== "none" ? hero.url : undefined,
-          heroCaption:
-            hero.source === "source"
-              ? `Image: ${hostname(citations[0].url)}`
-              : hero.source === "wikimedia"
-                ? hero.caption
-                : undefined,
-          heroSource: hero.source,
-          citations,
-          agentSlug: MEGA_DESK_SLUG,
-          agentRunId: runId,
-          derivedFromItems: citedCandidates.map((c) => c.item._id),
-          publishedAt:
-            citedCandidates
-              .map((c) => c.item.publishedAt)
-              .filter((d): d is number => d != null)
-              .sort((a, b) => b - a)[0] ?? undefined,
-        }
-
-        const relatedIds = (draft.relatedArticleIndices ?? [])
-          .filter((i) => i >= 0 && i < relatedPool.length)
-          .map((i) => relatedPool[i]._id)
-
-        const articleId: Id<"articles"> = await ctx.runMutation(
-          api.agentsData.insertDraft,
-          {
-            article,
-            authorIds: [],
-            relatedIds: relatedIds.length > 0 ? relatedIds : undefined,
-          },
-        )
-        draftToArticleId.set(draftIndex, articleId)
-
-        await ctx.runMutation(api.agentsData.markItemsConsumed, {
-          itemIds: citedCandidates.map((c) => c.item._id),
-        })
-        draftsCreated += 1
-        await log(`Drafted "${draft.title}"`)
-      }
-
-      // 6. Insert events — same flow as runDeskInternal. Every event
-      //    must land in a real section: prefer News as the fallback,
-      //    then any other section. Things-to-do isn't a section anymore.
-      const fallbackEventSectionId =
-        sectionIdBySlug.get("news") ?? allSections[0]?._id
-      for (const ev of events) {
-        const validIndices = ev.citationItemIndices.filter(
-          (i) => i >= 0 && i < candidates.length,
-        )
-        if (validIndices.length === 0) continue
-        const startsAt = new Date(ev.startsAtIso).getTime()
-        if (Number.isNaN(startsAt)) continue
-        const endsAt = ev.endsAtIso
-          ? new Date(ev.endsAtIso).getTime()
-          : undefined
-        const directDraftLink =
-          ev.relatedDraftIndex !== undefined
-            ? draftToArticleId.get(ev.relatedDraftIndex)
-            : undefined
-        const llmRelated = (ev.relatedArticleIndices ?? [])
-          .filter((i) => i >= 0 && i < relatedPool.length)
-          .map((i) => relatedPool[i]._id)
-        const relatedArticleIds = Array.from(
-          new Set<Id<"articles">>(
-            [
-              ...(directDraftLink ? [directDraftLink] : []),
-              ...llmRelated,
-            ],
-          ),
-        )
-        const sourceItemIds = validIndices.map((i) => candidates[i].item._id)
-        const citedCandidates = validIndices.map((i) => candidates[i])
-        const eventCitations = citedCandidates.map((c) => ({
-          url: c.item.url,
-          title: c.item.title,
-          publisher: c.sourceName,
-          fetchedAt: c.item.fetchedAt,
-          snippet: c.item.snippet,
-        }))
-        const eventCitationUrls = [
+        // Hero resolution prioritizes the event's own URL first, then
+        // the cited source URLs. Reported events get a punchier query
+        // ("Miami " + title) to bias toward editorial photos; scheduled
+        // events use the venue's own URL as the lead candidate.
+        const heroUrls = [
           ...(ev.url ? [ev.url] : []),
-          ...validIndices.map((i) => candidates[i].item.url),
+          ...citations.map((c) => c.url),
         ]
-        const eventHero = await resolveHero(
-          eventCitationUrls,
-          `Miami ${ev.title}`,
-        )
-        const eventSectionId =
+        const heroQuery =
+          ev.kind === "reported" ? `Miami ${ev.title}` : ev.title
+        const hero = await resolveHero(heroUrls, heroQuery)
+
+        const sectionId =
           (ev.sectionSlug
             ? sectionIdBySlug.get(ev.sectionSlug)
-            : undefined) ?? fallbackEventSectionId
-        if (!eventSectionId) continue
+            : undefined) ?? fallbackSectionId
+
+        // Cross-link to recently-published events the LLM flagged as
+        // siblings/follow-ups.
+        const relatedEventIds = ev.relatedEventIndices
+          .filter((i) => i >= 0 && i < relatedPool.length)
+          .map((i) => relatedPool[i]._id)
+
         try {
           await ctx.runMutation(internal.events.insertExtracted, {
             event: {
               slug: slugify(ev.suggestedSlug || ev.title),
               title: ev.title,
               description: ev.description,
+              dek: ev.dek,
+              body: ev.body ? toSingleParagraph(ev.body) : undefined,
+              kind: ev.kind,
+              videoEmbed:
+                ev.videoProvider && ev.videoId
+                  ? { provider: ev.videoProvider, id: ev.videoId }
+                  : undefined,
               startsAt,
               endsAt: Number.isFinite(endsAt) ? endsAt : undefined,
               allDay: ev.allDay,
@@ -1077,26 +599,28 @@ export const runMegaDeskInternal = internalAction({
               ),
               url: ev.url,
               price: ev.price,
-              heroImage:
-                eventHero.source !== "none" ? eventHero.url : undefined,
-              heroSource: eventHero.source,
+              heroImage: hero.source !== "none" ? hero.url : undefined,
+              heroSource: hero.source,
               heroCaption:
-                eventHero.source === "source"
-                  ? `Image: ${hostname(eventCitations[0]?.url ?? "")}`
-                  : eventHero.source === "wikimedia"
-                    ? eventHero.caption
+                hero.source === "source"
+                  ? `Image: ${hostname(citations[0]?.url ?? "")}`
+                  : hero.source === "wikimedia"
+                    ? hero.caption
                     : undefined,
-              sectionId: eventSectionId,
+              sectionId,
               tags: cleanTags(ev.tags ?? []),
-              relatedArticleIds:
-                relatedArticleIds.length > 0 ? relatedArticleIds : undefined,
-              citations: eventCitations,
+              relatedEventIds:
+                relatedEventIds.length > 0 ? relatedEventIds : undefined,
+              citations,
             },
             agentSlug: MEGA_DESK_SLUG,
             agentRunId: runId,
             derivedFromItems: sourceItemIds,
           })
           eventsCreated += 1
+          if (ev.kind === "reported") {
+            draftsCreated += 1 // legacy counter, surfaced to the editor UI
+          }
         } catch (e) {
           await log(
             `Skipped event "${ev.title}": ${e instanceof Error ? e.message : String(e)}`,
@@ -1104,7 +628,7 @@ export const runMegaDeskInternal = internalAction({
         }
       }
       if (eventsCreated > 0) {
-        await log(`Queued ${eventsCreated} events`)
+        await log(`Created ${eventsCreated} events`)
       }
 
       // 7. Persist metrics — slug-keyed upsert. New numbers from this

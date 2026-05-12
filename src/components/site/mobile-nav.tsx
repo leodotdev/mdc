@@ -48,18 +48,6 @@ export function MobileNav() {
             onPick={() => setOpen(false)}
             lang={lang}
           />
-          <ul className="mt-2 flex flex-col divide-y divide-border">
-            <li>
-              <Link
-                to="/events"
-                onClick={() => setOpen(false)}
-                className="flex items-center justify-between py-3 font-sans text-base font-semibold text-foreground transition-colors hover:text-primary"
-              >
-                {t("nav.events")}
-              </Link>
-            </li>
-          </ul>
-
           <p className="kicker mt-8 mb-3 text-foreground">{t("drawer.more")}</p>
           <ul className="flex flex-col divide-y divide-border">
             <li>

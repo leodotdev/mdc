@@ -24,7 +24,7 @@ import { WeatherWidget } from "@/components/widgets/weather-widget"
 import { convexSuspenseQuery } from "@/lib/convex-suspense"
 import { useTranslation } from "@/lib/i18n/context"
 import { localizeSectionName } from "@/lib/i18n/sections"
-import { useOpenArticleDrawer } from "@/lib/use-open-article-drawer"
+import { useOpenEventDrawer } from "@/lib/use-open-article-drawer"
 import { proxiedImageSrcSet } from "@/lib/image-proxy"
 import { BannerAd } from "@/components/site/banner-ad"
 
@@ -40,18 +40,18 @@ export const Route = createFileRoute("/_site/")({
   loader: async ({ context }) => {
     const [top, latest] = await Promise.all([
       context.queryClient.ensureQueryData(
-        convexQuery(api.articles.topStories, { limit: 8 }),
+        convexQuery(api.events.topToday, { limit: 8 }),
       ),
       context.queryClient.ensureQueryData(
-        convexQuery(api.articles.latest, { limit: 40 }),
+        convexQuery(api.events.latestEditorial, { limit: 40 }),
       ),
       context.queryClient.ensureQueryData(convexQuery(api.sections.list, {})),
       context.queryClient.ensureQueryData(
         convexQuery(api.events.upcoming, { limit: 5, days: 14 }),
       ),
     ])
-    // The lead image is the LCP candidate — top story preferred, latest
-    // story as fallback. Returned so the route's `head` function can
+    // The lead image is the LCP candidate — top event preferred, latest
+    // event as fallback. Returned so the route's `head` function can
     // emit a `<link rel="preload">` for it.
     const leadHeroUrl = top?.[0]?.heroImage ?? latest?.[0]?.heroImage
     return { leadHeroUrl }
@@ -89,24 +89,28 @@ const HEAVY = "border-t border-foreground"
 
 function HomePage() {
   const { t, lang } = useTranslation()
-  const openInDrawer = useOpenArticleDrawer()
+  const openInDrawer = useOpenEventDrawer()
   // Lift heroCaption + title localization once per render so the raw
   // <img> / Link blocks below can read the right-language caption
   // without re-running the helper at each call site. Image src and
-  // article slug stay on the canonical (EN) record — those are URL
+  // event slug stay on the canonical (EN) record — those are URL
   // fields that don't translate.
-  const tr = (a: { heroCaption?: string; title: string; dek: string; body: string; translations?: { es?: { title: string; dek: string; body: string; heroCaption?: string } } }) =>
+  const tr = (e: {
+    heroCaption?: string
+    title: string
+    translations?: { es?: { title: string; heroCaption?: string } }
+  }) =>
     lang === "es"
       ? {
-          title: a.translations?.es?.title ?? a.title,
-          heroCaption: a.translations?.es?.heroCaption ?? a.heroCaption,
+          title: e.translations?.es?.title ?? e.title,
+          heroCaption: e.translations?.es?.heroCaption ?? e.heroCaption,
         }
-      : { title: a.title, heroCaption: a.heroCaption }
+      : { title: e.title, heroCaption: e.heroCaption }
   const { data: top } = useSuspenseQuery(
-    convexSuspenseQuery(api.articles.topStories, { limit: 8 }),
+    convexSuspenseQuery(api.events.topToday, { limit: 8 }),
   )
   const { data: latest } = useSuspenseQuery(
-    convexSuspenseQuery(api.articles.latest, { limit: 40 }),
+    convexSuspenseQuery(api.events.latestEditorial, { limit: 40 }),
   )
   const { data: sections } = useSuspenseQuery(
     convexSuspenseQuery(api.sections.list, {}),
@@ -186,7 +190,7 @@ function HomePage() {
               {/* Image col — appears first on mobile, lives in cols 6-12 on desktop */}
               {lead.heroImage ? (
                 <Link
-                  to="/article/$slug"
+                  to="/event/$slug"
                   params={{ slug: lead.slug }}
                   onClick={(e) => openInDrawer(lead.slug, e)}
                   className="group/lead block self-start [contain:paint] md:col-span-7 md:col-start-6"
@@ -246,7 +250,7 @@ function HomePage() {
             >
               {a.heroImage ? (
                 <Link
-                  to="/article/$slug"
+                  to="/event/$slug"
                   params={{ slug: a.slug }}
                   onClick={(e) => openInDrawer(a.slug, e)}
                   className="group/xl block self-start [contain:paint] md:col-span-7 md:col-start-6"
@@ -293,14 +297,6 @@ function HomePage() {
           <div>
             <SectionHeaderCell
               title={t("nav.events")}
-              right={
-                <Link
-                  to="/events"
-                  className="meta hover:underline"
-                >
-                  {t("home.allLink")}
-                </Link>
-              }
             />
             <div className="flex flex-col divide-y divide-foreground/15">
               {upcomingEvents.length === 0 ? (
@@ -339,7 +335,7 @@ function HomePage() {
               <div className="grid grid-cols-1 gap-x-6 gap-y-4 md:grid-cols-12">
                 {morelead.heroImage ? (
                   <Link
-                    to="/article/$slug"
+                    to="/event/$slug"
                     params={{ slug: morelead.slug }}
                     onClick={(e) => openInDrawer(morelead.slug, e)}
                     className="group/more block self-start [contain:paint] md:col-span-7 md:col-start-6"

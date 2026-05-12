@@ -116,14 +116,6 @@ export function Footer() {
             <ul className="flex flex-col gap-1 mt-2">
               <li>
                 <Link
-                  to="/events"
-                  className="text-sm text-muted-foreground hover:underline hover:text-foreground"
-                >
-                  {t("nav.events")}
-                </Link>
-              </li>
-              <li>
-                <Link
                   to="/about"
                   className="text-sm text-muted-foreground hover:underline hover:text-foreground"
                 >

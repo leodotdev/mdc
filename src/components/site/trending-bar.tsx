@@ -5,10 +5,12 @@ import { Link } from "@tanstack/react-router"
 import { api } from "../../../convex/_generated/api"
 import { useTranslation } from "@/lib/i18n/context"
 
-// Tag-frequency cache: pull the latest 30 articles, count how often each tag
+// Tag-frequency cache: pull the latest 30 events, count how often each tag
 // appears, and surface the top 6 as a horizontal "what's getting written
 // about" strip — WaPo's Trending bar shape, populated from real editorial
-// activity rather than a separate trending-topic query.
+// activity rather than a separate trending-topic query. Switched from
+// articles.latest → events.latestEditorial as part of the events-only
+// pivot (Phase 2).
 const TRENDING_LIMIT = 6
 const SCAN_LIMIT = 30
 
@@ -19,7 +21,7 @@ function humanize(tag: string): string {
 export function TrendingBar() {
   const { t } = useTranslation()
   const { data: latest } = useQuery(
-    convexQuery(api.articles.latest, { limit: SCAN_LIMIT }),
+    convexQuery(api.events.latestEditorial, { limit: SCAN_LIMIT }),
   )
   const trending = computeTrending(latest ?? [])
 
@@ -50,11 +52,11 @@ export function TrendingBar() {
 }
 
 function computeTrending(
-  articles: ReadonlyArray<{ tags: ReadonlyArray<string> }>,
+  articles: ReadonlyArray<{ tags?: ReadonlyArray<string> }>,
 ): Array<string> {
   const counts = new Map<string, number>()
   for (const a of articles) {
-    for (const tag of a.tags) {
+    for (const tag of a.tags ?? []) {
       counts.set(tag, (counts.get(tag) ?? 0) + 1)
     }
   }

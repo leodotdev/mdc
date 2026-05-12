@@ -21,3 +21,20 @@ export function useOpenArticleDrawer() {
     })
   }
 }
+
+// Event drawer sibling. Same shape, different search-param key
+// (`?event=slug`). Used by the events-only public site so newspaper
+// cards open the EventDrawer instead of the ArticleDrawer.
+export function useOpenEventDrawer() {
+  const navigate = useNavigate()
+  return (slug: string, e: React.MouseEvent) => {
+    if (e.button !== 0) return
+    e.preventDefault()
+    void navigate({
+      search: ((prev: Record<string, unknown>) => ({
+        ...prev,
+        event: slug,
+      })) as never,
+    })
+  }
+}

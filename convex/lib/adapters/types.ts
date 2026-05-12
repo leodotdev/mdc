@@ -18,6 +18,7 @@ export type SourceForAdapter = {
     | "web"
     | "wikipedia-otd"
     | "ics"
+    | "events-html"
     | "data"
   url: string
   config?: unknown

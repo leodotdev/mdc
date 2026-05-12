@@ -1,9 +1,13 @@
 import { Link } from "@tanstack/react-router"
 
-import type { ArticleWithRelations } from "@/lib/article-types"
+import type { StoryCardItem } from "@/lib/article-types"
+import { isEventCard } from "@/lib/article-types"
 import { useTranslation } from "@/lib/i18n/context"
-import { localizedArticle } from "@/lib/localized-article"
-import { useOpenArticleDrawer } from "@/lib/use-open-article-drawer"
+import { localizedCard } from "@/lib/localized-article"
+import {
+  useOpenArticleDrawer,
+  useOpenEventDrawer,
+} from "@/lib/use-open-article-drawer"
 import { cn } from "@/lib/utils"
 
 // Inline trending strip — single horizontal row, bold "Trending" label
@@ -20,14 +24,15 @@ export function TrendingInline({
   className,
 }: {
   label?: string
-  articles: Array<ArticleWithRelations>
+  articles: Array<StoryCardItem>
   limit?: number
   className?: string
 }) {
   const { lang } = useTranslation()
-  const openInDrawer = useOpenArticleDrawer()
+  const openArticleInDrawer = useOpenArticleDrawer()
+  const openEventInDrawer = useOpenEventDrawer()
   if (articles.length === 0) return null
-  const items = articles.slice(0, limit).map((a) => localizedArticle(a, lang))
+  const items = articles.slice(0, limit).map((a) => localizedCard(a, lang))
   return (
     <nav
       aria-label={label}
@@ -37,17 +42,30 @@ export function TrendingInline({
       )}
     >
       <span className="font-sans font-semibold text-foreground">{label}</span>
-      {items.map((a) => (
-        <Link
-          key={a._id}
-          to="/article/$slug"
-          params={{ slug: a.slug }}
-          onClick={(e) => openInDrawer(a.slug, e)}
-          className="font-sans text-foreground/80 transition-colors hover:text-primary"
-        >
-          {a.title}
-        </Link>
-      ))}
+      {items.map((a) => {
+        const isEvent = isEventCard(a)
+        const slug = a.slug ?? ""
+        const linkProps = isEvent
+          ? ({
+              to: "/event/$slug" as const,
+              params: { slug },
+              onClick: (e: React.MouseEvent) => openEventInDrawer(slug, e),
+            } as const)
+          : ({
+              to: "/article/$slug" as const,
+              params: { slug },
+              onClick: (e: React.MouseEvent) => openArticleInDrawer(slug, e),
+            } as const)
+        return (
+          <Link
+            key={a._id}
+            {...linkProps}
+            className="font-sans text-foreground/80 transition-colors hover:text-primary"
+          >
+            {a.title}
+          </Link>
+        )
+      })}
     </nav>
   )
 }

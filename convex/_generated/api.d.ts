@@ -22,6 +22,7 @@ import type * as events from "../events.js";
 import type * as http from "../http.js";
 import type * as imageWatchdog from "../imageWatchdog.js";
 import type * as lib_adapters_bluesky from "../lib/adapters/bluesky.js";
+import type * as lib_adapters_eventsHtml from "../lib/adapters/eventsHtml.js";
 import type * as lib_adapters_ics from "../lib/adapters/ics.js";
 import type * as lib_adapters_index from "../lib/adapters/index.js";
 import type * as lib_adapters_reddit from "../lib/adapters/reddit.js";
@@ -74,6 +75,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   imageWatchdog: typeof imageWatchdog;
   "lib/adapters/bluesky": typeof lib_adapters_bluesky;
+  "lib/adapters/eventsHtml": typeof lib_adapters_eventsHtml;
   "lib/adapters/ics": typeof lib_adapters_ics;
   "lib/adapters/index": typeof lib_adapters_index;
   "lib/adapters/reddit": typeof lib_adapters_reddit;

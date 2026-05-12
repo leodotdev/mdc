@@ -20,7 +20,7 @@ import { SectionMetrics } from "@/components/widgets/section-metrics"
 import { TeamWidgets } from "@/components/widgets/sports-widget"
 import { convexSuspenseQuery } from "@/lib/convex-suspense"
 import { useTranslation } from "@/lib/i18n/context"
-import { useOpenArticleDrawer } from "@/lib/use-open-article-drawer"
+import { useOpenEventDrawer } from "@/lib/use-open-article-drawer"
 import { localizeSectionName } from "@/lib/i18n/sections"
 
 // Vertical spacing between major page blocks. Mirrors the homepage's
@@ -31,9 +31,11 @@ const HEAVY = "border-t border-foreground"
 
 export const Route = createFileRoute("/_site/section/$slug")({
   loader: async ({ context, params }) => {
-    // Things-to-do is now surfaced as /events (events + stories merged).
+    // Legacy /section/things-to-do URLs land on the homepage now — the
+    // events-only pivot turned the homepage into the events feed and
+    // there's no separate "things to do" section anymore.
     if (params.slug === "things-to-do") {
-      throw redirect({ to: "/events" })
+      throw redirect({ to: "/" })
     }
     const section = await context.queryClient.ensureQueryData(
       convexQuery(api.sections.getBySlug, { slug: params.slug }),
@@ -41,13 +43,13 @@ export const Route = createFileRoute("/_site/section/$slug")({
     if (!section) throw notFound()
     await Promise.all([
       context.queryClient.ensureQueryData(
-        convexQuery(api.articles.topInSection, {
+        convexQuery(api.events.topInSection, {
           sectionSlug: params.slug,
           limit: 8,
         }),
       ),
       context.queryClient.ensureQueryData(
-        convexQuery(api.articles.listBySection, {
+        convexQuery(api.events.listBySection, {
           sectionSlug: params.slug,
           paginationOpts: { numItems: 40, cursor: null },
         }),
@@ -80,41 +82,32 @@ function SectionPage() {
   const { slug } = Route.useParams()
   const { section } = Route.useLoaderData()
   const { lang, t } = useTranslation()
-  const openInDrawer = useOpenArticleDrawer()
+  const openInDrawer = useOpenEventDrawer()
 
-  // Mirrors homepage's `tr` shim — pull localized title/heroCaption
-  // alongside the canonical record so img/Link blocks stay simple.
-  const tr = (a: {
+  // Pull localized title/heroCaption alongside the canonical record so
+  // img/Link blocks stay simple. Mirrors the homepage helper.
+  const tr = (e: {
     heroCaption?: string
     title: string
-    dek: string
-    body: string
-    translations?: {
-      es?: {
-        title: string
-        dek: string
-        body: string
-        heroCaption?: string
-      }
-    }
+    translations?: { es?: { title: string; heroCaption?: string } }
   }) =>
     lang === "es"
       ? {
-          title: a.translations?.es?.title ?? a.title,
-          heroCaption: a.translations?.es?.heroCaption ?? a.heroCaption,
+          title: e.translations?.es?.title ?? e.title,
+          heroCaption: e.translations?.es?.heroCaption ?? e.heroCaption,
         }
-      : { title: a.title, heroCaption: a.heroCaption }
+      : { title: e.title, heroCaption: e.heroCaption }
 
-  // Top stories ranked by importance (above-fold candidates).
+  // Top events ranked by importance (above-fold candidates).
   const { data: top } = useSuspenseQuery(
-    convexSuspenseQuery(api.articles.topInSection, {
+    convexSuspenseQuery(api.events.topInSection, {
       sectionSlug: slug,
       limit: 8,
     }),
   )
-  // Recent stories paginated (long tail).
+  // Recent events paginated (long tail).
   const { data: list } = useSuspenseQuery(
-    convexSuspenseQuery(api.articles.listBySection, {
+    convexSuspenseQuery(api.events.listBySection, {
       sectionSlug: slug,
       paginationOpts: { numItems: 40, cursor: null },
     }),
@@ -194,8 +187,11 @@ function SectionPage() {
     <div className="flex flex-col gap-10">
       {/* Title + inline trending strip read as one block — the
           trending row replaces what used to be the section dek, sits
-          centered under the title, and shares its scale. */}
-      <div className="flex flex-col gap-3 pb-4">
+          centered under the title, and shares its scale. The heavy
+          rule lands at the BOTTOM of the combined block (after
+          trending), so the page's first horizontal rule echoes the
+          masthead nav rule. */}
+      <div className="rule-bottom flex flex-col gap-3 pb-6">
         <PageHeader title={sectionName} ruleBottom={false} className="pb-0" />
         <TrendingInline
           articles={top.slice(0, 2)}
@@ -211,7 +207,7 @@ function SectionPage() {
             <div className="grid grid-cols-1 gap-x-6 gap-y-6 pb-8 md:grid-cols-12">
               {lead.heroImage ? (
                 <Link
-                  to="/article/$slug"
+                  to="/event/$slug"
                   params={{ slug: lead.slug }}
                   onClick={(e) => openInDrawer(lead.slug, e)}
                   className="group/lead block self-start [contain:paint] md:col-span-7 md:col-start-6"
@@ -270,7 +266,7 @@ function SectionPage() {
             >
               {a.heroImage ? (
                 <Link
-                  to="/article/$slug"
+                  to="/event/$slug"
                   params={{ slug: a.slug }}
                   onClick={(e) => openInDrawer(a.slug, e)}
                   className="group/xl block self-start [contain:paint] md:col-span-7 md:col-start-6"
@@ -315,15 +311,6 @@ function SectionPage() {
             <SectionHeaderCell
               title={`${sectionName} ${t("nav.events").toLowerCase()}`}
               accent={section.accentColor}
-              right={
-                <Link
-                  to="/events"
-                  search={{ sections: [slug] }}
-                  className="meta hover:underline"
-                >
-                  {t("home.allLink")}
-                </Link>
-              }
             />
             <div className="flex flex-col divide-y divide-foreground/15">
               {sectionEvents.length === 0 ? (
@@ -357,7 +344,7 @@ function SectionPage() {
               <div className="grid grid-cols-1 gap-x-6 gap-y-4 md:grid-cols-12">
                 {morelead.heroImage ? (
                   <Link
-                    to="/article/$slug"
+                    to="/event/$slug"
                     params={{ slug: morelead.slug }}
                     onClick={(e) => openInDrawer(morelead.slug, e)}
                     className="group/more block self-start [contain:paint] md:col-span-7 md:col-start-6"

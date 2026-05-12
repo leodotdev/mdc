@@ -18,7 +18,7 @@ import { BannerAd } from "@/components/site/banner-ad"
 import { HeroImg } from "@/components/site/hero-img"
 import { convexSuspenseQuery } from "@/lib/convex-suspense"
 import { useTranslation } from "@/lib/i18n/context"
-import { useOpenArticleDrawer } from "@/lib/use-open-article-drawer"
+import { useOpenEventDrawer } from "@/lib/use-open-article-drawer"
 
 const BLOCK = "pt-10"
 const HEAVY = "border-t border-foreground"
@@ -37,7 +37,7 @@ export const Route = createFileRoute("/_site/neighborhood/$slug")({
     if (!name) throw notFound()
     await Promise.all([
       context.queryClient.ensureQueryData(
-        convexQuery(api.articles.listByNeighborhood, {
+        convexQuery(api.events.listByNeighborhood, {
           slug: params.slug,
           limit: ARTICLE_FETCH_LIMIT,
         }),
@@ -67,21 +67,12 @@ function NeighborhoodPage() {
   const { slug } = Route.useParams()
   const { name } = Route.useLoaderData()
   const { lang, t } = useTranslation()
-  const openInDrawer = useOpenArticleDrawer()
+  const openInDrawer = useOpenEventDrawer()
 
   const tr = (a: {
     heroCaption?: string
     title: string
-    dek: string
-    body: string
-    translations?: {
-      es?: {
-        title: string
-        dek: string
-        body: string
-        heroCaption?: string
-      }
-    }
+    translations?: { es?: { title: string; heroCaption?: string } }
   }) =>
     lang === "es"
       ? {
@@ -95,7 +86,7 @@ function NeighborhoodPage() {
   // chronological list client-side using the same comparator the section
   // page's `topInSection` uses on the server.
   const { data: list } = useSuspenseQuery(
-    convexSuspenseQuery(api.articles.listByNeighborhood, {
+    convexSuspenseQuery(api.events.listByNeighborhood, {
       slug,
       limit: ARTICLE_FETCH_LIMIT,
     }),
@@ -132,7 +123,20 @@ function NeighborhoodPage() {
   }
 
   const now = Date.now()
-  const ranked = [...list].sort((a, b) => compareByImportance(a, b, now))
+  // Adapter for the article-flavored importance comparator: events
+  // carry optional `derivedFromItems` / `citations`, so default to
+  // empty arrays for safety on legacy rows.
+  const asScorable = (e: (typeof list)[number]) => ({
+    derivedFromItems: e.derivedFromItems ?? [],
+    citations: e.citations ?? [],
+    tags: e.tags ?? [],
+    title: e.title,
+    publishedAt: e.publishedAt,
+    createdAt: e.createdAt,
+  })
+  const ranked = [...list].sort((a, b) =>
+    compareByImportance(asScorable(a), asScorable(b), now),
+  )
 
   // Dedupe across the page so the same story doesn't appear twice in
   // different blocks. Mirrors the section/homepage `take` pattern exactly.
@@ -180,7 +184,7 @@ function NeighborhoodPage() {
             <div className="grid grid-cols-1 gap-x-6 gap-y-6 pb-8 md:grid-cols-12">
               {lead.heroImage ? (
                 <Link
-                  to="/article/$slug"
+                  to="/event/$slug"
                   params={{ slug: lead.slug }}
                   onClick={(e) => openInDrawer(lead.slug, e)}
                   className="group/lead block self-start [contain:paint] md:col-span-7 md:col-start-6"
@@ -239,7 +243,7 @@ function NeighborhoodPage() {
             >
               {a.heroImage ? (
                 <Link
-                  to="/article/$slug"
+                  to="/event/$slug"
                   params={{ slug: a.slug }}
                   onClick={(e) => openInDrawer(a.slug, e)}
                   className="group/xl block self-start [contain:paint] md:col-span-7 md:col-start-6"
@@ -274,11 +278,6 @@ function NeighborhoodPage() {
           <SectionHeaderCell
             title={`${name} ${t("nav.events").toLowerCase()}`}
             accent={NEIGHBORHOOD_ACCENT}
-            right={
-              <Link to="/events" className="meta hover:underline">
-                {t("home.allLink")}
-              </Link>
-            }
           />
           <div className="flex flex-col divide-y divide-foreground/15">
             {events.length === 0 ? (
@@ -311,7 +310,7 @@ function NeighborhoodPage() {
               <div className="grid grid-cols-1 gap-x-6 gap-y-4 md:grid-cols-12">
                 {morelead.heroImage ? (
                   <Link
-                    to="/article/$slug"
+                    to="/event/$slug"
                     params={{ slug: morelead.slug }}
                     onClick={(e) => openInDrawer(morelead.slug, e)}
                     className="group/more block self-start [contain:paint] md:col-span-7 md:col-start-6"

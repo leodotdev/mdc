@@ -35,7 +35,7 @@ export const Route = createFileRoute("/_site/watch")({
   }),
   loader: async ({ context }) => {
     await context.queryClient.ensureQueryData(
-      convexQuery(api.articles.recentVideos, { limit: 60 }),
+      convexQuery(api.events.recentVideos, { limit: 60 }),
     )
   },
   head: () => ({
@@ -44,7 +44,10 @@ export const Route = createFileRoute("/_site/watch")({
   component: WatchPage,
 })
 
-type VideoArticle = FunctionReturnType<typeof api.articles.recentVideos>[number]
+// Post-Phase-1 events-only pivot: this page reads from events with a
+// videoEmbed. The local alias keeps the rest of the file's variable
+// names familiar.
+type VideoArticle = FunctionReturnType<typeof api.events.recentVideos>[number]
 
 function embedSrc(article: VideoArticle): string | null {
   const ve = article.videoEmbed
@@ -70,7 +73,7 @@ function WatchPage() {
   const { section, v } = Route.useSearch()
   const navigate = useNavigate({ from: Route.fullPath })
   const { data: videos } = useSuspenseQuery(
-    convexSuspenseQuery(api.articles.recentVideos, {
+    convexSuspenseQuery(api.events.recentVideos, {
       limit: 60,
       sectionSlug: section,
     }),
@@ -257,7 +260,7 @@ function PlayerColumn({
         </div>
         <h1 className="font-heading text-2xl leading-tight font-semibold tracking-tight md:text-3xl">
           <Link
-            to="/article/$slug"
+            to="/event/$slug"
             params={{ slug: article.slug }}
             className="transition-colors hover:text-primary"
           >

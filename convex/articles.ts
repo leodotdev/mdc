@@ -295,6 +295,11 @@ export const recentForLinking = query({
           dek: a.dek,
           publishedAt: a.publishedAt,
           section: section ? { name: section.name, slug: section.slug } : null,
+          // Tags + neighborhoods give the LLM enough context to recognize
+          // topical/geographic continuity with an incoming item even when
+          // the headlines don't share keywords.
+          tags: a.tags,
+          neighborhoods: a.neighborhoods ?? [],
         }
       }),
     )

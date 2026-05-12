@@ -14,7 +14,6 @@ import { Route as AdminRouteImport } from './routes/_admin'
 import { Route as SiteIndexRouteImport } from './routes/_site/index'
 import { Route as AdminLoginRouteImport } from './routes/admin.login'
 import { Route as SiteWatchRouteImport } from './routes/_site/watch'
-import { Route as SiteEventsRouteImport } from './routes/_site/events'
 import { Route as SiteAboutRouteImport } from './routes/_site/about'
 import { Route as AdminAdminIndexRouteImport } from './routes/_admin/admin.index'
 import { Route as SiteTagSlugRouteImport } from './routes/_site/tag.$slug'
@@ -50,11 +49,6 @@ const AdminLoginRoute = AdminLoginRouteImport.update({
 const SiteWatchRoute = SiteWatchRouteImport.update({
   id: '/watch',
   path: '/watch',
-  getParentRoute: () => SiteRoute,
-} as any)
-const SiteEventsRoute = SiteEventsRouteImport.update({
-  id: '/events',
-  path: '/events',
   getParentRoute: () => SiteRoute,
 } as any)
 const SiteAboutRoute = SiteAboutRouteImport.update({
@@ -126,7 +120,6 @@ const AdminAdminArticleIdRoute = AdminAdminArticleIdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof SiteIndexRoute
   '/about': typeof SiteAboutRoute
-  '/events': typeof SiteEventsRoute
   '/watch': typeof SiteWatchRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/published': typeof AdminAdminPublishedRoute
@@ -145,7 +138,6 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof SiteIndexRoute
   '/about': typeof SiteAboutRoute
-  '/events': typeof SiteEventsRoute
   '/watch': typeof SiteWatchRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/published': typeof AdminAdminPublishedRoute
@@ -166,7 +158,6 @@ export interface FileRoutesById {
   '/_admin': typeof AdminRouteWithChildren
   '/_site': typeof SiteRouteWithChildren
   '/_site/about': typeof SiteAboutRoute
-  '/_site/events': typeof SiteEventsRoute
   '/_site/watch': typeof SiteWatchRoute
   '/admin/login': typeof AdminLoginRoute
   '/_site/': typeof SiteIndexRoute
@@ -188,7 +179,6 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/about'
-    | '/events'
     | '/watch'
     | '/admin/login'
     | '/admin/published'
@@ -207,7 +197,6 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/about'
-    | '/events'
     | '/watch'
     | '/admin/login'
     | '/admin/published'
@@ -227,7 +216,6 @@ export interface FileRouteTypes {
     | '/_admin'
     | '/_site'
     | '/_site/about'
-    | '/_site/events'
     | '/_site/watch'
     | '/admin/login'
     | '/_site/'
@@ -286,13 +274,6 @@ declare module '@tanstack/react-router' {
       path: '/watch'
       fullPath: '/watch'
       preLoaderRoute: typeof SiteWatchRouteImport
-      parentRoute: typeof SiteRoute
-    }
-    '/_site/events': {
-      id: '/_site/events'
-      path: '/events'
-      fullPath: '/events'
-      preLoaderRoute: typeof SiteEventsRouteImport
       parentRoute: typeof SiteRoute
     }
     '/_site/about': {
@@ -411,7 +392,6 @@ const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
 
 interface SiteRouteChildren {
   SiteAboutRoute: typeof SiteAboutRoute
-  SiteEventsRoute: typeof SiteEventsRoute
   SiteWatchRoute: typeof SiteWatchRoute
   SiteIndexRoute: typeof SiteIndexRoute
   SiteArticleSlugRoute: typeof SiteArticleSlugRoute
@@ -424,7 +404,6 @@ interface SiteRouteChildren {
 
 const SiteRouteChildren: SiteRouteChildren = {
   SiteAboutRoute: SiteAboutRoute,
-  SiteEventsRoute: SiteEventsRoute,
   SiteWatchRoute: SiteWatchRoute,
   SiteIndexRoute: SiteIndexRoute,
   SiteArticleSlugRoute: SiteArticleSlugRoute,

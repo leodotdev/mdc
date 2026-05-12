@@ -163,6 +163,7 @@ export default defineSchema({
       v.literal("web"),
       v.literal("wikipedia-otd"),
       v.literal("ics"),
+      v.literal("events-html"),
       v.literal("data"),
     ),
     url: v.string(),
@@ -314,14 +315,46 @@ export default defineSchema({
     lastActivityAt: v.number(),
   }),
 
-  // Events power the public /events calendar. Distinct from articles —
-  // articles describe what happened, events are what's happening. Indexed
-  // by start time so calendar / "upcoming" queries are O(log n).
+  // Events are the canonical content primitive. Two flavors live in
+  // the same table:
+  //   - kind="scheduled" : a thing happening in the future (concert,
+  //     opening, vote, game). `description` is calendar-style; `body`
+  //     is usually empty. Surfaced by proximity to startsAt.
+  //   - kind="reported"  : a news event that already happened. `startsAt`
+  //     captures when it happened. `dek` + `body` carry article-style
+  //     editorial copy. Surfaced by publishedAt + importance.
+  // Both render through the same newspaper UI; the layout chooses
+  // treatment based on which fields are populated and whether startsAt
+  // is in the future.
+  //
+  // Articles table is now legacy — kept for the historical archive only.
+  // New ingest writes only events (mega-desk, Phase 1 pivot).
   events: defineTable({
     // Stable kebab-case URL fragment, like articles.slug.
     slug: v.optional(v.string()),
     title: v.string(),
     description: v.string(),
+    // Editorial dek (one-line standfirst) — populated for reported
+    // events and for scheduled events when the LLM has a good hook.
+    // Empty/missing → calendar UI falls back to description.
+    dek: v.optional(v.string()),
+    // Article-style paragraph body. Populated for reported events
+    // (full editorial treatment); usually empty for pure calendar items.
+    body: v.optional(v.string()),
+    // Two flavors of event — see header comment above.
+    kind: v.optional(
+      v.union(v.literal("scheduled"), v.literal("reported")),
+    ),
+    // Video parity with the legacy articles.videoEmbed pattern. Set when
+    // the event has a primary video (YouTube clip from the desk's video
+    // sources, Instagram embed, etc.) — the renderer leads with the
+    // player instead of the hero image.
+    videoEmbed: v.optional(
+      v.object({
+        provider: v.union(v.literal("youtube"), v.literal("vimeo")),
+        id: v.string(),
+      }),
+    ),
     startsAt: v.number(),
     endsAt: v.optional(v.number()),
     allDay: v.boolean(),
@@ -353,6 +386,15 @@ export default defineSchema({
     tags: v.optional(v.array(v.string())),
     relatedArticleIds: v.optional(v.array(v.id("articles"))),
     relatedEventIds: v.optional(v.array(v.id("events"))),
+    // Merge sweep parity with articles. When two reported events are
+    // detected as the same news, the loser gets `mergedIntoId` set +
+    // status=archived; the winner absorbs the loser's citations. Slug
+    // resolution checks `previousSlugs` so old URLs keep working.
+    mergedIntoId: v.optional(v.id("events")),
+    mergedAt: v.optional(v.number()),
+    previousSlugs: v.optional(v.array(v.string())),
+    // Story arc clustering — same shape as articles.storyArcId.
+    storyArcId: v.optional(v.id("storyArcs")),
     // Rich citation list, same shape as articles.citations.
     citations: v.optional(
       v.array(
@@ -381,16 +423,19 @@ export default defineSchema({
     agentSlug: v.optional(v.string()),
     agentRunId: v.optional(v.id("agentRuns")),
     derivedFromItems: v.optional(v.array(v.id("ingestedItems"))),
-    // Denormalized search blob = title + description + tags. Maintained
-    // at insert / update time, mirrors articles.searchableText.
+    // Denormalized search blob = title + dek + description + body + tags.
+    // Maintained at insert / update time, mirrors articles.searchableText.
     searchableText: v.optional(v.string()),
-    // Per-language translations — same shape as articles.translations.
+    // Per-language translations. `dek` + `body` are optional — only set
+    // when the EN counterparts exist (reported flavor).
     translations: v.optional(
       v.object({
         es: v.optional(
           v.object({
             title: v.string(),
             description: v.string(),
+            dek: v.optional(v.string()),
+            body: v.optional(v.string()),
             heroCaption: v.optional(v.string()),
             translatedAt: v.number(),
             sourceHash: v.string(),
@@ -404,6 +449,16 @@ export default defineSchema({
     .index("by_starts", ["startsAt"])
     .index("by_status_starts", ["status", "startsAt"])
     .index("by_section_starts", ["sectionId", "status", "startsAt"])
+    // Reported-events feed sorts by publishedAt (newspaper-style), so
+    // the homepage's "latest editorial" query is O(log n) instead of
+    // a full table scan.
+    .index("by_status_published", ["status", "publishedAt"])
+    .index("by_section_status_published", [
+      "sectionId",
+      "status",
+      "publishedAt",
+    ])
+    .index("by_story_arc", ["storyArcId"])
     .searchIndex("by_searchable", {
       searchField: "searchableText",
       filterFields: ["status", "sectionId"],

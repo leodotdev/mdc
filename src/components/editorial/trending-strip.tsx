@@ -1,10 +1,14 @@
 import { Link } from "@tanstack/react-router"
 
 import { SectionHeaderCell } from "./section-header-cell"
-import type { ArticleWithRelations } from "@/lib/article-types"
+import type { StoryCardItem } from "@/lib/article-types"
+import { isEventCard } from "@/lib/article-types"
 import { useTranslation } from "@/lib/i18n/context"
-import { localizedArticle } from "@/lib/localized-article"
-import { useOpenArticleDrawer } from "@/lib/use-open-article-drawer"
+import { localizedCard } from "@/lib/localized-article"
+import {
+  useOpenArticleDrawer,
+  useOpenEventDrawer,
+} from "@/lib/use-open-article-drawer"
 
 // Trending strip — generalized from the homepage so section / tag /
 // author pages can drop their own scoped block. Renders a label on its
@@ -16,37 +20,53 @@ export function TrendingStrip({
   articles,
 }: {
   label?: string
-  articles: Array<ArticleWithRelations>
+  articles: Array<StoryCardItem>
 }) {
   const { lang } = useTranslation()
-  const openInDrawer = useOpenArticleDrawer()
+  const openArticleInDrawer = useOpenArticleDrawer()
+  const openEventInDrawer = useOpenEventDrawer()
   if (articles.length === 0) return null
-  const items = articles.slice(0, 4).map((a) => localizedArticle(a, lang))
+  const items = articles.slice(0, 4).map((a) => localizedCard(a, lang))
   return (
     <section>
       <SectionHeaderCell title={label} className="mb-5" />
       <ol className="grid grid-cols-1 gap-x-6 gap-y-5 md:grid-cols-4 md:divide-x md:divide-foreground/15">
-        {items.map((a, i) => (
-          <li
-            key={a._id}
-            className="flex items-start gap-3 md:px-4 md:first:pl-0 md:last:pr-0"
-          >
-            <span
-              aria-hidden
-              className="font-heading text-3xl leading-[0.9] font-semibold tabular-nums text-foreground md:text-4xl"
+        {items.map((a, i) => {
+          const isEvent = isEventCard(a)
+          const slug = a.slug ?? ""
+          const linkProps = isEvent
+            ? ({
+                to: "/event/$slug" as const,
+                params: { slug },
+                onClick: (e: React.MouseEvent) =>
+                  openEventInDrawer(slug, e),
+              } as const)
+            : ({
+                to: "/article/$slug" as const,
+                params: { slug },
+                onClick: (e: React.MouseEvent) =>
+                  openArticleInDrawer(slug, e),
+              } as const)
+          return (
+            <li
+              key={a._id}
+              className="flex items-start gap-3 md:px-4 md:first:pl-0 md:last:pr-0"
             >
-              {i + 1}
-            </span>
-            <Link
-              to="/article/$slug"
-              params={{ slug: a.slug }}
-              onClick={(e) => openInDrawer(a.slug, e)}
-              className="font-sans text-sm leading-snug text-foreground transition-colors hover:text-primary md:text-base"
-            >
-              {a.title}
-            </Link>
-          </li>
-        ))}
+              <span
+                aria-hidden
+                className="font-heading text-3xl leading-[0.9] font-semibold tabular-nums text-foreground md:text-4xl"
+              >
+                {i + 1}
+              </span>
+              <Link
+                {...linkProps}
+                className="font-sans text-sm leading-snug text-foreground transition-colors hover:text-primary md:text-base"
+              >
+                {a.title}
+              </Link>
+            </li>
+          )
+        })}
       </ol>
     </section>
   )

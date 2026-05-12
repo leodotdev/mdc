@@ -13,35 +13,22 @@ export type DraftItem = {
 
 // Candidate already-published article that the new draft might be related to.
 // Indexed separately from source items so the LLM can return either-or both.
+//
+// Tags + neighborhoods are passed alongside the headline so the LLM can
+// recognize topical continuity ("housing in Wynwood", "Inter Miami transfer
+// window") even when the new draft's headline is phrased differently from
+// the candidate's. Without these signals, related-IDs degenerate into
+// title-word matching and we under-link follow-ups / over-link headline
+// twins. They also give the model the signal it needs to detect when an
+// incoming item has NO tie to existing coverage and should be skipped.
 export type RelatedCandidate = {
   index: number
   section: string
   title: string
   dek: string
   publishedAt?: string
-}
-
-export type LlmDraft = {
-  title: string
-  dek: string
-  body: string
-  tags: Array<string>
-  citationItemIndices: Array<number>
-  // Indices into the relatedCandidates[] passed to the LLM. May be empty.
-  relatedArticleIndices: Array<number>
-  // Optional Miami-neighborhood slugs this story is tied to. Validated
-  // against the allowed list at insert time.
-  neighborhoodSlugs: Array<string>
-  // Section the LLM picked for this draft — must be the desk's primary
-  // section or one of its sub-sections (validated server-side; falls back
-  // to the desk's primary on miss).
-  sectionSlug?: string
-  // When set: this draft is a follow-up on an EXISTING article rather than
-  // a new story. Index points into relatedCandidates[]. The server merges
-  // citations into that article (and updates content if it's still
-  // pending review) instead of creating a new article.
-  updateOfRelatedIndex?: number
-  suggestedSlug: string
+  tags: ReadonlyArray<string>
+  neighborhoods: ReadonlyArray<string>
 }
 
 export type SectionChoice = {
@@ -50,16 +37,29 @@ export type SectionChoice = {
   description: string
 }
 
-// Standalone event extracted from source items. Lives alongside drafts
-// because most events are mentioned in news copy; some are drafted into
-// articles, others stand on their own (a public meeting, a holiday).
+// Every output of the mega-desk is an LlmEvent. Two flavors live in
+// the same shape, distinguished by `kind`:
+//   - "scheduled" — a thing happening in the future (concert, opening,
+//     vote, exhibition). `description` is a 1-2 sentence calendar
+//     blurb; `dek` / `body` are usually empty.
+//   - "reported" — a news event that already happened. `startsAt`
+//     captures when it happened. `dek` + `body` carry article-style
+//     editorial copy. The newspaper UI leads with these.
+// Both render through the same templates; the layout chooses
+// treatment based on which fields are populated and whether startsAt
+// is past/future.
 //
-// Section parity with articles: every event belongs to a section. The
-// desk's LLM picks the most specific section from its allowed tree,
-// identical to how it picks `sectionSlug` for drafts.
+// Section parity: every event belongs to a section. The desk's LLM
+// picks the most specific section from its allowed tree.
 export type LlmEvent = {
   title: string
+  /** One-line standfirst (≤120 chars). REQUIRED for kind="reported". */
+  dek?: string
+  /** Editorial paragraph (30-60 words). REQUIRED for kind="reported". */
+  body?: string
+  /** Calendar-style description (≤300 chars). Always present. */
   description: string
+  kind: "scheduled" | "reported"
   startsAtIso: string
   endsAtIso?: string
   allDay: boolean
@@ -74,10 +74,19 @@ export type LlmEvent = {
   /** Picked from the desk's allowed sections. Falls back to desk primary. */
   sectionSlug?: string
   citationItemIndices: Array<number>
-  /** Indices into `relatedCandidates` for sibling articles. */
-  relatedArticleIndices: Array<number>
-  /** Optional index into `drafts[]` of this same response for cross-link. */
-  relatedDraftIndex?: number
+  /** Indices into `relatedCandidates` for sibling events. */
+  relatedEventIndices: Array<number>
+  /** When this is the SAME event as one in the related-candidates list
+   *  (same incident, same scheduled occurrence, same news moment). The
+   *  server merges citations into that event instead of inserting a
+   *  duplicate. Mirrors the old `updateOfRelatedIndex` on articles. */
+  updateOfRelatedIndex?: number
+  /** Optional video reference — when the cited sources are YouTube /
+   *  Vimeo clips, the renderer leads with the player instead of the
+   *  hero image. Provider + ID are extracted by the YouTube adapter
+   *  upstream; the LLM only needs to forward them on. */
+  videoProvider?: "youtube" | "vimeo"
+  videoId?: string
 }
 
 export type LlmMetric = {
@@ -93,189 +102,151 @@ export type LlmMetric = {
 }
 
 export type DraftBatch = {
-  drafts: Array<LlmDraft>
   events: Array<LlmEvent>
   metrics: Array<LlmMetric>
-  /** Number of draft objects the LLM emitted before validation. When
-   *  this is > drafts.length, drafts were dropped for missing/invalid
-   *  required fields — the diagnostic helps distinguish "model produced
+  /** Number of raw event objects the LLM emitted before validation.
+   *  When > events.length, rows were dropped for missing/invalid
+   *  required fields — useful for distinguishing "model produced
    *  nothing" from "model produced unusable output." */
-  rawDraftCount: number
+  rawEventCount: number
   stopReason: string | null
   rawInputSnippet: string
 }
 
-function buildDraftTool(sectionSlugs: Array<string>) {
-  const draftProperties: Record<string, unknown> = {
+function buildEventsTool(sectionSlugs: Array<string>) {
+  const eventProperties: Record<string, unknown> = {
+    kind: {
+      type: "string",
+      enum: ["scheduled", "reported"],
+      description:
+        "`scheduled` for things happening in the future (concert, opening, vote, exhibition, market, game). `reported` for news that already happened (a vote was passed, a trade was announced, an arrest was made, a record was broken). For `reported`, set `startsAtIso` to when the news event itself occurred — NOT some unrelated future date.",
+    },
     title: {
       type: "string",
       description:
-        "Snappy local-newspaper headline. TARGET 6–10 words, HARD CAP 60 characters. Active voice. Lead with the news, not the institution. Do NOT mirror the source publication's headline — rewrite it shorter, clearer, more direct. No hedging words ('amid', 'as', 'after'), no headlinese clichés, no questions, no clickbait.",
+        "Snappy local-newspaper headline / event title. TARGET 6–10 words, HARD CAP 80 characters. Active voice. Lead with the news / what's happening, not the institution. For events from iCal sources, keep the venue's own title unless it's pure boilerplate. No hedging words ('amid', 'as', 'after'), no headlinese clichés, no questions, no clickbait.",
     },
     dek: {
       type: "string",
       description:
-        "One-sentence standfirst that adds new info beyond the headline (don't restate it). TARGET 60-80 characters, HARD CAP 100. Concrete, not vague. No 'in a sign that…' / 'amid growing concerns…' / 'experts say'. Drop the dek entirely if it would just rephrase the headline.",
+        "REQUIRED when kind=reported, OPTIONAL when kind=scheduled. One-sentence standfirst that adds new info beyond the headline. TARGET 60-80 characters, HARD CAP 120. Concrete, not vague. No 'in a sign that…' / 'amid growing concerns…' / 'experts say'. Drop the dek entirely if it would just rephrase the headline.",
     },
     body: {
       type: "string",
       description:
-        "Article body: ONE paragraph, MAX 3 SENTENCES, 30-60 words. The shortest version that gives the reader who/what/where/when and why it matters in Miami. Active voice, short sentences, no line breaks, no Markdown, no bullet points. Distill, don't paraphrase. Hitting the bottom of the range is fine — there's no minimum.",
+        "REQUIRED when kind=reported, USUALLY EMPTY when kind=scheduled. Newspaper paragraph: ONE paragraph, MAX 3 SENTENCES, 30-60 words. The shortest version that gives the reader who/what/where/when and why it matters in Miami. Active voice, short sentences, no line breaks, no Markdown, no bullet points. Distill, don't paraphrase. For pure calendar items (yoga at the park), leave empty — the description alone is enough.",
     },
+    description: {
+      type: "string",
+      description:
+        "Calendar-style 1–2 sentence blurb (≤300 chars). Always present. For scheduled events: 'What is this event?' For reported events: a brief recap that works as a card preview when the body is hidden. Plain prose, no marketing fluff.",
+    },
+    suggestedSlug: {
+      type: "string",
+      description:
+        "kebab-case slug for the event detail URL (≤80 chars). Should not include the date — the system disambiguates with a timestamp suffix when needed.",
+    },
+    startsAtIso: {
+      type: "string",
+      description:
+        "ISO 8601 with Miami offset (e.g. 2026-05-15T19:00:00-04:00). For kind=scheduled: when the event happens. For kind=reported: when the news event occurred (announcement time, incident time, vote time). REQUIRED.",
+    },
+    endsAtIso: { type: "string", description: "Optional end time in ISO 8601." },
+    allDay: {
+      type: "boolean",
+      description:
+        "True for all-day events (holidays, multi-day festivals, museum exhibitions). For reported news without a known time, also true.",
+    },
+    locationName: {
+      type: "string",
+      description:
+        "Venue or place name. For reported events, the place where the news happened (e.g. 'Miami-Dade County Commission', 'Hard Rock Stadium').",
+    },
+    url: { type: "string", description: "Canonical event URL when mentioned." },
+    price: { type: "string", description: "e.g. 'Free' or '$15-30'." },
     tags: {
       type: "array",
       items: { type: "string" },
       description:
-        "2-5 lowercase tags. Tags are **reusable taxonomy hooks** — only pick tags that other stories or events will plausibly share. Good: ongoing series ('formula-1', 'art-basel'), beats ('housing', 'transit'), institutions ('miami-dade-county', 'inter-miami', 'um'), named people, neighborhood slugs ('wynwood', 'little-havana'), recurring topics ('hurricane-season', 'algorithmic-bias'). BAD (do NOT use): single-event names ('fan-fest', 'opening-night-gala'), marketing slugs, ad-hoc descriptors that won't recur. NEVER use generic location tags ('miami', 'miami-dade', 'florida') — every story is local by definition. When in doubt, drop the tag.",
-    },
-    citationItemIndices: {
-      type: "array",
-      items: { type: "integer" },
-      description: "Indices into the source items[] passed in. Must include ≥1.",
-    },
-    relatedArticleIndices: {
-      type: "array",
-      items: { type: "integer" },
-      description:
-        "Indices into the related candidate articles[] (if any were provided). Use this when this draft is a follow-up, background, or another angle on an existing article. 0–3 entries; leave empty if nothing is genuinely related.",
-    },
-    updateOfRelatedIndex: {
-      type: "integer",
-      description:
-        "Use this ONLY when the source items are reporting on the SAME story we already published in one of the related candidate articles — not a follow-up, not background, but the same event from a different outlet. Set to the candidate's index. The system will merge your sources into the existing article. Leave unset for distinct stories or genuine follow-ups (use relatedArticleIndices instead for follow-ups).",
+        "2-5 lowercase tags. Tags are reusable taxonomy hooks — only pick tags that OTHER events will plausibly share. Good: ongoing series ('formula-1', 'art-basel', 'calle-ocho'), beats ('housing', 'transit', 'live-music'), institutions ('miami-dade-county', 'inter-miami', 'um'), named people, neighborhood slugs ('wynwood', 'little-havana'). BAD (do NOT use): single-event names ('fan-fest', 'opening-gala'), marketing slugs, ad-hoc descriptors. NEVER 'miami' / 'miami-dade' / 'florida' — every event is local by definition. When in doubt, drop the tag.",
     },
     neighborhoodSlugs: {
       type: "array",
       items: { type: "string", enum: NEIGHBORHOODS.map((n) => n.slug) },
       description:
-        "Miami neighborhood slugs this story is tied to. 0–3 entries. Only include a neighborhood when the story is genuinely about a specific place — leave empty for citywide / county-wide stories. Use ONLY slugs from the allowed list.",
+        "Miami neighborhood slugs this event is tied to. 0–3 entries. Use ONLY slugs from the allowed list. Leave empty for citywide / county-wide events.",
     },
-    suggestedSlug: { type: "string", description: "kebab-case slug (≤80 chars)" },
+    citationItemIndices: {
+      type: "array",
+      items: { type: "integer" },
+      description: "Indices into the source items[]. Must include ≥1.",
+    },
+    relatedEventIndices: {
+      type: "array",
+      items: { type: "integer" },
+      description:
+        "Indices into the related candidate events[] (when provided). Use when this event is a follow-up, sibling, or background to an existing event. 0–3 entries. Empty is fine — only link when the connection is real.",
+    },
+    updateOfRelatedIndex: {
+      type: "integer",
+      description:
+        "Use this ONLY when the sources cover the SAME event as one in the related candidates — same news incident, same scheduled occurrence — not a follow-up or sibling. The server merges citations into the existing event instead of inserting a duplicate. Leave unset for distinct events; use relatedEventIndices for follow-ups.",
+    },
+    videoProvider: {
+      type: "string",
+      enum: ["youtube", "vimeo"],
+      description:
+        "Set when the cited sources include a primary video clip and you want the renderer to lead with the player. Pair with `videoId`. Leave unset when there's no video.",
+    },
+    videoId: {
+      type: "string",
+      description:
+        "Provider-side video ID (e.g. YouTube's 11-char `v=` value). Required when `videoProvider` is set.",
+    },
   }
-  const draftRequired = [
+  const eventRequired = [
+    "kind",
     "title",
-    "dek",
-    "body",
-    "tags",
-    "citationItemIndices",
-    "relatedArticleIndices",
-    "neighborhoodSlugs",
+    "description",
     "suggestedSlug",
+    "startsAtIso",
+    "allDay",
+    "tags",
+    "neighborhoodSlugs",
+    "citationItemIndices",
+    "relatedEventIndices",
   ]
   // Only inject sectionSlug when the desk has multiple options to choose
   // from — keeps single-section desks unchanged and avoids a useless
   // 1-element enum.
   if (sectionSlugs.length > 1) {
-    draftProperties.sectionSlug = {
+    eventProperties.sectionSlug = {
       type: "string",
       enum: sectionSlugs,
       description:
-        "Section to file this story under. Pick the MOST SPECIFIC match from the desk's allowed sections (primary + sub-sections). When in doubt, use the desk's primary section.",
+        "Section to file this event under. Pick the MOST SPECIFIC match from the allowed sections. Music event → music. Restaurant opening → food. School-board vote → education. Use the desk's primary section only when no sub-section fits.",
     }
-    draftRequired.push("sectionSlug")
+    eventRequired.push("sectionSlug")
   }
 
   return {
-    name: "publish_articles",
+    name: "publish_events",
     description:
-      "Publish one or more short articles to miami.community. Articles go live immediately — there is no editor review queue. Each article must cite at least one source item by index.",
+      "Publish one or more events to miami.community. EVERY ingest item that passes the Miami test produces an event — calendar items (kind=scheduled) and news events (kind=reported) both flow through this single output. Events go live immediately; there is no editor review queue. Each event must cite at least one source item by index.",
     input_schema: {
       type: "object",
       properties: {
-        articles: {
+        events: {
           type: "array",
+          description:
+            "Events to publish. This array should rarely be empty — when you have N items in the input, expect ~N events back, minus duplicates of already-published events and items not Miami-Dade-relevant. Calendar feeds (iCal, venue listings) produce kind=scheduled events; news wires produce kind=reported events with full dek+body editorial treatment.",
           items: {
             type: "object",
-            properties: draftProperties,
-            required: draftRequired,
+            properties: eventProperties,
+            required: eventRequired,
           },
-          description:
-            "Articles to publish. This array should rarely be empty — when you have N items in the input, expect ~N articles back, minus duplicates of already-published stories and items not Miami-Dade-relevant.",
         },
-        events: {
-        type: "array",
-        description:
-          "Specific upcoming events mentioned in the cited source items. Include only events with a verifiable date and (where applicable) location. Leave the array empty when sources don't mention concrete events. NEVER invent dates, times, or locations.",
-        items: {
-          type: "object",
-          properties: {
-            title: { type: "string", description: "Short event title (≤100 chars)" },
-            description: {
-              type: "string",
-              description:
-                "Snappy 1–2 sentence description in our house voice (≤300 chars). Same register as article deks: lead with the news, no filler.",
-            },
-            suggestedSlug: {
-              type: "string",
-              description:
-                "kebab-case slug for the event detail URL (≤80 chars). Should not include the date — the system disambiguates with timestamp when needed.",
-            },
-            startsAtIso: {
-              type: "string",
-              description:
-                "Start time in ISO 8601 with Miami offset (e.g. 2026-05-15T19:00:00-04:00). REQUIRED.",
-            },
-            endsAtIso: {
-              type: "string",
-              description: "Optional end time in ISO 8601.",
-            },
-            allDay: {
-              type: "boolean",
-              description: "True for all-day events (holidays, multi-day festivals).",
-            },
-            locationName: { type: "string", description: "Venue or place name." },
-            url: { type: "string", description: "Canonical event URL if mentioned." },
-            price: { type: "string", description: "e.g. 'Free' or '$15-30'." },
-            tags: {
-              type: "array",
-              items: { type: "string" },
-              description:
-                "2–5 lowercase reusable taxonomy tags. Pick tags that OTHER events or stories will share — ongoing series ('formula-1', 'art-basel', 'calle-ocho'), beats ('public-art', 'live-music'), institutions, named people, neighborhood slugs. NEVER one-off event names ('fan-fest', 'opening-gala'), marketing slugs, or ad-hoc descriptors. NEVER 'miami' / 'miami-dade' / 'florida'. When in doubt, drop the tag.",
-            },
-            neighborhoodSlugs: {
-              type: "array",
-              items: { type: "string", enum: NEIGHBORHOODS.map((n) => n.slug) },
-              description:
-                "Miami neighborhood slugs the event ties to. 0–3 entries. Use ONLY slugs from the allowed list.",
-            },
-            sectionSlug: {
-              type: "string",
-              description:
-                "REQUIRED. Section to file this event under. Pick the most-specific match from the desk's allowed sections (same list as articles). Music event → music. Restaurant opening → food. School-board town hall → education. Use the desk's primary section only when no sub-section fits.",
-            },
-            citationItemIndices: {
-              type: "array",
-              items: { type: "integer" },
-              description:
-                "Source item indices that mention this event. Must include ≥1.",
-            },
-            relatedArticleIndices: {
-              type: "array",
-              items: { type: "integer" },
-              description:
-                "Indices into the related candidate articles[] for sibling stories. 0–3 entries. Empty is fine.",
-            },
-            relatedDraftIndex: {
-              type: "integer",
-              description:
-                "Optional index into drafts[] of this same response, when the event is the subject of a draft.",
-            },
-          },
-          required: [
-            "title",
-            "description",
-            "suggestedSlug",
-            "startsAtIso",
-            "allDay",
-            "tags",
-            "neighborhoodSlugs",
-            "sectionSlug",
-            "citationItemIndices",
-            "relatedArticleIndices",
-          ],
-        },
-      },
-      metrics: {
+        metrics: {
         type: "array",
         description:
           "Promote a number from the cited sources to a first-class Miami metric. ONLY when the source explicitly states the number — never estimate or compute. Examples: census population counts, BLS unemployment rates, NAR median home prices, ranking-list mentions ('Miami ranks #4 in cost of living'). The number must be locally relevant (Miami-Dade, Miami metro, South Florida, Florida statewide for big-picture stats). Empty array is the default. Each metric must cite at least one source item.",
@@ -356,47 +327,6 @@ function buildDraftTool(sectionSlugs: Array<string>) {
   } as const
 }
 
-function validateDraft(raw: unknown): LlmDraft | null {
-  if (!raw || typeof raw !== "object") return null
-  const d = raw as Record<string, unknown>
-  if (typeof d.title !== "string") return null
-  if (typeof d.dek !== "string") return null
-  if (typeof d.body !== "string") return null
-  if (!Array.isArray(d.tags)) return null
-  if (!d.tags.every((t) => typeof t === "string")) return null
-  if (!Array.isArray(d.citationItemIndices)) return null
-  if (!d.citationItemIndices.every((i) => Number.isInteger(i))) return null
-  if (d.citationItemIndices.length === 0) return null
-  if (typeof d.suggestedSlug !== "string") return null
-  // relatedArticleIndices is optional in legacy responses; default to [].
-  const related = Array.isArray(d.relatedArticleIndices)
-    ? (d.relatedArticleIndices as Array<unknown>).filter((i) =>
-        Number.isInteger(i),
-      ).slice(0, 3) as Array<number>
-    : []
-  const neighborhoods = Array.isArray(d.neighborhoodSlugs)
-    ? (d.neighborhoodSlugs as Array<unknown>)
-        .filter((s): s is string => typeof s === "string")
-        .slice(0, 3)
-    : []
-  const sectionSlug =
-    typeof d.sectionSlug === "string" ? d.sectionSlug : undefined
-  const updateOfRelatedIndex = Number.isInteger(d.updateOfRelatedIndex)
-    ? (d.updateOfRelatedIndex as number)
-    : undefined
-  return {
-    title: d.title.slice(0, 200),
-    dek: d.dek.slice(0, 400),
-    body: d.body,
-    tags: d.tags,
-    citationItemIndices: d.citationItemIndices as Array<number>,
-    relatedArticleIndices: related,
-    neighborhoodSlugs: neighborhoods,
-    sectionSlug,
-    updateOfRelatedIndex,
-    suggestedSlug: d.suggestedSlug,
-  }
-}
 
 export type MetricCatalogEntry = {
   slug: string
@@ -410,12 +340,14 @@ export async function generateDrafts(opts: {
   systemPrompt: string
   model: string
   items: Array<DraftItem>
+  /** Max events per response. The previous `maxDrafts` name is kept by
+   *  the caller for now; this is the same number. */
   maxDrafts: number
   relatedCandidates?: Array<RelatedCandidate>
-  /** Sections the desk can file stories under (primary + children). */
+  /** Sections the desk can file events under (primary + children). */
   sectionChoices?: Array<SectionChoice>
   /** Current metric catalog. The LLM may drop `[[metric:slug]]` tokens
-   *  into the body of any draft whose tags match the metric's
+   *  into the body of any event whose tags match the metric's
    *  relatedTags — the article renderer expands them inline. */
   metricCatalog?: ReadonlyArray<MetricCatalogEntry>
 }): Promise<DraftBatch> {
@@ -435,7 +367,12 @@ export async function generateDrafts(opts: {
       ? opts.relatedCandidates
           .map((c) => {
             const date = c.publishedAt ? ` (${c.publishedAt})` : ""
-            return `[${c.index}] ${c.section} — ${c.title}${date}\n  ${c.dek}`
+            const tags = c.tags.length > 0 ? `\n  tags: ${c.tags.join(", ")}` : ""
+            const hoods =
+              c.neighborhoods.length > 0
+                ? `\n  neighborhoods: ${c.neighborhoods.join(", ")}`
+                : ""
+            return `[${c.index}] ${c.section} — ${c.title}${date}\n  ${c.dek}${tags}${hoods}`
           })
           .join("\n")
       : ""
@@ -453,44 +390,50 @@ export async function generateDrafts(opts: {
       : ""
 
   const userPrompt = [
-    `You may produce up to ${opts.maxDrafts} short articles.`,
-    `Return your articles ONLY by calling the \`publish_articles\` tool. Do not return article copy in your textual response.`,
-    `Articles publish IMMEDIATELY when you submit them — there is no editor review queue. This isn't a "draft" workflow; what you submit goes straight to readers.`,
-    `Each article MUST cite at least one source item by its bracket index above.`,
+    `You may produce up to ${opts.maxDrafts} events.`,
+    `Return your events ONLY by calling the \`publish_events\` tool. Do not return event copy in your textual response.`,
+    `Events publish IMMEDIATELY when you submit them — there is no editor review queue.`,
+    `Each event MUST cite at least one source item by its bracket index above.`,
+    ``,
+    `EVERY OUTPUT IS AN EVENT. miami.community has deprecated stand-alone articles. Every ingest item becomes either:`,
+    `  - kind="scheduled" — a future happening (concert, opening, vote, exhibition, market, game, meeting). \`startsAtIso\` is when it happens. \`description\` is calendar-style; \`dek\` and \`body\` are usually empty.`,
+    `  - kind="reported" — a news event that already occurred (a vote was passed, a trade was announced, a building permit filed, an arrest made, a record broken). \`startsAtIso\` is when the news event happened. \`dek\` (≤120 chars) and \`body\` (30-60 words, ONE paragraph) carry full newspaper-style editorial copy. \`description\` is a short calendar-style preview for cards.`,
     ``,
     `EDITORIAL VOICE — read this twice.`,
-    `miami.community is the AI-edited local paper that reads like a smart friend telling you what happened in plain English. Source publications write at length for general audiences; we don't. Our job is to take their reporting and make it SHORTER, SNAPPIER, CLEARER for a busy Miami reader. If your article reads like the source headline / lede with light edits, rewrite it.`,
+    `miami.community is the AI-edited local paper that reads like a smart friend telling you what happened in plain English. Source publications write at length for general audiences; we don't. Our job is to take their reporting and make it SHORTER, SNAPPIER, CLEARER for a busy Miami reader. If your event's body reads like the source headline / lede with light edits, rewrite it.`,
     ``,
     `Hard rules:`,
-    `- Headline: 6–10 words, ≤ 60 chars. Active voice. Lead with the news. Never copy or near-copy the source publication's headline.`,
-    `- Dek: TARGET 60-80 chars, HARD CAP 100. ADDS information the headline doesn't carry. Drop it entirely if you'd just be rewording the headline.`,
-    `- Body: ONE paragraph, **MAX 3 SENTENCES**, 30-60 words. Shortest version that answers who/what/where/when + why it matters in Miami. Hitting the bottom of the range is fine. Cut every sentence that doesn't add a fact.`,
+    `- Headline: 6–10 words, ≤ 80 chars. Active voice. Lead with the news / what's happening. Never copy or near-copy the source publication's headline.`,
+    `- Dek (kind=reported, REQUIRED): TARGET 60-80 chars, HARD CAP 120. ADDS information the headline doesn't carry. Drop it entirely if you'd just be rewording the headline. For kind=scheduled, dek is optional — only set when there's a real hook beyond the title.`,
+    `- Body (kind=reported, REQUIRED): ONE paragraph, MAX 3 SENTENCES, 30-60 words. Shortest version that answers who/what/where/when + why it matters in Miami. For kind=scheduled, body is USUALLY EMPTY — the description alone is enough for calendar items.`,
+    `- Description (ALWAYS REQUIRED): 1-2 sentences, ≤300 chars. Calendar-style. For reported events, a brief recap that works as a card preview.`,
     `- State only facts present in the cited items. Do not fabricate quotes, names, dates, or numbers. If something's missing, omit it.`,
     `- Never reproduce source text verbatim — re-express in our voice.`,
     `- No headlinese / hedging clichés ("amid", "as", "after", "in a sign that", "experts say", "comes as", "raises concerns"). Cut them.`,
     `- No clickbait. No questions in headlines. No "you'll never believe", "here's what", etc.`,
-    `- The ONLY reasons to omit an item from your articles array: (i) it's a duplicate of an existing article on the site (use updateOfRelatedIndex), or (ii) it's clearly not Miami-Dade-relevant (e.g. a Trump/EU trade deal headline carried by Local 10's wire). "Maybe not interesting enough" is NOT a reason to skip — publish it.`,
+    `- The ONLY reasons to omit an item from your events array: (i) it's a duplicate of an existing event on the site (use updateOfRelatedIndex), or (ii) it's clearly not Miami-Dade-relevant. "Maybe not interesting enough" is NOT a reason to skip — emit it.`,
+    `- iCal-sourced calendar items (titles like "Yoga at the park", "City Commission meeting", "Storytime at the library", "Friday Night Concert", "Member Reception", "Guided museum tour") are PURE scheduled events — emit one event row per item with kind=scheduled, body empty.`,
+    `- News-sourced items (a county vote, a trade, a permit, a Heat win, a restaurant opening) become kind=reported with FULL editorial dek+body and startsAtIso = when the news event occurred.`,
     relatedText
-      ? `- For each article, look at the "Recently published articles" list below. If your article is a follow-up, background context, or another angle on one of those, include its bracket index in \`relatedArticleIndices\`. 0–3 entries. Empty is fine — only link when the connection is real.`
-      : `- Leave \`relatedArticleIndices\` empty (no recent articles available).`,
+      ? `- For each event, look at the "Recently published events" list below. If your event is a follow-up, sibling, or background to one of those, include its bracket index in \`relatedEventIndices\`. 0–3 entries. Empty is fine — only link when the connection is real.`
+      : `- Leave \`relatedEventIndices\` empty (no recent events available).`,
     relatedText
-      ? `- DEDUPE — BE AGGRESSIVE. If your incoming sources cover the same NEWS EVENT, INCIDENT, PERSON, or specific TOPIC as one of the candidate articles, set \`updateOfRelatedIndex\` to that candidate's bracket index instead of publishing a new article. Two stories about the same person/place/incident are the same news. Two stories quoting the same officials about the same matter are the same news. Two stories listing the same upcoming concert / opening / closure are the same news. Two stories about the same legal case, the same vote, the same arrest, the same death, the same charge — ALL the same news. The system will merge your incoming sources into the existing article and re-render the body with the broader citation set. Only use \`relatedArticleIndices\` (not updateOfRelatedIndex) for clearly distinct angles or clear follow-ups (the day-after analysis, a profile of someone tangentially involved, a sidebar).`
+      ? `- DEDUPE — BE AGGRESSIVE. If your incoming sources cover the SAME news event / SAME scheduled occurrence / SAME incident / SAME person-and-charge as one of the candidate events, set \`updateOfRelatedIndex\` to that candidate's bracket index instead of emitting a duplicate. Two stories about the same county vote = same event. Two listings of the same concert = same event. The system merges citations into the existing event. Only use \`relatedEventIndices\` (not updateOfRelatedIndex) for clearly distinct events or genuine follow-ups (a day-after analysis, a profile of someone tangentially involved, a sidebar).`
       : "",
     sectionsText
-      ? `- For each article, set \`sectionSlug\` to the most specific section from this desk's allowed list (below). Default to the desk's primary section if no sub-section is a clearer fit.`
+      ? `- For each event, set \`sectionSlug\` to the most specific section from the allowed list below.`
       : "",
-    `- ALSO populate \`events\`: extract any specific upcoming events mentioned in the source items. Required fields: title, description, suggestedSlug, startsAtIso (ISO 8601 with Miami offset), allDay, tags, neighborhoodSlugs, citationItemIndices, relatedArticleIndices. STRICT: only include events with an explicit date in the source — never invent dates. Pick \`sectionSlug\` from the desk's allowed sections (same options as articles) so the event files under the right section. Empty array is fine when sources mention no concrete events.`,
     (opts.metricCatalog ?? []).length > 0
-      ? `- INLINE METRIC EMBEDS: when an article's tags overlap with a metric's relatedTags below, drop a \`[[metric:slug]]\` token into the body on its own line where the metric's number would naturally appear. The renderer expands the token into a compact widget. Use sparingly — at most one embed per article, and only when the metric directly supports the story's claim. Example: a story about cost of living that overlaps with the 'miami-cost-of-living-rank' metric → drop \`[[metric:miami-cost-of-living-rank]]\` near the relevant sentence.`
+      ? `- INLINE METRIC EMBEDS: when a reported event's tags overlap with a metric's relatedTags below, drop a \`[[metric:slug]]\` token into the BODY on its own line where the number would naturally appear. The renderer expands the token into a compact widget. Use sparingly — at most one embed per event, only when the metric directly supports the claim. Example: an event about cost of living that overlaps with 'miami-cost-of-living-rank' → drop \`[[metric:miami-cost-of-living-rank]]\` near the relevant sentence.`
       : "",
     ``,
     `Source items:`,
     itemsText,
     ...(sectionsText
-      ? ["", `Allowed sections for this desk (use the slug for sectionSlug):`, sectionsText]
+      ? ["", `Allowed sections (use the slug for sectionSlug):`, sectionsText]
       : []),
     ...(relatedText
-      ? ["", `Recently published articles (for relatedArticleIndices):`, relatedText]
+      ? ["", `Recently published events (for relatedEventIndices / updateOfRelatedIndex):`, relatedText]
       : []),
     ...((opts.metricCatalog ?? []).length > 0
       ? [
@@ -508,10 +451,8 @@ export async function generateDrafts(opts: {
 
   const response = await client.messages.create({
     model: opts.model,
-    // 16k output cap. 20 articles × (title + dek + body ≈ 600 tokens
-    // each) + events + metrics + tool-call overhead easily exceeds
-    // 4k; we were getting stop_reason=max_tokens with an EMPTY tool
-    // input because the model couldn't even finish the first article.
+    // 16k output cap. 20 events × (title + dek + body ≈ 600 tokens
+    // each) + metrics + tool-call overhead easily exceeds 4k.
     max_tokens: 16384,
     system: [
       {
@@ -520,8 +461,8 @@ export async function generateDrafts(opts: {
         cache_control: { type: "ephemeral" },
       },
     ],
-    tools: [buildDraftTool(sectionSlugs)],
-    tool_choice: { type: "tool", name: "publish_articles" },
+    tools: [buildEventsTool(sectionSlugs)],
+    tool_choice: { type: "tool", name: "publish_events" },
     messages: [{ role: "user", content: userPrompt }],
   })
 
@@ -530,51 +471,31 @@ export async function generateDrafts(opts: {
   )
   if (!toolUse) throw new Error("LLM did not return a tool_use block")
   const input = toolUse.input as {
-    articles?: unknown
-    /** Legacy property name — kept so older deployments mid-rename
-     *  don't drop everything. Read whichever is present. */
-    drafts?: unknown
     events?: unknown
     metrics?: unknown
   }
-  // The model occasionally calls the tool with no drafts array — usually
-  // when it found nothing draft-worthy this batch but still wanted to
-  // emit events or metrics. Treat the absence as an empty array rather
-  // than failing the run.
-  const rawDrafts = Array.isArray(input.articles)
-    ? input.articles
-    : Array.isArray(input.drafts)
-      ? input.drafts
-      : []
-  const drafts = rawDrafts
-    .map(validateDraft)
-    .filter((d): d is LlmDraft => d !== null)
-  const droppedDrafts = rawDrafts.length - drafts.length
-  if (droppedDrafts > 0) {
-    // Dump the raw shape of the first invalid draft so we can see
-    // which required field the model omitted.
-    const firstInvalid = rawDrafts.find((r) => validateDraft(r) === null)
+  const rawEvents = Array.isArray(input.events) ? input.events : []
+  const events = rawEvents
+    .map(validateEvent)
+    .filter((e): e is LlmEvent => e !== null)
+  const droppedEvents = rawEvents.length - events.length
+  if (droppedEvents > 0) {
+    const firstInvalid = rawEvents.find((r) => validateEvent(r) === null)
     console.warn(
-      `[generateDrafts] dropped ${droppedDrafts}/${rawDrafts.length} drafts during validation. First invalid raw object:`,
+      `[generateDrafts] dropped ${droppedEvents}/${rawEvents.length} events during validation. First invalid raw object:`,
       JSON.stringify(firstInvalid)?.slice(0, 600),
     )
   }
-  const events = Array.isArray(input.events)
-    ? input.events
-        .map(validateEvent)
-        .filter((e): e is LlmEvent => e !== null)
-    : []
   const metrics = Array.isArray(input.metrics)
     ? input.metrics
         .map(validateMetric)
         .filter((m): m is LlmMetric => m !== null)
     : []
   return {
-    drafts,
     events,
     metrics,
-    rawDraftCount: rawDrafts.length,
-    /** Anthropic's stop_reason — useful diagnostic when drafts is
+    rawEventCount: rawEvents.length,
+    /** Anthropic's stop_reason — useful diagnostic when events is
      *  empty (max_tokens vs end_turn vs stop_sequence vs refusal). */
     stopReason: response.stop_reason ?? null,
     /** First 600 chars of the raw tool input — surfaces what the LLM
@@ -636,6 +557,23 @@ function validateEvent(raw: unknown): LlmEvent | null {
   if (!Array.isArray(e.citationItemIndices)) return null
   if (!e.citationItemIndices.every((i) => Number.isInteger(i))) return null
   if (e.citationItemIndices.length === 0) return null
+  // Default to "scheduled" when the LLM forgets the field — a
+  // calendar item without editorial copy is the safer fallback. The
+  // server's section + hero pipeline doesn't care which kind it is.
+  const kind: "scheduled" | "reported" =
+    e.kind === "reported" ? "reported" : "scheduled"
+  // For reported events: dek + body are required. For scheduled: both
+  // optional. We don't hard-fail a missing dek/body on reported — the
+  // renderer falls back to description — but we log so the prompt can
+  // tighten over time.
+  const dek =
+    typeof e.dek === "string" && e.dek.trim().length > 0
+      ? e.dek.slice(0, 400)
+      : undefined
+  const body =
+    typeof e.body === "string" && e.body.trim().length > 0
+      ? e.body
+      : undefined
   const suggestedSlug =
     typeof e.suggestedSlug === "string" && e.suggestedSlug.trim().length > 0
       ? e.suggestedSlug
@@ -650,16 +588,36 @@ function validateEvent(raw: unknown): LlmEvent | null {
         .filter((s): s is string => typeof s === "string")
         .slice(0, 3)
     : []
-  const relatedArticleIndices = Array.isArray(e.relatedArticleIndices)
-    ? (e.relatedArticleIndices as Array<unknown>)
-        .filter((i) => Number.isInteger(i))
-        .slice(0, 3) as Array<number>
-    : []
+  // Accept either the new field name (relatedEventIndices) OR the
+  // legacy one (relatedArticleIndices) — the mid-rename safety net so
+  // a stale prompt-cache miss doesn't drop every event's related links.
+  const relatedRaw = Array.isArray(e.relatedEventIndices)
+    ? e.relatedEventIndices
+    : Array.isArray(e.relatedArticleIndices)
+      ? e.relatedArticleIndices
+      : []
+  const relatedEventIndices = (relatedRaw as Array<unknown>)
+    .filter((i) => Number.isInteger(i))
+    .slice(0, 3) as Array<number>
+  const updateOfRelatedIndex = Number.isInteger(e.updateOfRelatedIndex)
+    ? (e.updateOfRelatedIndex as number)
+    : undefined
   const sectionSlug =
     typeof e.sectionSlug === "string" ? e.sectionSlug : undefined
+  const videoProvider =
+    e.videoProvider === "youtube" || e.videoProvider === "vimeo"
+      ? (e.videoProvider as "youtube" | "vimeo")
+      : undefined
+  const videoId =
+    typeof e.videoId === "string" && e.videoId.trim().length > 0
+      ? e.videoId
+      : undefined
   return {
     title: e.title.slice(0, 200),
+    dek,
+    body,
     description: e.description.slice(0, 600),
+    kind,
     startsAtIso: e.startsAtIso,
     endsAtIso:
       typeof e.endsAtIso === "string" &&
@@ -676,10 +634,10 @@ function validateEvent(raw: unknown): LlmEvent | null {
     neighborhoodSlugs,
     sectionSlug,
     citationItemIndices: e.citationItemIndices as Array<number>,
-    relatedArticleIndices,
-    relatedDraftIndex: Number.isInteger(e.relatedDraftIndex)
-      ? (e.relatedDraftIndex as number)
-      : undefined,
+    relatedEventIndices,
+    updateOfRelatedIndex,
+    videoProvider: videoProvider && videoId ? videoProvider : undefined,
+    videoId: videoProvider && videoId ? videoId : undefined,
   }
 }
 
@@ -1236,6 +1194,124 @@ export async function verifyMerge(opts: {
   if (typeof input.sameStory !== "boolean") return null
   return {
     sameStory: input.sameStory,
+    reason: typeof input.reason === "string" ? input.reason : "",
+  }
+}
+
+// =====================================================================
+// Event rubric grader — cheap Haiku call that gates each LLM-emitted
+// event before insert. The mega-desk's system prompt has accreted
+// dozens of "don't publish X" rules over time (Palm Beach isn't
+// adjacent, no police blotter without a hook, etc.), and Sonnet keeps
+// finding ways to justify past them. A separate grader with a clean
+// context window and a tight rubric catches the rationalizations.
+//
+// Modeled on the "Outcomes" pattern from Anthropic's Managed Agents:
+// the writer optimizes for editorial flow; the grader checks whether
+// the result meets policy. They don't share a chain of thought.
+//
+// Rubric is intentionally narrow — five criteria, all true to pass.
+// Borderline items default to pass so coverage doesn't collapse on
+// edge cases; the grader's job is to catch obvious failures, not
+// arbitrate close calls.
+//
+// Cost: ~$0.0005/event with Haiku 4.5. ~20 events × $0.01 per run × 24
+// ticks/day = ~$0.25/day, well within the daily budget.
+// =====================================================================
+
+const eventRubricTool: Anthropic.Tool = {
+  name: "grade_event",
+  description:
+    "Grade a candidate event against miami.community's editorial rubric. PASS only when every criterion below is met; FAIL when any is violated.",
+  input_schema: {
+    type: "object",
+    properties: {
+      passes: {
+        type: "boolean",
+        description:
+          "True ONLY when every rubric criterion is satisfied. Default to true on genuinely borderline cases (the writer already saw the source; we trust their judgment unless it clearly broke policy).",
+      },
+      reason: {
+        type: "string",
+        description:
+          "One short sentence. For fails: cite the specific criterion that broke (e.g. 'Palm Beach is not Miami-Dade-adjacent', 'Police-blotter incident with no named subject or policy angle', 'Reported kind missing body'). For passes: optional one-line note or empty.",
+      },
+    },
+    required: ["passes", "reason"],
+  },
+}
+
+export async function verifyEventRubric(opts: {
+  model: string
+  event: {
+    title: string
+    dek?: string
+    body?: string
+    description: string
+    kind: "scheduled" | "reported"
+    locationName?: string
+    neighborhoodSlugs: ReadonlyArray<string>
+    tags: ReadonlyArray<string>
+    /** Optional — when present, helps the grader judge "Miami test" on
+     *  ambiguous items. Pulled from the LLM's chosen sectionSlug at the
+     *  agent layer; an undefined value means the writer didn't pick. */
+    sectionSlug?: string
+  }
+}): Promise<{ passes: boolean; reason: string } | null> {
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set in Convex env")
+  const client = new Anthropic({ apiKey })
+
+  const e = opts.event
+  const prompt = [
+    `You are a strict editorial reviewer for miami.community — a hyperlocal newspaper for Miami-Dade County. A writer just produced this event candidate. Decide whether it meets the publishing bar.`,
+    ``,
+    `RUBRIC — all must be true to pass:`,
+    ``,
+    `1. MIAMI TEST: The event is materially about Miami-Dade County or its named immediately-adjacent areas (Broward, Monroe, the Keys, the Everglades) WITH a clear Miami-Dade tie. PALM BEACH IS NOT ADJACENT — treat it like Orlando. Any out-of-state or out-of-Florida-region story (Denver, Nebraska, national wire) → FAIL. National political horserace with no Miami-Dade impact → FAIL.`,
+    ``,
+    `2. LOCAL HOOK: The copy names at least one specific Miami-Dade place, person, business, agency, institution, neighborhood, or carries a Miami neighborhood slug. "A man was arrested" with no neighborhood / no agency named / no public-interest angle → FAIL. Pure wire copy that could be published anywhere → FAIL.`,
+    ``,
+    `3. POLICE-BLOTTER GATE (kind=reported only): if the headline mentions arrest / shooting / stabbing / fatal / crash / robbery / homicide, the body MUST add at least one of: named subject, named officer/agency, named victim, charge filed, public-interest angle (corruption, pattern of force, prominent person, policy implication). A one-off "incident happened" with no names and no follow-up hook → FAIL.`,
+    ``,
+    `4. EDITORIAL COMPLETENESS:`,
+    `   - If kind="reported": both dek and body must be present and substantive. Empty/missing body → FAIL. Body shorter than ~25 words → FAIL. Headlinese clichés in title ("amid", "as", "after", "in a sign that", "raises concerns") → FAIL.`,
+    `   - If kind="scheduled": description must be present (≥10 chars). dek/body optional. Headlinese in title still → FAIL.`,
+    ``,
+    `5. NOT HEADLINESE / CLICKBAIT: No questions in headlines, no "you'll never believe", no "here's what". Active voice. If the title is a question or has clickbait markers → FAIL.`,
+    ``,
+    `=== Candidate event (kind=${e.kind}) ===`,
+    `Title: ${e.title}`,
+    e.dek ? `Dek: ${e.dek}` : `Dek: (none)`,
+    e.body ? `Body: ${e.body.slice(0, 800)}` : `Body: (none)`,
+    `Description: ${e.description.slice(0, 400)}`,
+    e.locationName ? `Location: ${e.locationName}` : "",
+    `Section: ${e.sectionSlug ?? "(unset)"}`,
+    `Tags: ${e.tags.length > 0 ? e.tags.join(", ") : "(none)"}`,
+    `Neighborhoods: ${e.neighborhoodSlugs.length > 0 ? e.neighborhoodSlugs.join(", ") : "(none)"}`,
+    ``,
+    `Bias: borderline cases PASS. The writer saw the source items and made the call; only fail when a rubric criterion is clearly broken. Never fail purely on "I would have phrased it differently."`,
+    ``,
+    `Call \`grade_event\` with your decision.`,
+  ]
+    .filter(Boolean)
+    .join("\n")
+
+  const response = await client.messages.create({
+    model: opts.model,
+    max_tokens: 400,
+    tools: [eventRubricTool],
+    tool_choice: { type: "tool", name: "grade_event" },
+    messages: [{ role: "user", content: prompt }],
+  })
+  const toolUse = response.content.find(
+    (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
+  )
+  if (!toolUse) return null
+  const input = toolUse.input as { passes?: unknown; reason?: unknown }
+  if (typeof input.passes !== "boolean") return null
+  return {
+    passes: input.passes,
     reason: typeof input.reason === "string" ? input.reason : "",
   }
 }
