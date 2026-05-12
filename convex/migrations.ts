@@ -491,3 +491,189 @@ export const crossListMuseums = internalMutation({
     return { ok: true, alreadySet: false }
   },
 })
+
+// =====================================================================
+// 2026-05 associated-tags seed. Per-section tag synonyms drive the
+// cross-section enrichment on /section/$slug pages — Books surfaces
+// "jazz at Books & Books" (filed under music) because it's tagged
+// "books", Museums surfaces talks tagged "lecture" or "exhibition",
+// etc. Editors can adjust the lists later via /admin if a tag drifts.
+// The LLM already tags events, so the lookup hits naturally.
+//
+// Run dev:  npx convex run migrations:seedAssociatedTags
+// Run prod: npx convex run migrations:seedAssociatedTags --prod
+// Idempotent — overwrites existing associatedTags with the curated
+// set each run.
+// =====================================================================
+
+const ASSOCIATED_TAGS: Record<string, ReadonlyArray<string>> = {
+  // Top-level — civic / business / tech / real estate.
+  politics: [
+    "politics",
+    "commission",
+    "town-hall",
+    "public-comment",
+    "candidate-forum",
+    "council-meeting",
+    "civic",
+  ],
+  business: [
+    "business",
+    "networking",
+    "mixer",
+    "ribbon-cutting",
+    "chamber",
+    "conference",
+  ],
+  tech: [
+    "tech",
+    "startup",
+    "hackathon",
+    "demo-day",
+    "founders",
+    "ai",
+    "developer",
+    "engineering",
+  ],
+  "real-estate": [
+    "real-estate",
+    "open-house",
+    "broker",
+    "developer",
+    "real-estate-panel",
+    "real-estate-tour",
+  ],
+
+  // Sports — parent + each team sub gets its own lineage.
+  sports: ["sports", "game", "tailgate", "match"],
+  dolphins: ["dolphins", "nfl", "miami-dolphins"],
+  heat: ["heat", "nba", "miami-heat"],
+  marlins: ["marlins", "mlb", "miami-marlins"],
+  panthers: ["panthers", "nhl", "florida-panthers"],
+  "inter-miami": ["inter-miami", "mls", "soccer"],
+  "the-u": ["um", "the-u", "hurricanes", "miami-hurricanes"],
+  "miami-fc": ["miami-fc", "usl", "soccer"],
+  "fiu-panthers": ["fiu", "fiu-panthers"],
+
+  // Food family (now just food + food-openings).
+  food: [
+    "food",
+    "restaurant",
+    "tasting",
+    "market",
+    "food-truck",
+    "pop-up",
+    "chef-dinner",
+    "wine",
+    "cocktail",
+  ],
+  "food-openings": [
+    "food-openings",
+    "restaurant-opening",
+    "opening-night",
+    "soft-launch",
+    "grand-opening",
+  ],
+
+  // Arts & Culture family.
+  arts: ["arts", "art", "culture", "exhibition"],
+  music: [
+    "music",
+    "concert",
+    "live-music",
+    "jazz",
+    "dj",
+    "festival",
+    "show",
+    "performance",
+  ],
+  film: ["film", "movie", "screening", "cinema", "film-festival"],
+  theater: ["theater", "theatre", "play", "dance", "performing-arts"],
+  galleries: [
+    "galleries",
+    "gallery",
+    "art-fair",
+    "opening-reception",
+    "exhibition",
+  ],
+  books: [
+    "books",
+    "book-fair",
+    "library",
+    "bookstore",
+    "author",
+    "author-signing",
+    "reading",
+    "literature",
+  ],
+  "street-art": [
+    "street-art",
+    "mural",
+    "wynwood-walls",
+    "public-art",
+    "graffiti",
+  ],
+
+  // Science family — museums + history are cross-relevant to arts
+  // already via crossListedIn; tag synonyms reinforce the bridge.
+  science: ["science", "lecture", "talk", "research", "stem"],
+  museums: [
+    "museums",
+    "museum",
+    "exhibition",
+    "members-night",
+    "family-day",
+    "tour",
+  ],
+  history: [
+    "history",
+    "heritage",
+    "archive",
+    "historical",
+    "walking-tour",
+    "preservation",
+  ],
+  climate: [
+    "climate",
+    "sustainability",
+    "sea-level-rise",
+    "hurricane-prep",
+    "resilience",
+  ],
+  nature: [
+    "nature",
+    "wildlife",
+    "everglades",
+    "beach",
+    "bird-walk",
+    "reef",
+    "park",
+    "cleanup",
+  ],
+}
+
+export const seedAssociatedTags = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const all = await ctx.db.query("sections").collect()
+    let patched = 0
+    for (const s of all) {
+      const tags = ASSOCIATED_TAGS[s.slug]
+      if (!tags) continue
+      // Slug itself always belongs — guarantees a baseline match even
+      // when an event is tagged purely with the section's own slug.
+      const next = Array.from(new Set([s.slug, ...tags]))
+      const prev = s.associatedTags ?? []
+      // Idempotent: skip when the existing list is already the same.
+      if (
+        prev.length === next.length &&
+        prev.every((t) => next.includes(t))
+      ) {
+        continue
+      }
+      await ctx.db.patch(s._id, { associatedTags: next })
+      patched += 1
+    }
+    return { sections: all.length, patched }
+  },
+})

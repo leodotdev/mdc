@@ -366,6 +366,31 @@ export const topInSection = query({
         merged.push(e)
       }
     }
+    // Tag-driven enrichment: pull events tagged with any of this
+    // section's associatedTags (or just the slug as a baseline) and
+    // union them in. Lets /section/books surface "jazz at Books &
+    // Books" — primary section music, also tagged "books". Scan is
+    // bounded; we only consider recent published events.
+    const associatedTags = new Set(
+      section.associatedTags && section.associatedTags.length > 0
+        ? section.associatedTags
+        : [section.slug],
+    )
+    if (associatedTags.size > 0) {
+      const tagScan = await ctx.db
+        .query("events")
+        .withIndex("by_status_published", (q) => q.eq("status", "approved"))
+        .order("desc")
+        .take(TOP_EVENTS_SCAN * 2)
+      for (const e of tagScan) {
+        if (seen.has(e._id as string)) continue
+        if ((e.publishedAt ?? e.createdAt) < since) continue
+        const tags = e.tags ?? []
+        if (!tags.some((t) => associatedTags.has(t))) continue
+        seen.add(e._id as string)
+        merged.push(e)
+      }
+    }
     merged.sort((a, b) => compareByImportance(asScorable(a), asScorable(b), now))
     return await Promise.all(
       merged.slice(0, limit).map((e) => hydrate(ctx, e)),
@@ -373,9 +398,16 @@ export const topInSection = query({
   },
 })
 
-// Paginated events by section, ordered by publishedAt DESC. Mirrors
-// `articles.listBySection`. Uses Convex pagination so the section
-// page's long-tail grid can scroll.
+// Section listing — unions strict sectionId matches with cross-listed
+// children and tag-relevant events, so /section/books picks up both
+// "events filed under books" AND "events tagged books / book-fair /
+// library / author" even when those events file under a different
+// primary section (e.g. a jazz night at a bookstore is sectionId=music
+// + tag=books). Returns the same `{ page, isDone, continueCursor }`
+// shape paginated callers expect; with cross-section union the result
+// is a single non-paginated page sliced to `numItems`. `isDone=true`
+// always — pagination semantics don't compose cleanly with the union
+// scan, and the section page only renders the first page anyway.
 export const listBySection = query({
   args: {
     sectionSlug: v.string(),
@@ -390,17 +422,69 @@ export const listBySection = query({
       .withIndex("by_slug", (q) => q.eq("slug", sectionSlug))
       .unique()
     if (!section) return { page: [], isDone: true, continueCursor: "" }
-    const result = await ctx.db
-      .query("events")
-      .withIndex("by_section_status_published", (q) =>
-        q.eq("sectionId", section._id).eq("status", "approved"),
-      )
-      .order("desc")
-      .paginate(paginationOpts)
-    const hydrated = await Promise.all(
-      result.page.map((e) => hydrate(ctx, e)),
+    // Scope: section + primary children + cross-listed sections.
+    const directChildren = await ctx.db
+      .query("sections")
+      .withIndex("by_parent", (q) => q.eq("parentId", section._id))
+      .collect()
+    const allSections = await ctx.db.query("sections").collect()
+    const crossListed = allSections.filter((s) =>
+      s.crossListedIn?.includes(section._id),
     )
-    return { ...result, page: hydrated }
+    const scopedIds = new Set<Id<"sections">>([
+      section._id,
+      ...directChildren.map((c) => c._id),
+      ...crossListed.map((c) => c._id),
+    ])
+    // Strict-section buckets via the indexed query.
+    const buckets = await Promise.all(
+      [...scopedIds].map((sid) =>
+        ctx.db
+          .query("events")
+          .withIndex("by_section_status_published", (q) =>
+            q.eq("sectionId", sid).eq("status", "approved"),
+          )
+          .order("desc")
+          .take(200),
+      ),
+    )
+    const seen = new Set<string>()
+    const merged: Array<Doc<"events">> = []
+    for (const bucket of buckets) {
+      for (const e of bucket) {
+        if (seen.has(e._id as string)) continue
+        seen.add(e._id as string)
+        merged.push(e)
+      }
+    }
+    // Tag-driven enrichment.
+    const associatedTags = new Set(
+      section.associatedTags && section.associatedTags.length > 0
+        ? section.associatedTags
+        : [section.slug],
+    )
+    if (associatedTags.size > 0) {
+      const tagScan = await ctx.db
+        .query("events")
+        .withIndex("by_status_published", (q) => q.eq("status", "approved"))
+        .order("desc")
+        .take(500)
+      for (const e of tagScan) {
+        if (seen.has(e._id as string)) continue
+        const tags = e.tags ?? []
+        if (!tags.some((t) => associatedTags.has(t))) continue
+        seen.add(e._id as string)
+        merged.push(e)
+      }
+    }
+    merged.sort((a, b) => {
+      const ta = a.publishedAt ?? a.createdAt
+      const tb = b.publishedAt ?? b.createdAt
+      return tb - ta
+    })
+    const page = merged.slice(0, paginationOpts.numItems)
+    const hydrated = await Promise.all(page.map((e) => hydrate(ctx, e)))
+    return { page: hydrated, isDone: true, continueCursor: "" }
   },
 })
 

@@ -22,6 +22,13 @@ export default defineSchema({
     // that recurse into "children of arts" pick it up too. Optional
     // array — most sections leave it empty.
     crossListedIn: v.optional(v.array(v.id("sections"))),
+    // Tag synonyms that count as "relevant to this section." Event-
+    // scoping queries (topInSection / listBySection) union events
+    // filed directly under the section with events tagged any of
+    // these. Lets /section/books surface "jazz at Books & Books"
+    // (primary section: music, also tagged "books"). Curated per
+    // section — defaults to just [slug] when unset.
+    associatedTags: v.optional(v.array(v.string())),
   })
     .index("by_slug", ["slug"])
     .index("by_order", ["order"])
