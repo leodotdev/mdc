@@ -703,25 +703,28 @@ export const seedAssociatedTags = internalMutation({
 // Bluesky accounts of venues / event-promoters are kept by exact URL.
 // Reddit + YouTube are blanket-disabled (no calendar shape, mostly
 // discussion or news clips).
+// Tightened 2026-05-12: lifestyle magazines (Coral Gables / Brickell /
+// Key Biscayne / Doral Family Journal / Miami Geographic), Miami Today
+// News, Eater RSS, and civic-news Blueskys leaked through the original
+// pass — they're ~5% events / 95% stories. Stripped down to the curated
+// set where events are the primary feed shape. Anything still wanted
+// can be re-enabled in /admin/sources by URL.
 const EVENT_RICH_URLS: ReadonlyArray<string> = [
   // events-html JSON-LD scrapers
   "https://vizcaya.org/calendar/",
   "https://deeringestate.org/events/",
 
-  // Curated event-rich RSS — outlets with strong calendar focus
+  // Curated event-rich RSS — must be ≥80% calendar listings or
+  // venue-event posts to earn a spot here.
   "https://miamionthecheap.com/feed/",
-  "https://miami.eater.com/rss/index.xml",
   "https://www.miaminewtimes.com/miami/Rss.xml",
   "https://www.miaminewtimes.com/music.rss",
   "https://www.miaminewtimes.com/arts.rss",
-  "https://www.miaminewtimes.com/restaurants.rss",
   "https://www.timeout.com/miami/feed",
   "https://www.timeout.com/miami/feed.rss",
   "https://refreshmiami.com/feed/",
   "https://artburstmiami.com/feed",
   "https://artburstmiami.com/feed/",
-  "https://miamitodaynews.com/feed/",
-  "https://miamitodaynews.com/arts-and-culture/feed/",
   "https://www.miamijazzsociety.com/feed/",
   "https://miami.aiga.org/feed/",
   "https://miamibookfair.com/feed/",
@@ -730,39 +733,25 @@ const EVENT_RICH_URLS: ReadonlyArray<string> = [
   "https://youngarts.org/feed/",
   "https://www.miamiopen.com/feed/",
   "https://www.universemiami.com/?feed=rss2",
-  "https://www.theatlanticcurrent.com/feed/",
-  "https://www.coconutgrove.com/feed/",
   "https://www.coconutgrovespotlight.com/feed",
   "https://www.cgaf.com/feed/",
   "https://www.miamibeachchamber.com/feed/",
   "https://miamifoundation.org/feed/",
-  "https://www.knightfoundation.org/feed/",
   "https://endeavormiami.org/feed/",
   "https://www.cic.com/feed/?location=miami",
   "https://thebass.org/feed/",
   "https://www.frostscience.org/feed/",
   "https://miamilightproject.com/feed/",
   "https://www.miamilightproject.com/feed/",
-  "https://elportalvillage.com/feed/",
-  "https://www.virginiagardens-fl.gov/feed/",
   "https://www.soulofmiami.org/feed/",
-  "https://miamimomcollective.com/feed/",
   "https://www.calleochonews.com/feed/",
-  "https://www.communitynewspapers.com/feed/",
-  "https://gablesinsider.com/feed/",
-  "https://doralfamilyjournal.com/feed/",
-  "https://keybiscaynemag.com/feed/",
-  "https://miamigeographic.com/feed/",
-  "https://www.brickellmag.com/feed/",
-  "https://coralgablesmagazine.com/feed/",
-
-  // Bluesky — venues, civic accounts, event promoters
-  "bluesky://intermiamicf.com",
-  "bluesky://miamiheat.bsky.social",
-  "bluesky://miamidade.bsky.social",
-  "bluesky://miamibeach.bsky.social",
-  "bluesky://coralgables.bsky.social",
-  "bluesky://calleocho.bsky.social",
+  // V6 venue RSS (Coral Gables venues, North Beach Bandshell, Fundarte).
+  "https://coralgablesmuseum.org/feed/",
+  "https://www.actorsplayhouse.org/feed/",
+  "https://www.booksandbooks.com/feed/",
+  "https://gablescinema.com/calendar/feed/",
+  "https://gablestage.org/feed/",
+  "https://www.fundarte.us/feed/",
 ]
 
 const EVENT_RICH_URL_SET = new Set(EVENT_RICH_URLS)
