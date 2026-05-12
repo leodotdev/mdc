@@ -2,7 +2,6 @@ import { v } from "convex/values"
 import { api, internal } from "./_generated/api"
 import { action, internalAction } from "./_generated/server"
 import { fetchItems } from "./lib/adapters"
-import { fetchDataMetrics } from "./lib/dataAdapters"
 import { estimatedCallCents } from "./lib/budget"
 import { cronsEnabled } from "./lib/cronGate"
 import { requireEditorInAction } from "./lib/guard"
@@ -155,17 +154,7 @@ PUBLISH WHEN IT'S MIAMI. If an item passes the Miami test, publish it. Short fac
 
 Voice across every section: matter-of-fact, plainly written, shorter than the source. The reader has 30 seconds. Lead with what happened. Skip cliché ("amid", "as", "after", "in a sign that"). No headlinese, no questions in headlines, no clickbait. State only what the cited sources support.
 
-You will be told what sections exist and which one each event should file under. Pick the most specific section that fits. Tone shifts subtly by section (urgent for breaking news, sensory for food, even-handed for politics) but voice stays one — the smart-friend register, no AI tells, no PR speak.
-
-Beyond events, you also surface FIRST-CLASS METRICS — numerical or statistical artifacts about Miami that deserve their own widget on the homepage and inline embeds in event bodies. Use the \`metrics\` tool field for these. Only promote a number when:
-- The cited source EXPLICITLY states it (never compute, estimate, or aggregate across sources)
-- It's locally relevant (Miami-Dade, Miami metro, South Florida, sometimes statewide)
-- It's a number a reader might actually want to see — population counts, median home prices, unemployment rates, ranking-list mentions, demographic breakdowns, climate readings, attendance figures
-- A stable slug captures it (so re-runs that find updated values upsert in place: 'miami-dade-population', 'miami-median-home-price', 'miami-cost-of-living-rank')
-
-Pick the right \`kind\`: number for one value, number-with-delta when source gives YoY/QoQ change, line/bars for time series, rank for "Miami ranks #N out of M", compare for two-sided splits. Always cite — every metric carries its source items.
-
-Most runs will produce 0 metrics. That's fine. A typical eligible source: a census release, BLS report, NAR/Redfin price update, a "Miami ranks #X" mention in any wire story.`
+You will be told what sections exist and which one each event should file under. Pick the most specific section that fits. Tone shifts subtly by section (urgent for breaking news, sensory for food, even-handed for politics) but voice stays one — the smart-friend register, no AI tells, no PR speak.`
 
 // Internal mega-desk run. Idempotent enough to call from a cron tick or
 // the editor's "Run desk" button. Returns a small summary so the caller
@@ -219,47 +208,13 @@ export const runMegaDeskInternal = internalAction({
       const enabled = sources.filter((s) => s.enabled)
       await log(`Refreshing ${enabled.length} sources`)
       for (const src of enabled) {
-        // `data` sources bypass the article pipeline entirely — they
-        // emit metric records straight into the metrics table. The
-        // mega-desk LLM never sees them, so they don't compete with
-        // article items for the input budget. Failures are recorded
-        // on the source row the same way as article-source errors.
-        if (src.type === "data") {
-          try {
-            const dataMetrics = await fetchDataMetrics({ url: src.url })
-            for (const m of dataMetrics) {
-              await ctx.runMutation(internal.metrics.upsertFromAgent, {
-                slug: m.slug,
-                title: m.title,
-                subtitle: m.subtitle,
-                kind: m.kind,
-                data: m.data,
-                unit: m.unit,
-                citations: m.citations,
-                relatedTags: m.relatedTags,
-                relatedSectionSlugs: m.relatedSectionSlugs,
-              })
-            }
-            await ctx.runMutation(api.sourcesData.recordFetch, {
-              sourceId: src._id,
-              items: [],
-              status: "ok",
-            })
-            await log(
-              `[${src.name}] data adapter upserted ${dataMetrics.length} metrics`,
-            )
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err)
-            await ctx.runMutation(api.sourcesData.recordFetch, {
-              sourceId: src._id,
-              items: [],
-              status: "error",
-              error: msg,
-            })
-            await log(`[${src.name}] FAILED: ${msg}`)
-          }
-          continue
-        }
+        // `data` sources used to feed the metrics table via
+        // fetchDataMetrics. Metrics were retired in the section
+        // restructure (Miami in Numbers is gone), so any source still
+        // tagged `data` gets skipped silently — leave the row in place
+        // but don't try to fetch from it. The /admin/sources UI can
+        // delete them at the operator's convenience.
+        if (src.type === "data") continue
         try {
           const items = await fetchItems({
             type: src.type,
@@ -389,20 +344,8 @@ export const runMegaDeskInternal = internalAction({
         return { runId, itemsConsidered, draftsCreated, eventsCreated }
       }
 
-      // Metric catalog — passed to the LLM so it can drop
-      // `[[metric:slug]]` tokens into draft bodies whose tags overlap.
-      const metricCatalogRows = await ctx.runQuery(api.metrics.list, {
-        limit: 24,
-      })
-      const metricCatalog = metricCatalogRows.map((m) => ({
-        slug: m.slug,
-        title: m.title,
-        unit: m.unit,
-        relatedTags: m.relatedTags,
-      }))
-
       await log(`Calling ${model} (${reservation.centsSpent}¢ today)`)
-      const { events, metrics, rawEventCount, stopReason, rawInputSnippet } =
+      const { events, rawEventCount, stopReason, rawInputSnippet } =
         await generateDrafts({
           systemPrompt: MEGA_SYSTEM_PROMPT,
           model,
@@ -410,11 +353,10 @@ export const runMegaDeskInternal = internalAction({
           maxDrafts: MEGA_MAX_DRAFTS,
           relatedCandidates,
           sectionChoices,
-          metricCatalog,
         })
       const dropped = rawEventCount - events.length
       await log(
-        `LLM returned ${events.length} events (${rawEventCount} raw, ${dropped} dropped in validation), ${metrics.length} metrics`,
+        `LLM returned ${events.length} events (${rawEventCount} raw, ${dropped} dropped in validation)`,
       )
       if (rawEventCount === 0) {
         await log(
@@ -632,48 +574,6 @@ export const runMegaDeskInternal = internalAction({
       }
       if (eventsCreated > 0) {
         await log(`Created ${eventsCreated} events`)
-      }
-
-      // 7. Persist metrics — slug-keyed upsert. New numbers from this
-      // run replace prior values. Citations are mapped from
-      // candidate-item indices to URL/publisher records (same shape
-      // articles + events use). Skips metrics whose citationItemIndices
-      // resolve to zero candidates or whose data shape fails the
-      // schema's `v.any()` validator at insert time.
-      let metricsCreated = 0
-      for (const metric of metrics) {
-        const validIndices = metric.citationItemIndices.filter(
-          (i) => i >= 0 && i < candidates.length,
-        )
-        if (validIndices.length === 0) continue
-        const citedCandidates = validIndices.map((i) => candidates[i])
-        const citations = citedCandidates.map((c) => ({
-          url: c.item.url,
-          title: c.item.title,
-          publisher: c.sourceName,
-          fetchedAt: c.item.fetchedAt,
-        }))
-        try {
-          await ctx.runMutation(internal.metrics.upsertFromAgent, {
-            slug: metric.slug,
-            title: metric.title,
-            subtitle: metric.subtitle,
-            kind: metric.kind,
-            data: metric.data,
-            unit: metric.unit,
-            citations,
-            relatedTags: metric.relatedTags,
-            relatedSectionSlugs: metric.relatedSectionSlugs,
-          })
-          metricsCreated += 1
-        } catch (err) {
-          await log(
-            `Skipped metric "${metric.slug}": ${err instanceof Error ? err.message : String(err)}`,
-          )
-        }
-      }
-      if (metricsCreated > 0) {
-        await log(`Recorded ${metricsCreated} metrics`)
       }
 
       await ctx.runMutation(api.agentsData.finishRun, {

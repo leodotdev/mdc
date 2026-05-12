@@ -413,3 +413,45 @@ export const trimFoodSubsections = internalMutation({
     return { eventsReparented, sectionsDeleted, log }
   },
 })
+
+// =====================================================================
+// 2026-05 metrics wipe. The Miami in Numbers feature was retired in
+// the events-only pivot — the homepage MetricsGrid, section-page
+// metric rails, [[metric:slug]] inline embeds, and the daily Opus
+// retroactive-extraction call all came out together. The `metrics`
+// table is now dead weight; this migration empties it.
+//
+// The table itself stays in the schema for now so legacy rows that
+// reference it can still validate. Drop the definition (and its
+// indexes) in a follow-up push once the wipe is confirmed.
+//
+// Run dev:  npx convex run migrations:wipeMetrics
+// Run prod: npx convex run migrations:wipeMetrics --prod
+// =====================================================================
+
+export const wipeMetricsBatch = internalMutation({
+  args: { batchSize: v.optional(v.number()) },
+  handler: async (ctx, { batchSize }) => {
+    const cap = batchSize ?? 200
+    const rows = await ctx.db.query("metrics").take(cap)
+    for (const m of rows) await ctx.db.delete(m._id)
+    return { deleted: rows.length, hasMore: rows.length === cap }
+  },
+})
+
+export const wipeMetrics = internalAction({
+  args: {},
+  handler: async (ctx): Promise<{ totalDeleted: number; batches: number }> => {
+    let totalDeleted = 0
+    let batches = 0
+    const MAX_BATCHES = 200
+    for (let i = 0; i < MAX_BATCHES; i += 1) {
+      const result: { deleted: number; hasMore: boolean } =
+        await ctx.runMutation(internal.migrations.wipeMetricsBatch, {})
+      totalDeleted += result.deleted
+      batches += 1
+      if (!result.hasMore) break
+    }
+    return { totalDeleted, batches }
+  },
+})

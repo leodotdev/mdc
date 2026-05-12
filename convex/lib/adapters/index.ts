@@ -34,12 +34,14 @@ export async function fetchItems(
     case "events-html":
       return await fetchEventsHtml(source)
     case "data":
-      // Data sources are routed through `convex/lib/dataAdapters.ts`
-      // before they reach this dispatcher — they never produce
-      // RawItems. Reaching this branch means the caller forgot the
-      // upstream branch.
+      // `data` source rows are vestigial — they used to drive the
+      // Miami in Numbers metrics catalog (deleted with the
+      // events-only pivot). The mega-desk's source loop now skips
+      // them upstream, so this branch should never be reached. Throw
+      // loudly if it ever is, so the stray caller is visible in the
+      // run log instead of silently failing.
       throw new Error(
-        "Data sources must be routed via fetchDataMetrics, not fetchItems",
+        "`data` source type is retired — metrics were removed in the events-only pivot",
       )
   }
 }

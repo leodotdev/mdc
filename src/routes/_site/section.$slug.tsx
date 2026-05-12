@@ -16,7 +16,6 @@ import { StoryItem } from "@/components/editorial/story-item"
 import { EventListItem } from "@/components/events/event-list-item"
 import { BannerAd } from "@/components/site/banner-ad"
 import { HeroImg } from "@/components/site/hero-img"
-import { SectionMetrics } from "@/components/widgets/section-metrics"
 import { TeamWidgets } from "@/components/widgets/sports-widget"
 import { convexSuspenseQuery } from "@/lib/convex-suspense"
 import { useTranslation } from "@/lib/i18n/context"
@@ -303,10 +302,6 @@ function SectionPage() {
             below the fold. */}
         <aside className="flex flex-col gap-8 lg:col-span-3 lg:border-l lg:border-foreground/15 lg:pl-6">
           {slug === "sports" ? <TeamWidgets /> : null}
-          <SectionMetrics
-            sectionSlug={slug}
-            accent={section.accentColor}
-          />
           <div>
             <SectionHeaderCell
               title={`${sectionName} ${t("nav.events").toLowerCase()}`}

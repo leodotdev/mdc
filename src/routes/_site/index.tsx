@@ -9,7 +9,6 @@ import { SectionHeaderCell } from "@/components/editorial/section-header-cell"
 import { StoryItem } from "@/components/editorial/story-item"
 import { EventListItem } from "@/components/events/event-list-item"
 import { HeroImg } from "@/components/site/hero-img"
-import { MetricsGrid } from "@/components/widgets/metrics-grid"
 import { PhotoOfDayWidget } from "@/components/widgets/photo-of-day-widget"
 import { RadarWidget } from "@/components/widgets/radar-widget"
 import {
@@ -278,11 +277,6 @@ function HomePage() {
             </div>
           ))}
 
-          {/* "Miami in numbers" — full-width grid of metrics in the
-              main column, immediately after the day's top-news stack.
-              Hidden until at least 3 metrics exist so the section
-              doesn't read as half-built when the catalog is empty. */}
-          <MetricsGrid className="mt-10" />
         </div>
 
         {/* RIGHT RAIL — 3 of 12. Stacks all sidebar widgets vertically so

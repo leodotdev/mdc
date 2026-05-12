@@ -126,15 +126,4 @@ crons.daily(
   {},
 )
 
-// W9 — Retroactive metric extraction. Runs daily at 05:00 ET (09:00
-// UTC), one Opus call over the last week of published articles to
-// surface numbers the mega-desk missed at draft time. Idempotent
-// (slug-keyed upsert); citations come from the source article.
-crons.daily(
-  "extract metrics from recent articles",
-  { hourUTC: 9, minuteUTC: 0 },
-  internal.metrics.extractRecent,
-  {},
-)
-
 export default crons

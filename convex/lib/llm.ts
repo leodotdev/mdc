@@ -89,21 +89,8 @@ export type LlmEvent = {
   videoId?: string
 }
 
-export type LlmMetric = {
-  slug: string
-  title: string
-  subtitle?: string
-  kind: "number" | "number-with-delta" | "line" | "bars" | "rank" | "compare"
-  data: unknown
-  unit?: string
-  relatedTags: Array<string>
-  relatedSectionSlugs: Array<string>
-  citationItemIndices: Array<number>
-}
-
 export type DraftBatch = {
   events: Array<LlmEvent>
-  metrics: Array<LlmMetric>
   /** Number of raw event objects the LLM emitted before validation.
    *  When > events.length, rows were dropped for missing/invalid
    *  required fields — useful for distinguishing "model produced
@@ -246,94 +233,10 @@ function buildEventsTool(sectionSlugs: Array<string>) {
             required: eventRequired,
           },
         },
-        metrics: {
-        type: "array",
-        description:
-          "Promote a number from the cited sources to a first-class Miami metric. ONLY when the source explicitly states the number — never estimate or compute. Examples: census population counts, BLS unemployment rates, NAR median home prices, ranking-list mentions ('Miami ranks #4 in cost of living'). The number must be locally relevant (Miami-Dade, Miami metro, South Florida, Florida statewide for big-picture stats). Empty array is the default. Each metric must cite at least one source item.",
-        items: {
-          type: "object",
-          properties: {
-            slug: {
-              type: "string",
-              description:
-                "kebab-case slug, ≤80 chars. Pick a stable identifier so re-runs that find a fresher version of the same metric upsert in place. Example slugs: 'miami-dade-population', 'miami-metro-unemployment', 'miami-median-home-price', 'miami-cost-of-living-rank'.",
-            },
-            title: {
-              type: "string",
-              description:
-                "Short label (≤60 chars). Reads as a stat headline: 'Miami-Dade population', 'Median home price', 'Cost of living rank'.",
-            },
-            subtitle: {
-              type: "string",
-              description:
-                "Optional 1-line context (≤80 chars). Period covered, source agency, vintage. Example: 'Census ACS 2024 5-year', 'BLS, Apr 2026'.",
-            },
-            kind: {
-              type: "string",
-              enum: [
-                "number",
-                "number-with-delta",
-                "line",
-                "bars",
-                "rank",
-                "compare",
-              ],
-              description:
-                "Shape of the data. `number` = single value. `number-with-delta` = value plus YoY/QoQ change. `line` = time series. `bars` = categorical breakdown. `rank` = position on a list. `compare` = two values side by side.",
-            },
-            data: {
-              type: "object",
-              description:
-                "Payload — shape varies by kind. number/number-with-delta: { value, delta?: { value, period } }. line/bars: { points: [{ label, value }] }. rank: { value, outOf, list }. compare: { left: { label, value }, right: { label, value } }.",
-            },
-            unit: {
-              type: "string",
-              description:
-                "Display unit, e.g. 'people', '%', '$', 'rank of 50'. Optional.",
-            },
-            relatedTags: {
-              type: "array",
-              items: { type: "string" },
-              description:
-                "Tags that signal which articles this metric is relevant to. The renderer can auto-embed when an article shares these tags. Lowercase, reusable.",
-            },
-            relatedSectionSlugs: {
-              type: "array",
-              items: { type: "string" },
-              description:
-                "Section slugs this metric belongs to (e.g. ['real-estate', 'business']). Empty = homepage-eligible.",
-            },
-            citationItemIndices: {
-              type: "array",
-              items: { type: "integer" },
-              description:
-                "Source item indices that supplied this metric. Must include ≥1 — never invent numbers.",
-            },
-          },
-          required: [
-            "slug",
-            "title",
-            "kind",
-            "data",
-            "relatedTags",
-            "relatedSectionSlugs",
-            "citationItemIndices",
-          ],
-        },
       },
-    },
-      required: ["articles", "events"],
+      required: ["events"],
     },
   } as const
-}
-
-
-export type MetricCatalogEntry = {
-  slug: string
-  title: string
-  unit?: string
-  /** Tags that should trigger an inline embed when matched on a draft's tags. */
-  relatedTags: ReadonlyArray<string>
 }
 
 export async function generateDrafts(opts: {
@@ -346,10 +249,6 @@ export async function generateDrafts(opts: {
   relatedCandidates?: Array<RelatedCandidate>
   /** Sections the desk can file events under (primary + children). */
   sectionChoices?: Array<SectionChoice>
-  /** Current metric catalog. The LLM may drop `[[metric:slug]]` tokens
-   *  into the body of any event whose tags match the metric's
-   *  relatedTags — the article renderer expands them inline. */
-  metricCatalog?: ReadonlyArray<MetricCatalogEntry>
 }): Promise<DraftBatch> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set in Convex env")
@@ -423,9 +322,6 @@ export async function generateDrafts(opts: {
     sectionsText
       ? `- For each event, set \`sectionSlug\` to the most specific section from the allowed list below.`
       : "",
-    (opts.metricCatalog ?? []).length > 0
-      ? `- INLINE METRIC EMBEDS: when a reported event's tags overlap with a metric's relatedTags below, drop a \`[[metric:slug]]\` token into the BODY on its own line where the number would naturally appear. The renderer expands the token into a compact widget. Use sparingly — at most one embed per event, only when the metric directly supports the claim. Example: an event about cost of living that overlaps with 'miami-cost-of-living-rank' → drop \`[[metric:miami-cost-of-living-rank]]\` near the relevant sentence.`
-      : "",
     ``,
     `Source items:`,
     itemsText,
@@ -435,16 +331,6 @@ export async function generateDrafts(opts: {
     ...(relatedText
       ? ["", `Recently published events (for relatedEventIndices / updateOfRelatedIndex):`, relatedText]
       : []),
-    ...((opts.metricCatalog ?? []).length > 0
-      ? [
-          "",
-          `Available metrics for inline embeds (slug — title — relatedTags):`,
-          ...(opts.metricCatalog ?? []).map(
-            (m) =>
-              `- ${m.slug} — ${m.title}${m.unit ? ` (${m.unit})` : ""} — tags: ${m.relatedTags.length > 0 ? m.relatedTags.join(", ") : "(none)"}`,
-          ),
-        ]
-      : []),
   ]
     .filter(Boolean)
     .join("\n")
@@ -452,7 +338,7 @@ export async function generateDrafts(opts: {
   const response = await client.messages.create({
     model: opts.model,
     // 16k output cap. 20 events × (title + dek + body ≈ 600 tokens
-    // each) + metrics + tool-call overhead easily exceeds 4k.
+    // each) + tool-call overhead easily exceeds 4k.
     max_tokens: 16384,
     system: [
       {
@@ -472,7 +358,6 @@ export async function generateDrafts(opts: {
   if (!toolUse) throw new Error("LLM did not return a tool_use block")
   const input = toolUse.input as {
     events?: unknown
-    metrics?: unknown
   }
   const rawEvents = Array.isArray(input.events) ? input.events : []
   const events = rawEvents
@@ -486,14 +371,8 @@ export async function generateDrafts(opts: {
       JSON.stringify(firstInvalid)?.slice(0, 600),
     )
   }
-  const metrics = Array.isArray(input.metrics)
-    ? input.metrics
-        .map(validateMetric)
-        .filter((m): m is LlmMetric => m !== null)
-    : []
   return {
     events,
-    metrics,
     rawEventCount: rawEvents.length,
     /** Anthropic's stop_reason — useful diagnostic when events is
      *  empty (max_tokens vs end_turn vs stop_sequence vs refusal). */
@@ -501,48 +380,6 @@ export async function generateDrafts(opts: {
     /** First 600 chars of the raw tool input — surfaces what the LLM
      *  actually submitted when the validated count is 0. */
     rawInputSnippet: JSON.stringify(input).slice(0, 600),
-  }
-}
-
-function validateMetric(raw: unknown): LlmMetric | null {
-  if (!raw || typeof raw !== "object") return null
-  const r = raw as Record<string, unknown>
-  if (typeof r.slug !== "string" || !r.slug) return null
-  if (typeof r.title !== "string" || !r.title) return null
-  if (
-    r.kind !== "number" &&
-    r.kind !== "number-with-delta" &&
-    r.kind !== "line" &&
-    r.kind !== "bars" &&
-    r.kind !== "rank" &&
-    r.kind !== "compare"
-  ) {
-    return null
-  }
-  if (!r.data || typeof r.data !== "object") return null
-  if (!Array.isArray(r.citationItemIndices) || r.citationItemIndices.length === 0) {
-    return null
-  }
-  const citationItemIndices = r.citationItemIndices.filter(
-    (n): n is number => typeof n === "number" && Number.isInteger(n),
-  )
-  if (citationItemIndices.length === 0) return null
-  const relatedTags = Array.isArray(r.relatedTags)
-    ? r.relatedTags.filter((t): t is string => typeof t === "string")
-    : []
-  const relatedSectionSlugs = Array.isArray(r.relatedSectionSlugs)
-    ? r.relatedSectionSlugs.filter((t): t is string => typeof t === "string")
-    : []
-  return {
-    slug: r.slug.slice(0, 80),
-    title: r.title.slice(0, 80),
-    subtitle: typeof r.subtitle === "string" ? r.subtitle.slice(0, 100) : undefined,
-    kind: r.kind,
-    data: r.data,
-    unit: typeof r.unit === "string" ? r.unit.slice(0, 32) : undefined,
-    relatedTags,
-    relatedSectionSlugs,
-    citationItemIndices,
   }
 }
 
@@ -1316,184 +1153,3 @@ export async function verifyEventRubric(opts: {
   }
 }
 
-// =====================================================================
-// Retroactive metric extraction. Daily pass over recently-published
-// articles — asks Opus to find verifiably-stated numbers that should
-// be promoted to first-class metrics, even if the mega-desk missed
-// them at draft time. Idempotent by slug; same article producing the
-// same number on a re-run upserts in place.
-//
-// Cost: one Opus call per pass with up to ~30 article bodies in
-// context. ~$0.10-0.20 daily.
-// =====================================================================
-
-export type ExtractMetricsArticle = {
-  /** Article slug — used to look up the citation set on the server. */
-  slug: string
-  title: string
-  dek: string
-  body: string
-  /** First citation publisher to enrich the LLM's grounding. */
-  primaryPublisher?: string
-}
-
-export type ExtractedMetric = {
-  slug: string
-  title: string
-  subtitle?: string
-  kind: "number" | "number-with-delta" | "line" | "bars" | "rank" | "compare"
-  data: unknown
-  unit?: string
-  relatedTags: Array<string>
-  relatedSectionSlugs: Array<string>
-  /** Article slug the number came from, so the caller can resolve
-   *  citations from that article's record server-side. */
-  fromArticleSlug: string
-}
-
-const extractMetricsTool: Anthropic.Tool = {
-  name: "submit_metrics",
-  description:
-    "Promote numbers stated in the provided articles to first-class miami.community metrics.",
-  input_schema: {
-    type: "object",
-    properties: {
-      metrics: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            slug: { type: "string" },
-            title: { type: "string" },
-            subtitle: { type: ["string", "null"] },
-            kind: {
-              type: "string",
-              enum: [
-                "number",
-                "number-with-delta",
-                "line",
-                "bars",
-                "rank",
-                "compare",
-              ],
-            },
-            data: { type: "object" },
-            unit: { type: ["string", "null"] },
-            relatedTags: { type: "array", items: { type: "string" } },
-            relatedSectionSlugs: {
-              type: "array",
-              items: { type: "string" },
-            },
-            fromArticleSlug: {
-              type: "string",
-              description:
-                "The slug of the article in this batch where the number appears. The server uses this to attach the right citations.",
-            },
-          },
-          required: [
-            "slug",
-            "title",
-            "kind",
-            "data",
-            "relatedTags",
-            "relatedSectionSlugs",
-            "fromArticleSlug",
-          ],
-        },
-      },
-    },
-    required: ["metrics"],
-  },
-}
-
-export async function extractMetricsFromArticles(opts: {
-  model: string
-  articles: ReadonlyArray<ExtractMetricsArticle>
-}): Promise<Array<ExtractedMetric>> {
-  if (opts.articles.length === 0) return []
-  const apiKey = process.env.ANTHROPIC_API_KEY
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set in Convex env")
-  const client = new Anthropic({ apiKey })
-
-  const articlesText = opts.articles
-    .map((a) => {
-      const pub = a.primaryPublisher ? ` — ${a.primaryPublisher}` : ""
-      return `### [slug: ${a.slug}]${pub}\n${a.title}\n${a.dek}\n${a.body}`
-    })
-    .join("\n\n---\n\n")
-
-  const prompt = [
-    `Pass over recently-published miami.community articles and find numerical facts that deserve to be promoted to first-class Miami metrics. Each metric carries the source article's citations and renders as a homepage widget plus an inline embed in any article tagged with its relatedTags.`,
-    ``,
-    `RULES:`,
-    `- Only promote numbers EXPLICITLY stated in the article. Don't compute or estimate.`,
-    `- Locally relevant: Miami-Dade, Miami metro, South Florida, statewide for big-picture stats. Skip national figures unless the article is contextualizing them for Miami.`,
-    `- Stable slug (kebab-case, ≤80 chars) so future runs that find an updated value upsert in place. Examples: 'miami-dade-population', 'miami-median-rent', 'miami-cost-of-living-rank'.`,
-    `- Pick the right kind: 'number' for one value, 'number-with-delta' when the article gives a YoY/QoQ change, 'line' for a time series, 'bars' for categorical breakdown, 'rank' for ordinal positions on a list, 'compare' for two-sided splits.`,
-    `- Data shape MUST match the kind:`,
-    `  - number / number-with-delta: { value: number, delta?: { value: number, period: string } }`,
-    `  - line / bars: { points: [{ label: string, value: number }] }`,
-    `  - rank: { value: number, outOf: number, list: string }`,
-    `  - compare: { left: { label, value }, right: { label, value } }`,
-    `- Empty result is the default. Most articles produce 0 metrics. A typical eligible article: a census release, BLS report, NAR/Redfin price update, "Miami ranks #N" mention.`,
-    `- 'fromArticleSlug' MUST match one of the article slugs in this batch. Server uses it to attach citations.`,
-    ``,
-    `ARTICLES:`,
-    articlesText,
-    ``,
-    `Return via the submit_metrics tool. No textual response.`,
-  ].join("\n")
-
-  const response = await client.messages.create({
-    model: opts.model,
-    max_tokens: 4096,
-    tools: [extractMetricsTool],
-    tool_choice: { type: "tool", name: "submit_metrics" },
-    messages: [{ role: "user", content: prompt }],
-  })
-  const toolUse = response.content.find(
-    (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
-  )
-  if (!toolUse) return []
-  const input = toolUse.input as { metrics?: unknown }
-  if (!Array.isArray(input.metrics)) return []
-  const validSlugs = new Set(opts.articles.map((a) => a.slug))
-  const out: Array<ExtractedMetric> = []
-  for (const raw of input.metrics) {
-    if (!raw || typeof raw !== "object") continue
-    const r = raw as Record<string, unknown>
-    if (typeof r.slug !== "string" || !r.slug) continue
-    if (typeof r.title !== "string" || !r.title) continue
-    if (typeof r.fromArticleSlug !== "string") continue
-    if (!validSlugs.has(r.fromArticleSlug)) continue
-    if (
-      r.kind !== "number" &&
-      r.kind !== "number-with-delta" &&
-      r.kind !== "line" &&
-      r.kind !== "bars" &&
-      r.kind !== "rank" &&
-      r.kind !== "compare"
-    )
-      continue
-    if (!r.data || typeof r.data !== "object") continue
-    const relatedTags = Array.isArray(r.relatedTags)
-      ? r.relatedTags.filter((t): t is string => typeof t === "string")
-      : []
-    const relatedSectionSlugs = Array.isArray(r.relatedSectionSlugs)
-      ? r.relatedSectionSlugs.filter((t): t is string => typeof t === "string")
-      : []
-    out.push({
-      slug: r.slug.slice(0, 80),
-      title: r.title.slice(0, 80),
-      subtitle:
-        typeof r.subtitle === "string" ? r.subtitle.slice(0, 100) : undefined,
-      kind: r.kind,
-      data: r.data,
-      unit: typeof r.unit === "string" ? r.unit.slice(0, 32) : undefined,
-      relatedTags,
-      relatedSectionSlugs,
-      fromArticleSlug: r.fromArticleSlug,
-    })
-  }
-  return out
-}
