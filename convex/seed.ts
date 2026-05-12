@@ -124,44 +124,17 @@ const SECTIONS: Array<{
     slug: "food",
     name: "Food",
     description:
-      "Where Miami eats — new openings, neighborhood spots, Cuban coffee, the city's restaurant culture.",
+      "Food events across Miami — restaurant openings, markets, festivals, tastings, chef dinners.",
     accentColor: "oklch(0.795 0.184 86.047)", // yellow-600
     order: 60,
-  },
-  {
-    slug: "food-reviews",
-    name: "Reviews",
-    description:
-      "Single-restaurant pieces — the meal, the room, what it costs, who's it for.",
-    accentColor: "oklch(0.795 0.184 86.047)", // yellow-600
-    order: 61,
-    parentSlug: "food",
   },
   {
     slug: "food-openings",
     name: "Openings",
     description:
-      "New restaurants, bars, and ventanitas — what just opened, where, and what to order first.",
+      "New restaurants, bars, and ventanitas — opening nights, soft-launch dinners, ribbon-cuttings.",
     accentColor: "oklch(0.795 0.184 86.047)", // yellow-600
     order: 62,
-    parentSlug: "food",
-  },
-  {
-    slug: "miami-recipes",
-    name: "Miami Recipes",
-    description:
-      "Original recipes and local-chef takes on Miami staples — Cuban coffee, ropa vieja, arepas, stone crab, key lime, the city's food in your kitchen.",
-    accentColor: "oklch(0.795 0.184 86.047)", // yellow-600
-    order: 63,
-    parentSlug: "food",
-  },
-  {
-    slug: "food-closings",
-    name: "Closings",
-    description:
-      "Restaurants and bars that have closed their doors — what we lost, when, and where to mourn.",
-    accentColor: "oklch(0.795 0.184 86.047)", // yellow-600
-    order: 64,
     parentSlug: "food",
   },
   {

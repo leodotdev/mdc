@@ -357,3 +357,59 @@ export const migrate2026Sections = internalMutation({
     }
   },
 })
+
+// =====================================================================
+// 2026-05 food-sub trim. Reviews / recipes / closings were
+// article-shape categories that don't survive the events-only pivot —
+// you can't have an "event" that is a single-restaurant review or a
+// recipe. Openings stays (it IS an event type: opening night, ribbon-
+// cutting, soft launch). The remaining three get folded back into the
+// food parent so the section dropdown stops claiming categories the
+// site no longer serves.
+//
+// Run dev:  npx convex run migrations:trimFoodSubsections
+// Run prod: npx convex run migrations:trimFoodSubsections --prod
+// Idempotent — re-running is a no-op once the slugs are gone.
+// =====================================================================
+
+const FOOD_SUBS_TO_DELETE: ReadonlyArray<string> = [
+  "food-reviews",
+  "miami-recipes",
+  "food-closings",
+]
+
+export const trimFoodSubsections = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const log: Array<string> = []
+    const all = await ctx.db.query("sections").collect()
+    const bySlug = new Map(all.map((s) => [s.slug, s]))
+    const foodParent = bySlug.get("food")
+    if (!foodParent) {
+      log.push("WARN: no `food` parent section; aborting before any change")
+      return { eventsReparented: 0, sectionsDeleted: 0, log }
+    }
+    let eventsReparented = 0
+    let sectionsDeleted = 0
+    for (const slug of FOOD_SUBS_TO_DELETE) {
+      const dead = bySlug.get(slug)
+      if (!dead) continue
+      // Reparent events from the dead sub → food parent.
+      const events = await ctx.db
+        .query("events")
+        .withIndex("by_section_starts", (q) => q.eq("sectionId", dead._id))
+        .collect()
+      for (const e of events) {
+        await ctx.db.patch(e._id, { sectionId: foodParent._id })
+        eventsReparented += 1
+      }
+      if (events.length > 0) {
+        log.push(`reparented ${events.length} events from ${slug} → food`)
+      }
+      await ctx.db.delete(dead._id)
+      sectionsDeleted += 1
+      log.push(`deleted section ${slug}`)
+    }
+    return { eventsReparented, sectionsDeleted, log }
+  },
+})
