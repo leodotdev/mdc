@@ -75,11 +75,8 @@ export function Masthead() {
               {t("brand.name")}
             </span>
           </Link>
-          <p
-            aria-hidden
-            className="font-heading mt-3 text-sm italic text-muted-foreground md:text-base"
-          >
-            {" "}
+          <p className="font-heading mt-3 text-sm italic text-muted-foreground md:text-base">
+            {t("masthead.tagline")}
           </p>
         </div>
       </div>

@@ -6,7 +6,7 @@ export const STRINGS = {
   en: {
     // Masthead / chrome
     "brand.name": "miami.community",
-    "masthead.tagline": "Sourced. Cited. Local.",
+    "masthead.tagline": "Miami's calendar of record",
     "masthead.aria.home": "miami.community — home",
     "trending.label": "Trending",
     "search.aria": "Search",
@@ -103,7 +103,7 @@ export const STRINGS = {
   es: {
     // Masthead / chrome
     "brand.name": "miami.comunidad",
-    "masthead.tagline": "Con fuentes. Citado. Local.",
+    "masthead.tagline": "El calendario de referencia de Miami",
     "masthead.aria.home": "miami.comunidad — inicio",
     "trending.label": "Tendencias",
     "search.aria": "Buscar",
