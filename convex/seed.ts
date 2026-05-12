@@ -1716,7 +1716,14 @@ export const seedDataSources = internalMutation({
 // expansion sources after one command.
 type ExpansionFeed = {
   name: string
-  type: "rss" | "reddit" | "youtube" | "bluesky" | "ics" | "events-html"
+  type:
+    | "rss"
+    | "reddit"
+    | "youtube"
+    | "bluesky"
+    | "ics"
+    | "events-html"
+    | "sitemap-events"
   url: string
   sectionSlugs: ReadonlyArray<string>
   pollMinutes?: number
@@ -3558,6 +3565,18 @@ const EXPANSION_FEEDS_V6: ReadonlyArray<ExpansionFeed> = [
     url: "https://gablestage.org/feed/",
     sectionSlugs: ["theater"],
     pollMinutes: 240,
+  },
+
+  // ─── Sitemap-driven JSON-LD discovery ───
+  // ICA Miami exposes Event schema on every /exhibition/ page in its
+  // sitemap — the adapter fetches the sitemap, filters event-shaped
+  // URLs, and scrapes JSON-LD from each. Verified live.
+  {
+    name: "ICA Miami — exhibitions (sitemap)",
+    type: "sitemap-events",
+    url: "https://icamiami.org",
+    sectionSlugs: ["arts", "museums"],
+    pollMinutes: 480,
   },
 
   // ─── Miami music + culture ───

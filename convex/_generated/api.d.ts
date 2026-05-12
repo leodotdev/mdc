@@ -27,6 +27,7 @@ import type * as lib_adapters_ics from "../lib/adapters/ics.js";
 import type * as lib_adapters_index from "../lib/adapters/index.js";
 import type * as lib_adapters_reddit from "../lib/adapters/reddit.js";
 import type * as lib_adapters_rss from "../lib/adapters/rss.js";
+import type * as lib_adapters_sitemapEvents from "../lib/adapters/sitemapEvents.js";
 import type * as lib_adapters_types from "../lib/adapters/types.js";
 import type * as lib_adapters_web from "../lib/adapters/web.js";
 import type * as lib_adapters_wikipediaOtd from "../lib/adapters/wikipediaOtd.js";
@@ -78,6 +79,7 @@ declare const fullApi: ApiFromModules<{
   "lib/adapters/index": typeof lib_adapters_index;
   "lib/adapters/reddit": typeof lib_adapters_reddit;
   "lib/adapters/rss": typeof lib_adapters_rss;
+  "lib/adapters/sitemapEvents": typeof lib_adapters_sitemapEvents;
   "lib/adapters/types": typeof lib_adapters_types;
   "lib/adapters/web": typeof lib_adapters_web;
   "lib/adapters/wikipediaOtd": typeof lib_adapters_wikipediaOtd;

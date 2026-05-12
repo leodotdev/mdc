@@ -522,6 +522,12 @@ export const runMegaDeskInternal = internalAction({
           .filter((i) => i >= 0 && i < relatedPool.length)
           .map((i) => relatedPool[i]._id)
 
+        // Pull recurrenceRule from the first cited item that has one
+        // — iCal sources persist the RFC 5545 RRULE on ingestedItems.
+        // Forwarded structurally; the LLM never sees the rule.
+        const recurrenceRule = citedCandidates
+          .map((c) => c.item.recurrenceRule)
+          .find((r): r is string => !!r)
         try {
           await ctx.runMutation(internal.events.insertExtracted, {
             event: {
@@ -535,6 +541,7 @@ export const runMegaDeskInternal = internalAction({
                 ev.videoProvider && ev.videoId
                   ? { provider: ev.videoProvider, id: ev.videoId }
                   : undefined,
+              recurrenceRule,
               startsAt,
               endsAt: Number.isFinite(endsAt) ? endsAt : undefined,
               allDay: ev.allDay,

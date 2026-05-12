@@ -3,6 +3,7 @@ import { fetchEventsHtml } from "./eventsHtml"
 import { fetchIcs } from "./ics"
 import { fetchReddit } from "./reddit"
 import { fetchRss } from "./rss"
+import { fetchSitemapEvents } from "./sitemapEvents"
 import { fetchWeb } from "./web"
 import { fetchWikipediaOtd } from "./wikipediaOtd"
 import { fetchX } from "./x"
@@ -33,6 +34,8 @@ export async function fetchItems(
       return await fetchIcs(source)
     case "events-html":
       return await fetchEventsHtml(source)
+    case "sitemap-events":
+      return await fetchSitemapEvents(source)
     case "data":
       // `data` source rows are vestigial — they used to drive the
       // Miami in Numbers metrics catalog (deleted with the

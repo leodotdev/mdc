@@ -21,6 +21,7 @@ import {
   formatEventTime,
 } from "@/lib/event-helpers"
 import { localizedEvent } from "@/lib/localized-event"
+import { describeRRule, nextOccurrences } from "@/lib/rrule"
 import { useOpenArticleDrawer } from "@/lib/use-open-article-drawer"
 
 type EventDoc = NonNullable<FunctionReturnType<typeof api.events.getBySlug>>
@@ -109,6 +110,41 @@ export function EventLayout({ rawEvent }: { rawEvent: EventDoc }) {
             {event.price ? <span aria-hidden>·</span> : null}
             {event.price ? <span>{event.price}</span> : null}
           </div>
+
+          {/* Recurrence — when the source provided an RFC 5545 RRULE,
+              show the human-readable cadence plus the next three
+              future occurrences. Lets a "yoga every Saturday at the
+              park" event ship as ONE row instead of weekly duplicates. */}
+          {event.recurrenceRule
+            ? (() => {
+                const label = describeRRule(event.recurrenceRule)
+                if (!label) return null
+                const occs = nextOccurrences(
+                  event.recurrenceRule,
+                  event.startsAt,
+                  3,
+                ).filter((ms) => ms > Date.now())
+                const nextLabel = occs
+                  .map((ms) =>
+                    new Date(ms).toLocaleString("en-US", {
+                      month: "short",
+                      day: "numeric",
+                    }),
+                  )
+                  .join(" · ")
+                return (
+                  <div className="font-sans mx-auto mt-1 max-w-2xl text-sm text-muted-foreground">
+                    <span className="font-medium text-foreground">{label}</span>
+                    {nextLabel ? (
+                      <span>
+                        {" "}
+                        · Upcoming: <span className="tabular-nums">{nextLabel}</span>
+                      </span>
+                    ) : null}
+                  </div>
+                )
+              })()
+            : null}
 
           {/* Line 2 — #tags · neighborhood pills. Same pill shape so they
               read as one taxonomy strip. */}

@@ -178,6 +178,7 @@ export default defineSchema({
       v.literal("wikipedia-otd"),
       v.literal("ics"),
       v.literal("events-html"),
+      v.literal("sitemap-events"),
       v.literal("data"),
     ),
     url: v.string(),
@@ -214,6 +215,12 @@ export default defineSchema({
     publishedAt: v.optional(v.number()),
     fetchedAt: v.number(),
     consumed: v.boolean(),
+    // RFC 5545 RRULE captured from the source. Currently populated by
+    // the iCal adapter when a VEVENT carries `RRULE:...`. Lets the
+    // mega-desk forward recurrence information through to the events
+    // table without going through the LLM (the rule is structured
+    // data, not editorial copy).
+    recurrenceRule: v.optional(v.string()),
   })
     .index("by_source_external", ["sourceId", "externalId"])
     .index("by_consumed_fetched", ["consumed", "fetchedAt"]),
@@ -372,6 +379,13 @@ export default defineSchema({
     startsAt: v.number(),
     endsAt: v.optional(v.number()),
     allDay: v.boolean(),
+    // RFC 5545 RRULE for recurring events ("FREQ=WEEKLY;BYDAY=SA").
+    // Forwarded through the pipeline from iCal sources so the renderer
+    // can show "Recurs weekly on Saturdays" + the next few occurrences
+    // instead of emitting N duplicate event rows. Empty for one-off
+    // events. The LLM does not see this — it's structured data the
+    // adapter passes through directly.
+    recurrenceRule: v.optional(v.string()),
     locationName: v.optional(v.string()),
     locationAddress: v.optional(v.string()),
     // Multi-slug neighborhoods, validated against lib/neighborhoods.ts —

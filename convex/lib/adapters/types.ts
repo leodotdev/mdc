@@ -6,6 +6,11 @@ export type RawItem = {
   body?: string
   mediaUrl?: string
   publishedAt?: number
+  /** RFC 5545 RRULE captured from iCal sources. Forwarded through to
+   *  the events table at insert time so the renderer can show
+   *  "Recurs weekly on Saturdays" instead of one row per occurrence.
+   *  Adapters that don't have recurrence data leave it undefined. */
+  recurrenceRule?: string
 }
 
 export type SourceForAdapter = {
@@ -19,6 +24,7 @@ export type SourceForAdapter = {
     | "wikipedia-otd"
     | "ics"
     | "events-html"
+    | "sitemap-events"
     | "data"
   url: string
   config?: unknown

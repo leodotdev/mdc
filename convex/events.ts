@@ -64,6 +64,7 @@ const eventInputValidator = v.object({
       id: v.string(),
     }),
   ),
+  recurrenceRule: v.optional(v.string()),
   startsAt: v.number(),
   endsAt: v.optional(v.number()),
   allDay: v.boolean(),

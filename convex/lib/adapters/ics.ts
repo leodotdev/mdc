@@ -55,8 +55,12 @@ export async function fetchIcs(
     const url = readProp(body, "URL")
     const dtRaw = readPropLine(body, "DTSTART")
     const startMs = dtRaw ? parseIcsDate(dtRaw) : undefined
+    // RRULE value — strip the property name prefix. When present, the
+    // event is recurring and we skip the cutoff check (a recurring
+    // VEVENT can have a DTSTART in the past while remaining current).
+    const rrule = readProp(body, "RRULE")
 
-    if (startMs != null && startMs < cutoff) continue
+    if (!rrule && startMs != null && startMs < cutoff) continue
 
     const composedBody = [
       description,
@@ -72,6 +76,7 @@ export async function fetchIcs(
       snippet: description?.slice(0, 400),
       body: composedBody || undefined,
       publishedAt: startMs,
+      recurrenceRule: rrule,
     })
   }
 

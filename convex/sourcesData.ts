@@ -166,6 +166,7 @@ export const recordFetch = mutation({
         body: v.optional(v.string()),
         mediaUrl: v.optional(v.string()),
         publishedAt: v.optional(v.number()),
+        recurrenceRule: v.optional(v.string()),
       }),
     ),
   },
@@ -189,6 +190,7 @@ export const recordFetch = mutation({
         body: item.body,
         mediaUrl: item.mediaUrl,
         publishedAt: item.publishedAt,
+        recurrenceRule: item.recurrenceRule,
         fetchedAt: now,
         consumed: false,
       })
