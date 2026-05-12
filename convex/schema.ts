@@ -11,10 +11,17 @@ export default defineSchema({
     description: v.string(),
     accentColor: v.string(),
     order: v.number(),
-    // Optional parent — when set, this is a sub-section. The parent's
-    // section page surfaces articles from its own sectionId AND from every
-    // child. Top-level sections leave this undefined.
+    // Optional primary parent — when set, this is the section's
+    // canonical home in the tree. Drives the breadcrumb, the SubNav
+    // it appears in by default, and the section page's section-header
+    // accent. Top-level sections leave this undefined.
     parentId: v.optional(v.id("sections")),
+    // Additional parents this section is cross-listed under. Museums
+    // (primary parent: science) is also relevant under arts; the same
+    // section row appears in both SubNavs, and event-scoping queries
+    // that recurse into "children of arts" pick it up too. Optional
+    // array — most sections leave it empty.
+    crossListedIn: v.optional(v.array(v.id("sections"))),
   })
     .index("by_slug", ["slug"])
     .index("by_order", ["order"])

@@ -24,8 +24,21 @@ export function SubNav() {
   const parent = current.parentId
     ? sections.find((s) => s._id === current.parentId) ?? current
     : current
+  // Children include sections whose primary parent is `parent` AND
+  // any section cross-listed under `parent` (museums cross-lists into
+  // arts even though its primary parent is science). Dedupe by _id so
+  // a section never renders twice in one nav row.
+  const seen = new Set<string>()
   const children = sections
-    .filter((s) => s.parentId === parent._id)
+    .filter((s) => {
+      const isChild = s.parentId === parent._id
+      const isCrossListed =
+        s.crossListedIn?.includes(parent._id) ?? false
+      if (!isChild && !isCrossListed) return false
+      if (seen.has(s._id as string)) return false
+      seen.add(s._id as string)
+      return true
+    })
     .sort((a, b) => a.order - b.order)
   if (children.length === 0) return null
 

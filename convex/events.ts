@@ -327,12 +327,19 @@ export const topInSection = query({
       .withIndex("by_slug", (q) => q.eq("slug", sectionSlug))
       .unique()
     if (!section) return []
-    const childIds = (
-      await ctx.db
-        .query("sections")
-        .withIndex("by_parent", (q) => q.eq("parentId", section._id))
-        .collect()
-    ).map((c) => c._id)
+    // Direct children (primary parent) + cross-listed sections (museums
+    // cross-lists into arts even though its primary parent is science).
+    // Pulling both ensures arts shows museum events alongside music /
+    // film / theater.
+    const directChildren = await ctx.db
+      .query("sections")
+      .withIndex("by_parent", (q) => q.eq("parentId", section._id))
+      .collect()
+    const allSections = await ctx.db.query("sections").collect()
+    const crossListed = allSections.filter((s) =>
+      s.crossListedIn?.includes(section._id),
+    )
+    const childIds = [...directChildren, ...crossListed].map((c) => c._id)
     const scopedSectionIds = new Set<Id<"sections">>([section._id, ...childIds])
     const now = Date.now()
     const since = now - (lookbackHours ?? 168) * 3_600_000

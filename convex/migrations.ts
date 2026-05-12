@@ -455,3 +455,39 @@ export const wipeMetrics = internalAction({
     return { totalDeleted, batches }
   },
 })
+
+// =====================================================================
+// 2026-05 cross-list museums under both science and arts. Museums sit
+// at the intersection — Frost Science is science; PAMM/Bass/Vizcaya
+// read as arts; HistoryMiami is heritage. Primary parent stays at
+// science (where the Phase 4 section restructure moved it; that's the
+// canonical breadcrumb), and `crossListedIn` adds arts as a secondary
+// home so the section appears in arts's SubNav too and arts-level
+// child-recursion picks up museum events.
+//
+// Idempotent.
+// =====================================================================
+
+export const crossListMuseums = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const all = await ctx.db.query("sections").collect()
+    const bySlug = new Map(all.map((s) => [s.slug, s]))
+    const museums = bySlug.get("museums")
+    const arts = bySlug.get("arts")
+    if (!museums || !arts) {
+      return {
+        ok: false,
+        reason: `missing section(s): museums=${!!museums} arts=${!!arts}`,
+      }
+    }
+    const existing = museums.crossListedIn ?? []
+    if (existing.includes(arts._id)) {
+      return { ok: true, alreadySet: true }
+    }
+    await ctx.db.patch(museums._id, {
+      crossListedIn: [...existing, arts._id],
+    })
+    return { ok: true, alreadySet: false }
+  },
+})
