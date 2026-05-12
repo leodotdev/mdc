@@ -815,3 +815,86 @@ export const pruneNonEventSources = internalMutation({
     }
   },
 })
+
+// =====================================================================
+// 2026-05 hard-delete of disabled sources. Pruning only flipped
+// enabled=false; the admin/sources page still listed every row with
+// a red dot. This migration finishes the job: delete every disabled
+// source AND its ingestedItems (cascading clean-up so no orphans).
+//
+// Batched via an action since some sources have thousands of
+// ingestedItems and a single mutation would blow the write limit.
+//
+// Run dev:  npx convex run migrations:deleteDisabledSources
+// Run prod: npx convex run migrations:deleteDisabledSources --prod
+// =====================================================================
+
+export const deleteOneDisabledSource = internalMutation({
+  args: { sourceId: v.id("sources") },
+  handler: async (ctx, { sourceId }) => {
+    const src = await ctx.db.get(sourceId)
+    if (!src) return { deletedItems: 0, deletedSource: false }
+    if (src.enabled) {
+      // Safety guard: an editor may have re-enabled mid-pass. Don't
+      // delete enabled rows.
+      return { deletedItems: 0, deletedSource: false }
+    }
+    // Delete this source's ingestedItems in a single transaction
+    // (capped at 1000 — that's already a lot per source; anything
+    // larger means we revisit on the next batched call).
+    const items = await ctx.db
+      .query("ingestedItems")
+      .withIndex("by_source_external", (q) => q.eq("sourceId", sourceId))
+      .take(1000)
+    for (const it of items) await ctx.db.delete(it._id)
+    // If we hit the cap, leave the source row for the next pass.
+    if (items.length === 1000) {
+      return { deletedItems: items.length, deletedSource: false }
+    }
+    await ctx.db.delete(sourceId)
+    return { deletedItems: items.length, deletedSource: true }
+  },
+})
+
+export const deleteDisabledSources = internalAction({
+  args: {},
+  handler: async (
+    ctx,
+  ): Promise<{
+    deletedSources: number
+    deletedItems: number
+    sourcesScanned: number
+  }> => {
+    const all = await ctx.runQuery(internal.sourcesData.listInternal, {})
+    const disabled = all.filter((s) => !s.enabled)
+    let deletedSources = 0
+    let deletedItems = 0
+    // Keep looping until each disabled source is fully drained — a
+    // source with >1000 ingested items needs multiple per-source
+    // calls before its row can be removed.
+    for (const src of disabled) {
+      // Loop until this source is gone (or the inner mutation gives
+      // up because the source row was re-enabled).
+      for (let pass = 0; pass < 50; pass += 1) {
+        const result: {
+          deletedItems: number
+          deletedSource: boolean
+        } = await ctx.runMutation(
+          internal.migrations.deleteOneDisabledSource,
+          { sourceId: src._id },
+        )
+        deletedItems += result.deletedItems
+        if (result.deletedSource) {
+          deletedSources += 1
+          break
+        }
+        if (result.deletedItems === 0) break // nothing more to do
+      }
+    }
+    return {
+      deletedSources,
+      deletedItems,
+      sourcesScanned: disabled.length,
+    }
+  },
+})
