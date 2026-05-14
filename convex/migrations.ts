@@ -973,3 +973,263 @@ export const backfillEventCoords = internalAction({
     return { totalScanned, totalPatched, batches }
   },
 })
+
+// =====================================================================
+// 2026-05 add Education + Health sections + reparent obvious misfiles.
+//
+// Symptoms surfaced in /admin/published:
+//   - UM academic events (law-school tours, MBA dissertations, "Wow
+//     Experience" webinars) were filing under sports/the-u because
+//     there was no academic UM section.
+//   - Biltmore Hotel fitness classes (indoor cycling, yoga, pilates,
+//     aqua fitness) were filing under business because the source
+//     was a hotel iCal feed.
+//
+// Fix:
+//   - New top-level `education` with subs: university-of-miami, mdc,
+//     fiu, high-schools, middle-schools, elementary-schools.
+//   - New top-level `health` with subs: fitness, medical, wellness.
+//   - Reparent existing events whose titles clearly match each new
+//     bucket (heuristic — see ACADEMIC_RE / FITNESS_RE below).
+//   - Going forward, the mega-desk picks the right section from its
+//     allowed-sections prompt automatically.
+//
+// Run dev:  npx convex run migrations:addEducationAndHealth
+// Run prod: npx convex run migrations:addEducationAndHealth --prod
+// Idempotent — re-running skips already-inserted sections and only
+// reparents rows that haven't moved yet.
+// =====================================================================
+
+const EDU_HEALTH_SECTIONS: Array<{
+  slug: string
+  name: string
+  description: string
+  accentColor: string
+  order: number
+  parentSlug?: string
+}> = [
+  // ─── Education tree ───
+  {
+    slug: "education",
+    name: "Education",
+    description:
+      "Schools and universities — academic events, open houses, lectures, dissertations, alumni nights. NOT athletics; see Sports for game schedules.",
+    accentColor: "oklch(0.541 0.281 293.009)", // violet-600
+    order: 35,
+  },
+  {
+    slug: "university-of-miami",
+    name: "University of Miami",
+    description:
+      "UM academic events — Herbert Business School, Frost School of Music, Law School, dissertations, webinars, open houses. For Hurricanes athletics see Sports.",
+    accentColor: "oklch(0.795 0.184 86.047)", // yellow-600 (UM color)
+    order: 36,
+    parentSlug: "education",
+  },
+  {
+    slug: "mdc",
+    name: "Miami Dade College",
+    description:
+      "Miami Dade College academic and community events — campus lectures, gallery openings, the Book Fair, Cultura del Lobo.",
+    accentColor: "oklch(0.586 0.253 17.585)", // rose-600
+    order: 37,
+    parentSlug: "education",
+  },
+  {
+    slug: "fiu",
+    name: "FIU",
+    description:
+      "Florida International University academic events. For FIU Panthers athletics see Sports.",
+    accentColor: "oklch(0.546 0.245 262.881)", // blue-600
+    order: 38,
+    parentSlug: "education",
+  },
+  {
+    slug: "high-schools",
+    name: "High Schools",
+    description:
+      "Miami-Dade public and private high school events — open houses, fairs, parent nights, performances.",
+    accentColor: "oklch(0.609 0.126 221.723)", // cyan-600
+    order: 39,
+    parentSlug: "education",
+  },
+  {
+    slug: "middle-schools",
+    name: "Middle Schools",
+    description:
+      "Miami-Dade middle school events — open houses, parent nights, fairs.",
+    accentColor: "oklch(0.609 0.126 221.723)",
+    order: 40,
+    parentSlug: "education",
+  },
+  {
+    slug: "elementary-schools",
+    name: "Elementary Schools",
+    description:
+      "Miami-Dade elementary school events — open houses, family nights, school carnivals.",
+    accentColor: "oklch(0.609 0.126 221.723)",
+    order: 41,
+    parentSlug: "education",
+  },
+
+  // ─── Health tree ───
+  {
+    slug: "health",
+    name: "Health",
+    description:
+      "Fitness, wellness, and medical events across Miami — yoga, pilates, cycling, hospital lectures, public-health programs.",
+    accentColor: "oklch(0.596 0.145 163.225)", // emerald-600
+    order: 90,
+  },
+  {
+    slug: "fitness",
+    name: "Fitness",
+    description:
+      "Group exercise classes, gym programs, yoga, pilates, cycling, running clubs, swim, barre, HIIT, dance fitness.",
+    accentColor: "oklch(0.596 0.145 163.225)",
+    order: 91,
+    parentSlug: "health",
+  },
+  {
+    slug: "medical",
+    name: "Medical",
+    description:
+      "Hospital events, medical conferences, public-health programs, health-screening days, CME, blood drives.",
+    accentColor: "oklch(0.586 0.253 17.585)",
+    order: 92,
+    parentSlug: "health",
+  },
+  {
+    slug: "wellness",
+    name: "Wellness",
+    description:
+      "Meditation, mindfulness, mental-health programs, holistic retreats, self-care workshops.",
+    accentColor: "oklch(0.541 0.281 293.009)",
+    order: 93,
+    parentSlug: "health",
+  },
+]
+
+// Heuristics — applied to event titles for the one-shot reparent.
+// Word-boundary regexes so "fitness" doesn't match "businessmen" etc.
+const ACADEMIC_RE =
+  /\b(law school|mba|dissertation|webinar|open house|tour|lecture|seminar|symposium|colloquium|faculty|professor|scholarship|graduation|commencement|orientation|alumni|college fair|herbert business|frost school|miller school|rosenstiel|engineering)\b/i
+const FITNESS_RE =
+  /\b(yoga|pilates|cycling|fitness|aqua|spin|barre|hiit|crossfit|gym|workout|training|run\b|running|marathon|5k|10k|swim|dance fitness|zumba|bootcamp|cardio|wellness|meditation|mindfulness)\b/i
+const MEDICAL_RE =
+  /\b(hospital|medical|surgery|surgeon|cme|public health|blood drive|health screening|medicine|clinical)\b/i
+
+export const addEducationAndHealth = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const log: Array<string> = []
+    const all = await ctx.db.query("sections").collect()
+    const bySlug = new Map(all.map((s) => [s.slug, s]))
+
+    // First pass — insert any new section that doesn't already exist.
+    let inserted = 0
+    for (const s of EDU_HEALTH_SECTIONS) {
+      if (bySlug.has(s.slug)) continue
+      const id = await ctx.db.insert("sections", {
+        slug: s.slug,
+        name: s.name,
+        description: s.description,
+        accentColor: s.accentColor,
+        order: s.order,
+      })
+      bySlug.set(s.slug, {
+        _id: id,
+        _creationTime: Date.now(),
+        slug: s.slug,
+        name: s.name,
+        description: s.description,
+        accentColor: s.accentColor,
+        order: s.order,
+      })
+      inserted += 1
+      log.push(`inserted ${s.slug}`)
+    }
+
+    // Second pass — wire parents on the new sections (need both
+    // parent + child IDs available, hence two passes).
+    for (const s of EDU_HEALTH_SECTIONS) {
+      const cur = bySlug.get(s.slug)
+      if (!cur) continue
+      const parentId = s.parentSlug ? bySlug.get(s.parentSlug)?._id : undefined
+      await ctx.db.patch(cur._id, {
+        name: s.name,
+        description: s.description,
+        accentColor: s.accentColor,
+        order: s.order,
+        parentId,
+      })
+    }
+
+    // Reparent helpers — fetch sections we want to target.
+    const theU = bySlug.get("the-u")
+    const fiuPanthers = bySlug.get("fiu-panthers")
+    const business = bySlug.get("business")
+    const um = bySlug.get("university-of-miami")
+    const fiu = bySlug.get("fiu")
+    const fitness = bySlug.get("fitness")
+    const medical = bySlug.get("medical")
+    const wellness = bySlug.get("wellness")
+
+    let reparented = 0
+
+    // UM academic events misfiled under the-u (sports / Hurricanes).
+    if (theU && um) {
+      const events = await ctx.db
+        .query("events")
+        .withIndex("by_section_starts", (q) => q.eq("sectionId", theU._id))
+        .collect()
+      for (const e of events) {
+        if (ACADEMIC_RE.test(e.title)) {
+          await ctx.db.patch(e._id, { sectionId: um._id })
+          reparented += 1
+        }
+      }
+    }
+    // FIU academic events misfiled under fiu-panthers.
+    if (fiuPanthers && fiu) {
+      const events = await ctx.db
+        .query("events")
+        .withIndex("by_section_starts", (q) =>
+          q.eq("sectionId", fiuPanthers._id),
+        )
+        .collect()
+      for (const e of events) {
+        if (ACADEMIC_RE.test(e.title)) {
+          await ctx.db.patch(e._id, { sectionId: fiu._id })
+          reparented += 1
+        }
+      }
+    }
+    // Fitness / wellness / medical events misfiled under business.
+    if (business) {
+      const events = await ctx.db
+        .query("events")
+        .withIndex("by_section_starts", (q) => q.eq("sectionId", business._id))
+        .collect()
+      for (const e of events) {
+        let target:
+          | typeof fitness
+          | typeof medical
+          | typeof wellness
+          | undefined
+        if (FITNESS_RE.test(e.title)) target = fitness
+        else if (MEDICAL_RE.test(e.title)) target = medical
+        else if (/\b(meditation|mindfulness|retreat)\b/i.test(e.title))
+          target = wellness
+        if (target) {
+          await ctx.db.patch(e._id, { sectionId: target._id })
+          reparented += 1
+        }
+      }
+    }
+
+    if (reparented > 0) log.push(`reparented ${reparented} events`)
+
+    return { inserted, reparented, log }
+  },
+})

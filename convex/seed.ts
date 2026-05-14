@@ -48,6 +48,103 @@ const SECTIONS: Array<{
     order: 30,
   },
   {
+    slug: "education",
+    name: "Education",
+    description:
+      "Schools and universities — academic events, open houses, lectures, dissertations, alumni nights. NOT athletics; see Sports for game schedules.",
+    accentColor: "oklch(0.541 0.281 293.009)", // violet-600
+    order: 35,
+  },
+  {
+    slug: "university-of-miami",
+    name: "University of Miami",
+    description:
+      "UM academic events — Herbert Business School, Frost School of Music, Law School, dissertations, webinars, open houses. For Hurricanes athletics see Sports.",
+    accentColor: "oklch(0.795 0.184 86.047)",
+    order: 36,
+    parentSlug: "education",
+  },
+  {
+    slug: "mdc",
+    name: "Miami Dade College",
+    description:
+      "Miami Dade College academic and community events — campus lectures, gallery openings, the Book Fair, Cultura del Lobo.",
+    accentColor: "oklch(0.586 0.253 17.585)",
+    order: 37,
+    parentSlug: "education",
+  },
+  {
+    slug: "fiu",
+    name: "FIU",
+    description:
+      "Florida International University academic events. For FIU Panthers athletics see Sports.",
+    accentColor: "oklch(0.546 0.245 262.881)",
+    order: 38,
+    parentSlug: "education",
+  },
+  {
+    slug: "high-schools",
+    name: "High Schools",
+    description:
+      "Miami-Dade public and private high school events — open houses, fairs, parent nights, performances.",
+    accentColor: "oklch(0.609 0.126 221.723)",
+    order: 39,
+    parentSlug: "education",
+  },
+  {
+    slug: "middle-schools",
+    name: "Middle Schools",
+    description:
+      "Miami-Dade middle school events — open houses, parent nights, fairs.",
+    accentColor: "oklch(0.609 0.126 221.723)",
+    order: 40,
+    parentSlug: "education",
+  },
+  {
+    slug: "elementary-schools",
+    name: "Elementary Schools",
+    description:
+      "Miami-Dade elementary school events — open houses, family nights, school carnivals.",
+    accentColor: "oklch(0.609 0.126 221.723)",
+    order: 41,
+    parentSlug: "education",
+  },
+  {
+    slug: "health",
+    name: "Health",
+    description:
+      "Fitness, wellness, and medical events across Miami — yoga, pilates, cycling, hospital lectures, public-health programs.",
+    accentColor: "oklch(0.596 0.145 163.225)",
+    order: 90,
+  },
+  {
+    slug: "fitness",
+    name: "Fitness",
+    description:
+      "Group exercise classes, gym programs, yoga, pilates, cycling, running clubs, swim, barre, HIIT, dance fitness.",
+    accentColor: "oklch(0.596 0.145 163.225)",
+    order: 91,
+    parentSlug: "health",
+  },
+  {
+    slug: "medical",
+    name: "Medical",
+    description:
+      "Hospital events, medical conferences, public-health programs, health-screening days, CME, blood drives.",
+    accentColor: "oklch(0.586 0.253 17.585)",
+    order: 92,
+    parentSlug: "health",
+  },
+  {
+    slug: "wellness",
+    name: "Wellness",
+    description:
+      "Meditation, mindfulness, mental-health programs, holistic retreats, self-care workshops.",
+    accentColor: "oklch(0.541 0.281 293.009)",
+    order: 93,
+    parentSlug: "health",
+  },
+  {
     slug: "sports",
     name: "Sports",
     description:
