@@ -136,7 +136,7 @@ export function CalendarMonth({ events, yearMonth }: Props) {
       </div>
 
       {/* Weekday header — 7 column labels. */}
-      <div className="grid grid-cols-7 gap-px border-t border-l border-foreground/15">
+      <div className="grid grid-cols-7 gap-2">
         {WEEKDAYS.map((d) => (
           <div
             key={d}
@@ -151,7 +151,7 @@ export function CalendarMonth({ events, yearMonth }: Props) {
           uses `auto-rows-fr` so all cells in a row stretch to the
           tallest in that row, keeping the weekly row aligned even
           when one day's stack is much denser than another's. */}
-      <div className="grid grid-cols-7 auto-rows-fr gap-px border-r border-b border-foreground/15">
+      <div className="grid grid-cols-7 auto-rows-fr gap-2">
         {days.map((day) => {
           const inMonth = day.getMonth() === month
           const todayKey = dayKey(Date.now())
@@ -222,7 +222,7 @@ function DayCell({
   return (
     <div
       className={cn(
-        "flex flex-col gap-1.5 border-t border-l border-foreground/15 bg-background p-2 min-h-[10rem] md:min-h-[13rem] text-left",
+        "flex flex-col gap-1.5 bg-background p-2 min-h-[10rem] md:min-h-[13rem] text-left",
         dim && "bg-muted/30",
       )}
     >
