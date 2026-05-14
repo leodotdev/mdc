@@ -147,10 +147,11 @@ export function CalendarMonth({ events, yearMonth }: Props) {
         ))}
       </div>
 
-      {/* The grid itself. Each cell renders its day number + up to 3
-          events. Today gets a foreground border. Days outside the
-          current month are muted. */}
-      <div className="grid grid-cols-7 gap-px overflow-hidden border-r border-b border-foreground/15">
+      {/* Kanban-style grid. Cells are tall flex columns; the grid
+          uses `auto-rows-fr` so all cells in a row stretch to the
+          tallest in that row, keeping the weekly row aligned even
+          when one day's stack is much denser than another's. */}
+      <div className="grid grid-cols-7 auto-rows-fr gap-px border-r border-b border-foreground/15">
         {days.map((day) => {
           const inMonth = day.getMonth() === month
           const todayKey = dayKey(Date.now())
@@ -213,30 +214,42 @@ function DayCell({
   today: boolean
 }) {
   const openInDrawer = useOpenEventDrawer()
-  // Display up to 3 inline; the rest collapse into "+N more" which
-  // opens a popover via clicking the cell.
-  const visible = events.slice(0, 3)
-  const overflow = events.length - visible.length
+  // Kanban-style: every event in the day shows, vertically stacked.
+  // Each card is its own bordered block with the section accent as a
+  // left stripe, so density reads at a glance and the column stays
+  // scannable even on a packed day. Cells grow vertically to fit
+  // their contents; CSS grid auto-rows handle the height variance.
   return (
     <div
       className={cn(
-        "border-t border-l border-foreground/15 bg-background p-1.5 min-h-[6rem] md:min-h-[7.5rem] text-left",
+        "flex flex-col gap-1.5 border-t border-l border-foreground/15 bg-background p-2 min-h-[10rem] md:min-h-[13rem] text-left",
         dim && "bg-muted/30",
       )}
     >
       <div
         className={cn(
-          "font-sans flex h-6 items-center justify-end text-sm tabular-nums",
+          "font-sans flex h-6 items-center justify-between text-sm tabular-nums",
           dim ? "text-muted-foreground/60" : "text-foreground",
-          today &&
-            "ml-auto inline-flex h-6 w-6 items-center justify-center rounded-full bg-foreground text-background",
         )}
       >
-        {date.getDate()}
+        <span className="kicker text-[0.6rem] text-muted-foreground/80">
+          {events.length > 0
+            ? `${events.length} event${events.length === 1 ? "" : "s"}`
+            : ""}
+        </span>
+        <span
+          className={cn(
+            today &&
+              "inline-flex h-6 w-6 items-center justify-center rounded-full bg-foreground text-background",
+          )}
+        >
+          {date.getDate()}
+        </span>
       </div>
-      <ul className="mt-1 flex flex-col gap-0.5">
-        {visible.map((it) => {
+      <ul className="flex flex-col gap-1">
+        {events.map((it) => {
           const slug = it.event.slug ?? ""
+          const accent = it.event.section?.accentColor ?? "var(--foreground)"
           return (
             <li key={`${it.event._id}-${it.ts}`}>
               <Link
@@ -244,27 +257,28 @@ function DayCell({
                 params={{ slug }}
                 onClick={(e) => openInDrawer(slug, e)}
                 className={cn(
-                  "block truncate rounded px-1 py-0.5 text-[0.7rem] leading-tight",
-                  "bg-foreground/[0.04] text-foreground hover:bg-foreground/10",
+                  "block rounded-sm border border-foreground/10 bg-foreground/[0.02] px-1.5 py-1 transition-colors hover:bg-foreground/10",
+                  "border-l-[3px]",
                   dim && "opacity-60",
                 )}
+                style={{ borderLeftColor: accent }}
                 title={it.event.title}
               >
-                <span className="tabular-nums text-muted-foreground">
+                <div className="font-sans text-[0.65rem] tabular-nums text-muted-foreground">
                   {formatTime(it.ts)}
-                </span>{" "}
-                <span>{it.event.title}</span>
+                </div>
+                <div className="font-heading mt-0.5 text-[0.78rem] leading-tight font-semibold text-foreground">
+                  {it.event.title}
+                </div>
+                {it.event.locationName ? (
+                  <div className="font-sans mt-0.5 line-clamp-1 text-[0.6rem] text-muted-foreground">
+                    {it.event.locationName}
+                  </div>
+                ) : null}
               </Link>
             </li>
           )
         })}
-        {overflow > 0 ? (
-          <li>
-            <span className="block px-1 text-[0.7rem] text-muted-foreground">
-              +{overflow} more
-            </span>
-          </li>
-        ) : null}
       </ul>
     </div>
   )

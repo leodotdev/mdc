@@ -37,7 +37,8 @@ const SECTIONS: Array<{
     description:
       "Tech meetups, hackathons, demo days, founder gatherings — Refresh Miami, eMerge, CIC, Endeavor.",
     accentColor: "oklch(0.546 0.245 262.881)", // blue-600
-    order: 25,
+    order: 22,
+    parentSlug: "business",
   },
   {
     slug: "real-estate",
@@ -45,7 +46,8 @@ const SECTIONS: Array<{
     description:
       "Open houses, developer briefings, broker meetups, real-estate panels and tours.",
     accentColor: "oklch(0.609 0.126 221.723)", // cyan-600
-    order: 30,
+    order: 24,
+    parentSlug: "business",
   },
   {
     slug: "education",

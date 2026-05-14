@@ -1233,3 +1233,38 @@ export const addEducationAndHealth = internalMutation({
     return { inserted, reparented, log }
   },
 })
+
+// =====================================================================
+// 2026-05 demote tech + real-estate to business sub-sections. They
+// were top-level when business was thin; now they read as natural
+// business sub-beats (tech meetups, real-estate panels). Order:
+// business / education / sports / food / arts / science / health.
+//
+// Run dev:  npx convex run migrations:nestTechAndRealEstate
+// Run prod: npx convex run migrations:nestTechAndRealEstate --prod
+// Idempotent.
+// =====================================================================
+export const nestTechAndRealEstate = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const all = await ctx.db.query("sections").collect()
+    const bySlug = new Map(all.map((s) => [s.slug, s]))
+    const business = bySlug.get("business")
+    const tech = bySlug.get("tech")
+    const realEstate = bySlug.get("real-estate")
+    if (!business) return { ok: false, reason: "no business section" }
+    let patched = 0
+    if (tech && tech.parentId !== business._id) {
+      await ctx.db.patch(tech._id, { parentId: business._id, order: 22 })
+      patched += 1
+    }
+    if (realEstate && realEstate.parentId !== business._id) {
+      await ctx.db.patch(realEstate._id, {
+        parentId: business._id,
+        order: 24,
+      })
+      patched += 1
+    }
+    return { ok: true, patched }
+  },
+})
