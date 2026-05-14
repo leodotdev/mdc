@@ -135,8 +135,8 @@ export function CalendarMonth({ events, yearMonth }: Props) {
         </div>
       </div>
 
-      {/* Weekday header — 7 column labels. */}
-      <div className="grid grid-cols-7 gap-2">
+      {/* Weekday header — 7 column labels, vertical dividers between. */}
+      <div className="grid grid-cols-7 [&>*:not(:nth-child(7n))]:border-r [&>*]:border-foreground/15">
         {WEEKDAYS.map((d) => (
           <div
             key={d}
@@ -150,8 +150,11 @@ export function CalendarMonth({ events, yearMonth }: Props) {
       {/* Kanban-style grid. Cells are tall flex columns; the grid
           uses `auto-rows-fr` so all cells in a row stretch to the
           tallest in that row, keeping the weekly row aligned even
-          when one day's stack is much denser than another's. */}
-      <div className="grid grid-cols-7 auto-rows-fr gap-2">
+          when one day's stack is much denser than another's.
+          Vertical dividers between columns (every cell except the
+          last in each row of 7 carries a right border) — no
+          horizontal lines, no per-cell box. */}
+      <div className="grid grid-cols-7 auto-rows-fr [&>*:not(:nth-child(7n))]:border-r [&>*]:border-foreground/15">
         {days.map((day) => {
           const inMonth = day.getMonth() === month
           const todayKey = dayKey(Date.now())
