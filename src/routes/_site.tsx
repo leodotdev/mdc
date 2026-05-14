@@ -9,6 +9,12 @@ import { SearchCommandProvider } from "@/components/site/search-command"
 type SiteSearch = {
   article?: string
   event?: string
+  /** View-mode override (Newspaper / List / Month / Map). Persisted
+   *  via ViewModeProvider in localStorage; this param wins when
+   *  present for shareable links. */
+  view?: "default" | "list" | "month" | "map"
+  /** Month-view current month, "YYYY-MM". */
+  month?: string
 }
 
 export const Route = createFileRoute("/_site")({
@@ -20,6 +26,17 @@ export const Route = createFileRoute("/_site")({
     event:
       typeof search.event === "string" && search.event.length > 0
         ? search.event
+        : undefined,
+    view:
+      search.view === "list" ||
+      search.view === "month" ||
+      search.view === "map" ||
+      search.view === "default"
+        ? search.view
+        : undefined,
+    month:
+      typeof search.month === "string" && /^\d{4}-\d{2}$/.test(search.month)
+        ? search.month
         : undefined,
   }),
   component: SiteLayout,

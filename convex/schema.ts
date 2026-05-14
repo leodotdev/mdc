@@ -388,6 +388,13 @@ export default defineSchema({
     recurrenceRule: v.optional(v.string()),
     locationName: v.optional(v.string()),
     locationAddress: v.optional(v.string()),
+    // Geocoded coordinates. Populated by the events.geocodeOne action
+    // which calls Mapbox Geocoding API on locationAddress (and falls
+    // back to neighborhood centroid when no address is available).
+    // Drives the Map view; absence means the event isn't placeable
+    // and the map renderer skips it.
+    lat: v.optional(v.number()),
+    lng: v.optional(v.number()),
     // Multi-slug neighborhoods, validated against lib/neighborhoods.ts —
     // mirrors articles.neighborhoods.
     neighborhoods: v.optional(v.array(v.string())),

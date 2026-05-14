@@ -7,6 +7,7 @@ import { MainNav } from "./main-nav"
 import { MobileNav } from "./mobile-nav"
 import { useSearchCommand } from "./search-command"
 import { SubNav } from "./sub-nav"
+import { ViewModeSwitcher } from "./view-mode-switcher"
 import { Button } from "@/components/ui/button"
 import { useTranslation } from "@/lib/i18n/context"
 import { sectionThemeStyle, useSectionAccent } from "@/lib/section-theme"
@@ -41,7 +42,7 @@ export function Masthead() {
       {/* ───── Top utility row ───── */}
       <div>
         <div className="container-page flex h-12 items-center justify-between gap-3">
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-2">
             <MobileNav />
             <Button
               variant="ghost"
@@ -51,6 +52,10 @@ export function Masthead() {
             >
               <Search />
             </Button>
+            {/* View-mode switcher sits immediately right of search —
+                Newspaper / List / Month / Map. Default mode is the
+                implicit landing state. */}
+            <ViewModeSwitcher />
           </div>
           <div className="hidden items-center gap-4 sm:flex">
             <LanguageSwitcher />

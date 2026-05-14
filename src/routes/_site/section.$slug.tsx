@@ -21,6 +21,10 @@ import { convexSuspenseQuery } from "@/lib/convex-suspense"
 import { useTranslation } from "@/lib/i18n/context"
 import { useOpenEventDrawer } from "@/lib/use-open-article-drawer"
 import { localizeSectionName } from "@/lib/i18n/sections"
+import { useViewMode } from "@/lib/view-mode"
+import { EventListView } from "@/components/editorial/event-list-view"
+import { CalendarMonth } from "@/components/editorial/calendar-month"
+import { EventsMap } from "@/components/editorial/events-map"
 
 // Vertical spacing between major page blocks. Mirrors the homepage's
 // `BLOCK` rhythm so the two pages read as one paper.
@@ -81,6 +85,7 @@ function SectionPage() {
   const { slug } = Route.useParams()
   const { section } = Route.useLoaderData()
   const { lang, t } = useTranslation()
+  const { mode } = useViewMode()
   const openInDrawer = useOpenEventDrawer()
 
   // Pull localized title/heroCaption alongside the canonical record so
@@ -181,6 +186,43 @@ function SectionPage() {
   const longTail = list.page
     .filter((a) => !used.has(a._id as string))
     .slice(0, 9)
+
+  // Alternate view modes — same shape as the homepage. The section
+  // page's list-mode header still shows the section name + accent so
+  // the reader knows what they're filtered to.
+  if (mode === "list") {
+    return (
+      <div className="flex flex-col gap-10">
+        <div className="rule-bottom flex flex-col gap-3 pb-6">
+          <PageHeader
+            title={sectionName}
+            ruleBottom={false}
+            className="pb-0"
+          />
+        </div>
+        <EventListView
+          events={list.page}
+          emptyLabel={`No upcoming events in ${sectionName}.`}
+        />
+      </div>
+    )
+  }
+  if (mode === "month") {
+    return (
+      <div className="flex flex-col gap-10">
+        <PageHeader title={sectionName} />
+        <SectionMonthView slug={slug} />
+      </div>
+    )
+  }
+  if (mode === "map") {
+    return (
+      <div className="flex flex-col gap-10">
+        <PageHeader title={sectionName} />
+        <SectionMapView slug={slug} />
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col gap-10">
@@ -431,4 +473,29 @@ function SectionPage() {
       <BannerAd slot={`section-${slug}-bottom`} className={BLOCK} />
     </div>
   )
+}
+
+// Section-scoped month view. Same shape as HomepageMonthView but
+// passes the section slug down so inMonth applies the section's
+// children + cross-listed + associated-tag enrichment.
+function SectionMonthView({ slug }: { slug: string }) {
+  const search = Route.useSearch() as { month?: string }
+  const now = new Date()
+  const yearMonth =
+    search.month ??
+    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
+  const { data: monthEvents } = useSuspenseQuery(
+    convexSuspenseQuery(api.events.inMonth, {
+      yearMonth,
+      sectionSlug: slug,
+    }),
+  )
+  return <CalendarMonth events={monthEvents} yearMonth={yearMonth} />
+}
+
+function SectionMapView({ slug }: { slug: string }) {
+  const { data: mapEvents } = useSuspenseQuery(
+    convexSuspenseQuery(api.events.placedOnMap, { sectionSlug: slug }),
+  )
+  return <EventsMap events={mapEvents} />
 }

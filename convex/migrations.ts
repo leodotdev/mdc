@@ -898,3 +898,78 @@ export const deleteDisabledSources = internalAction({
     }
   },
 })
+
+// =====================================================================
+// 2026-05 backfill of lat/lng on existing events from their first
+// neighborhood centroid. Run once after schema widening so the Map
+// view has data immediately; new events get coords at insertExtracted
+// time going forward. Idempotent — skips events that already have
+// coordinates set.
+//
+// Run dev:  npx convex run migrations:backfillEventCoords
+// Run prod: npx convex run migrations:backfillEventCoords --prod
+// =====================================================================
+
+import { neighborhoodCoords as _ncoords } from "./lib/neighborhoods"
+
+export const backfillEventCoordsBatch = internalMutation({
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, _args) => {
+    // Pull a batch of events; rely on the natural _id ordering to make
+    // progress. We don't need cursor stability because the migration
+    // is idempotent — re-running picks up anything missed.
+    const batch = await ctx.db
+      .query("events")
+      .filter((q) => q.eq(q.field("lat"), undefined))
+      .take(200)
+    let patched = 0
+    for (const e of batch) {
+      const slug = e.neighborhoods?.[0]
+      if (!slug) continue
+      const coords = _ncoords(slug)
+      if (!coords) continue
+      await ctx.db.patch(e._id, { lat: coords.lat, lng: coords.lng })
+      patched += 1
+    }
+    return { scanned: batch.length, patched, hasMore: batch.length === 200 }
+  },
+})
+
+export const backfillEventCoords = internalAction({
+  args: {},
+  handler: async (
+    ctx,
+  ): Promise<{
+    totalScanned: number
+    totalPatched: number
+    batches: number
+  }> => {
+    let totalScanned = 0
+    let totalPatched = 0
+    let batches = 0
+    const MAX_BATCHES = 100
+    for (let i = 0; i < MAX_BATCHES; i += 1) {
+      const result: {
+        scanned: number
+        patched: number
+        hasMore: boolean
+      } = await ctx.runMutation(
+        internal.migrations.backfillEventCoordsBatch,
+        {},
+      )
+      totalScanned += result.scanned
+      totalPatched += result.patched
+      batches += 1
+      // Stop when nothing was patched in a pass — either we caught
+      // every neighborhood-tagged event or none of the remaining ones
+      // have neighborhoods to geocode against.
+      if (result.patched === 0 && !result.hasMore) break
+      if (result.patched === 0) {
+        // Defensive: if a batch was full but nothing patched, we're
+        // looping over events with no neighborhoods. Stop.
+        break
+      }
+    }
+    return { totalScanned, totalPatched, batches }
+  },
+})

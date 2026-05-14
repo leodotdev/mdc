@@ -17,7 +17,7 @@ import { cronsEnabled } from "./lib/cronGate"
 import { requireEditorInAction } from "./lib/guard"
 import { generateEventTranslation } from "./lib/llm"
 import { findHeroCandidates } from "./lib/media"
-import { filterNeighborhoodSlugs } from "./lib/neighborhoods"
+import { filterNeighborhoodSlugs, neighborhoodCoords } from "./lib/neighborhoods"
 import type { HeroCandidate, HeroFinderDiagnostics } from "./lib/media"
 import type { Doc, Id } from "./_generated/dataModel"
 import type { MutationCtx, QueryCtx } from "./_generated/server"
@@ -70,6 +70,8 @@ const eventInputValidator = v.object({
   allDay: v.boolean(),
   locationName: v.optional(v.string()),
   locationAddress: v.optional(v.string()),
+  lat: v.optional(v.number()),
+  lng: v.optional(v.number()),
   neighborhoods: v.optional(v.array(v.string())),
   url: v.optional(v.string()),
   heroImage: v.optional(v.string()),
@@ -504,6 +506,159 @@ export const listByNeighborhood = query({
       (e.neighborhoods ?? []).includes(slug),
     )
     return await Promise.all(matches.slice(0, limit).map((e) => hydrate(ctx, e)))
+  },
+})
+
+// Events whose startsAt falls inside a specific UTC year+month.
+// Scoped optionally to a section (with its primary + cross-listed
+// children + associated-tag matches, matching listBySection's
+// enrichment) or to a single tag / neighborhood. Drives the month-
+// view calendar grid; the renderer expands recurring events
+// client-side via lib/rrule.ts.
+//
+// `yearMonth` is "YYYY-MM" — string keeps the URL share param shape
+// simple (`?month=2026-05`). Returns up to 500 events per month;
+// busy months overflow into the "+N more" cell expansion in the UI.
+export const inMonth = query({
+  args: {
+    yearMonth: v.string(),
+    sectionSlug: v.optional(v.string()),
+    tag: v.optional(v.string()),
+    neighborhoodSlug: v.optional(v.string()),
+  },
+  handler: async (
+    ctx,
+    { yearMonth, sectionSlug, tag, neighborhoodSlug },
+  ) => {
+    const match = /^(\d{4})-(\d{2})$/.exec(yearMonth)
+    if (!match) return []
+    const year = Number(match[1])
+    const month = Number(match[2]) - 1 // JS months are 0-indexed
+    // Wider than the visible month: a calendar grid shows the trailing
+    // days of the previous month + the leading days of the next month,
+    // so we pull a range that covers ~6 weeks centered on the month.
+    const rangeStart = new Date(year, month, 1).getTime() - 7 * 86_400_000
+    const rangeEnd = new Date(year, month + 1, 1).getTime() + 7 * 86_400_000
+    // Index hit — same shape as `inRange`, just a wider window.
+    const candidates = await ctx.db
+      .query("events")
+      .withIndex("by_status_starts", (q) =>
+        q
+          .eq("status", "approved")
+          .gte("startsAt", rangeStart)
+          .lt("startsAt", rangeEnd),
+      )
+      .order("asc")
+      .take(500)
+    // Filter scope.
+    let filtered = candidates
+    if (sectionSlug) {
+      const section = await ctx.db
+        .query("sections")
+        .withIndex("by_slug", (q) => q.eq("slug", sectionSlug))
+        .unique()
+      if (!section) return []
+      // Same scope expansion as listBySection — direct children +
+      // cross-listed + tag-relevant.
+      const directChildren = await ctx.db
+        .query("sections")
+        .withIndex("by_parent", (q) => q.eq("parentId", section._id))
+        .collect()
+      const allSections = await ctx.db.query("sections").collect()
+      const crossListed = allSections.filter((s) =>
+        s.crossListedIn?.includes(section._id),
+      )
+      const scopedIds = new Set<Id<"sections">>([
+        section._id,
+        ...directChildren.map((c) => c._id),
+        ...crossListed.map((c) => c._id),
+      ])
+      const associatedTags = new Set(
+        section.associatedTags && section.associatedTags.length > 0
+          ? section.associatedTags
+          : [section.slug],
+      )
+      filtered = candidates.filter((e) => {
+        if (e.sectionId && scopedIds.has(e.sectionId)) return true
+        const eventTags = e.tags ?? []
+        return eventTags.some((t) => associatedTags.has(t))
+      })
+    }
+    if (tag) {
+      filtered = filtered.filter((e) => (e.tags ?? []).includes(tag))
+    }
+    if (neighborhoodSlug) {
+      filtered = filtered.filter((e) =>
+        (e.neighborhoods ?? []).includes(neighborhoodSlug),
+      )
+    }
+    return await Promise.all(filtered.map((e) => hydrate(ctx, e)))
+  },
+})
+
+// Events with lat/lng populated — drives the Map view. Same scope
+// filters as inMonth: optional section (with cross-section
+// enrichment), tag, or neighborhood. Returns up to 500 plotted
+// events. Skips events without coordinates entirely (no point
+// showing them on a map).
+export const placedOnMap = query({
+  args: {
+    sectionSlug: v.optional(v.string()),
+    tag: v.optional(v.string()),
+    neighborhoodSlug: v.optional(v.string()),
+  },
+  handler: async (ctx, { sectionSlug, tag, neighborhoodSlug }) => {
+    // Pull recent approved events; we don't index lat/lng directly
+    // because a coordinate-bounded query is overkill for the city-
+    // scale dataset. Filter to placed events in-memory.
+    const candidates = await ctx.db
+      .query("events")
+      .withIndex("by_status_published", (q) => q.eq("status", "approved"))
+      .order("desc")
+      .take(500)
+    let filtered = candidates.filter(
+      (e): e is typeof e & { lat: number; lng: number } =>
+        typeof e.lat === "number" && typeof e.lng === "number",
+    )
+    if (sectionSlug) {
+      const section = await ctx.db
+        .query("sections")
+        .withIndex("by_slug", (q) => q.eq("slug", sectionSlug))
+        .unique()
+      if (!section) return []
+      const directChildren = await ctx.db
+        .query("sections")
+        .withIndex("by_parent", (q) => q.eq("parentId", section._id))
+        .collect()
+      const allSections = await ctx.db.query("sections").collect()
+      const crossListed = allSections.filter((s) =>
+        s.crossListedIn?.includes(section._id),
+      )
+      const scopedIds = new Set<Id<"sections">>([
+        section._id,
+        ...directChildren.map((c) => c._id),
+        ...crossListed.map((c) => c._id),
+      ])
+      const associatedTags = new Set(
+        section.associatedTags && section.associatedTags.length > 0
+          ? section.associatedTags
+          : [section.slug],
+      )
+      filtered = filtered.filter((e) => {
+        if (e.sectionId && scopedIds.has(e.sectionId)) return true
+        const eventTags = e.tags ?? []
+        return eventTags.some((t) => associatedTags.has(t))
+      })
+    }
+    if (tag) {
+      filtered = filtered.filter((e) => (e.tags ?? []).includes(tag))
+    }
+    if (neighborhoodSlug) {
+      filtered = filtered.filter((e) =>
+        (e.neighborhoods ?? []).includes(neighborhoodSlug),
+      )
+    }
+    return await Promise.all(filtered.map((e) => hydrate(ctx, e)))
   },
 })
 
@@ -1188,6 +1343,20 @@ export const insertExtracted = internalMutation({
     const tags = cleanTags(event.tags ?? [])
     const neighborhoods = filterNeighborhoodSlugs(event.neighborhoods ?? [])
 
+    // Neighborhood-centroid geocoding — when the event carries a
+    // neighborhood slug but no explicit lat/lng, plot it at the
+    // centroid of the first matching neighborhood. Cheap, no API
+    // call, lets the map view light up immediately. Per-address
+    // Mapbox geocoding can layer on top later.
+    let { lat, lng } = event
+    if (lat === undefined && lng === undefined && neighborhoods.length > 0) {
+      const coords = neighborhoodCoords(neighborhoods[0])
+      if (coords) {
+        lat = coords.lat
+        lng = coords.lng
+      }
+    }
+
     // Self-approve — every desk-extracted event goes live immediately.
     // Same trust-the-pipeline tradeoff as articles. Re-runs that
     // extract the same event fold via the dedup pass.
@@ -1197,6 +1366,8 @@ export const insertExtracted = internalMutation({
       slug,
       tags,
       neighborhoods,
+      lat,
+      lng,
       searchableText: buildSearchableText(
         event.title,
         event.description,

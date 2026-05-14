@@ -9,10 +9,14 @@ import { TrendingStrip } from "@/components/editorial/trending-strip"
 import { PageHeader } from "@/components/editorial/page-header"
 import { SectionHeaderCell } from "@/components/editorial/section-header-cell"
 import { SidebarRail } from "@/components/editorial/sidebar-rail"
+import { CalendarMonth } from "@/components/editorial/calendar-month"
+import { EventsMap } from "@/components/editorial/events-map"
+import { EventListView } from "@/components/editorial/event-list-view"
 import { StoryItem } from "@/components/editorial/story-item"
 import { XlRowList } from "@/components/editorial/xl-row-list"
 import { BannerAd } from "@/components/site/banner-ad"
 import { convexSuspenseQuery } from "@/lib/convex-suspense"
+import { useViewMode } from "@/lib/view-mode"
 
 function humanize(slug: string): string {
   return slug
@@ -35,6 +39,7 @@ export const Route = createFileRoute("/_site/tag/$slug")({
 
 function TagPage() {
   const { slug } = Route.useParams()
+  const { mode } = useViewMode()
   const { data } = useSuspenseQuery(
     convexSuspenseQuery(api.events.listByTag, { tag: slug, limit: 60 }),
   )
@@ -59,6 +64,44 @@ function TagPage() {
   const coTags = Array.from(tagFreq.entries())
     .sort((a, b) => b[1] - a[1])
     .slice(0, 12)
+
+  // Alternate view modes — share the same header but swap the body.
+  if (mode === "list") {
+    return (
+      <div className="flex flex-col gap-10">
+        <PageHeader
+          kicker={`Tag · ${slug}`}
+          title={`#${humanize(slug).toLowerCase()}`}
+        />
+        <EventListView
+          events={data}
+          emptyLabel={`Nothing tagged "${slug}" yet.`}
+        />
+      </div>
+    )
+  }
+  if (mode === "month") {
+    return (
+      <div className="flex flex-col gap-10">
+        <PageHeader
+          kicker={`Tag · ${slug}`}
+          title={`#${humanize(slug).toLowerCase()}`}
+        />
+        <TagMonthView tag={slug} />
+      </div>
+    )
+  }
+  if (mode === "map") {
+    return (
+      <div className="flex flex-col gap-10">
+        <PageHeader
+          kicker={`Tag · ${slug}`}
+          title={`#${humanize(slug).toLowerCase()}`}
+        />
+        <TagMapView tag={slug} />
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col gap-10">
@@ -148,4 +191,23 @@ function TagPage() {
       <BannerAd slot={`tag-${slug}-bottom`} className="pt-6" />
     </div>
   )
+}
+
+function TagMonthView({ tag }: { tag: string }) {
+  const search = Route.useSearch() as { month?: string }
+  const now = new Date()
+  const yearMonth =
+    search.month ??
+    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
+  const { data: monthEvents } = useSuspenseQuery(
+    convexSuspenseQuery(api.events.inMonth, { yearMonth, tag }),
+  )
+  return <CalendarMonth events={monthEvents} yearMonth={yearMonth} />
+}
+
+function TagMapView({ tag }: { tag: string }) {
+  const { data: mapEvents } = useSuspenseQuery(
+    convexSuspenseQuery(api.events.placedOnMap, { tag }),
+  )
+  return <EventsMap events={mapEvents} />
 }

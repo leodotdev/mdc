@@ -20,6 +20,7 @@ import type { QueryClient } from "@tanstack/react-query"
 import { Toaster } from "@/components/ui/sonner"
 import { WatercolorFilterDefs } from "@/components/widgets/wildlife-illustration"
 import { LangProvider } from "@/lib/i18n/context"
+import { ViewModeProvider } from "@/lib/view-mode"
 import { ThemeProvider } from "@/lib/theme/context"
 
 export const Route = createRootRouteWithContext<{
@@ -139,7 +140,9 @@ function RootDocument({ children }: { children: React.ReactNode }) {
       </head>
       <body>
         <ThemeProvider>
-          <LangProvider>{children}</LangProvider>
+          <LangProvider>
+            <ViewModeProvider>{children}</ViewModeProvider>
+          </LangProvider>
         </ThemeProvider>
         <Toaster richColors closeButton />
         <WatercolorFilterDefs />

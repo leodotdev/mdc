@@ -23,7 +23,11 @@ import { WeatherWidget } from "@/components/widgets/weather-widget"
 import { convexSuspenseQuery } from "@/lib/convex-suspense"
 import { useTranslation } from "@/lib/i18n/context"
 import { localizeSectionName } from "@/lib/i18n/sections"
+import { useViewMode } from "@/lib/view-mode"
 import { useOpenEventDrawer } from "@/lib/use-open-article-drawer"
+import { EventListView } from "@/components/editorial/event-list-view"
+import { CalendarMonth } from "@/components/editorial/calendar-month"
+import { EventsMap } from "@/components/editorial/events-map"
 import { proxiedImageSrcSet } from "@/lib/image-proxy"
 import { BannerAd } from "@/components/site/banner-ad"
 
@@ -88,6 +92,7 @@ const HEAVY = "border-t border-foreground"
 
 function HomePage() {
   const { t, lang } = useTranslation()
+  const { mode } = useViewMode()
   const openInDrawer = useOpenEventDrawer()
   // Lift heroCaption + title localization once per render so the raw
   // <img> / Link blocks below can read the right-language caption
@@ -171,6 +176,25 @@ function HomePage() {
     const list = railsBySection.get(article.section.slug) ?? []
     list.push(article)
     railsBySection.set(article.section.slug, list)
+  }
+
+  // Alternate view modes — chronological list / month grid / map view.
+  // Default mode (newspaper) falls through to the WaPo-style layout
+  // below. The events array is `latest` since it covers the full event
+  // catalog the homepage already knows about; month and map are stubs
+  // until Phases 3 + 4.
+  if (mode === "list") {
+    return (
+      <div className="flex flex-col gap-10">
+        <EventListView events={latest} />
+      </div>
+    )
+  }
+  if (mode === "month") {
+    return <HomepageMonthView />
+  }
+  if (mode === "map") {
+    return <HomepageMapView />
   }
 
   return (
@@ -444,4 +468,33 @@ function HomePage() {
       <BannerAd slot="home-bottom" className={BLOCK} />
     </div>
   )
+}
+
+// Homepage month-view renderer. Pulls a fresh `events.inMonth` query
+// keyed off the active month from the `?month=` URL param (defaults
+// to the current real-world month), then hands it to CalendarMonth.
+// Kept as a sibling component so the HomePage main render stays
+// readable and the data fetch only happens when the user actually
+// switches to month view.
+function HomepageMonthView() {
+  const search = Route.useSearch()
+  const now = new Date()
+  const yearMonth =
+    search.month ??
+    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
+  const { data: monthEvents } = useSuspenseQuery(
+    convexSuspenseQuery(api.events.inMonth, { yearMonth }),
+  )
+  return <CalendarMonth events={monthEvents} yearMonth={yearMonth} />
+}
+
+// Homepage map-view renderer. Pulls events with lat/lng populated
+// (via the neighborhood-centroid geocode applied at insert time) and
+// plots them on a maplibre + Mapbox style map. Side list mirrors the
+// visible bounds.
+function HomepageMapView() {
+  const { data: mapEvents } = useSuspenseQuery(
+    convexSuspenseQuery(api.events.placedOnMap, {}),
+  )
+  return <EventsMap events={mapEvents} />
 }

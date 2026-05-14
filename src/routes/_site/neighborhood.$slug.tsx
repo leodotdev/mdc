@@ -13,12 +13,16 @@ import { TrendingStrip } from "@/components/editorial/trending-strip"
 import { PageHeader } from "@/components/editorial/page-header"
 import { SectionHeaderCell } from "@/components/editorial/section-header-cell"
 import { StoryItem } from "@/components/editorial/story-item"
+import { CalendarMonth } from "@/components/editorial/calendar-month"
+import { EventsMap } from "@/components/editorial/events-map"
+import { EventListView } from "@/components/editorial/event-list-view"
 import { EventListItem } from "@/components/events/event-list-item"
 import { BannerAd } from "@/components/site/banner-ad"
 import { HeroImg } from "@/components/site/hero-img"
 import { convexSuspenseQuery } from "@/lib/convex-suspense"
 import { useTranslation } from "@/lib/i18n/context"
 import { useOpenEventDrawer } from "@/lib/use-open-article-drawer"
+import { useViewMode } from "@/lib/view-mode"
 
 const BLOCK = "pt-10"
 const HEAVY = "border-t border-foreground"
@@ -67,6 +71,7 @@ function NeighborhoodPage() {
   const { slug } = Route.useParams()
   const { name } = Route.useLoaderData()
   const { lang, t } = useTranslation()
+  const { mode } = useViewMode()
   const openInDrawer = useOpenEventDrawer()
 
   const tr = (a: {
@@ -169,6 +174,34 @@ function NeighborhoodPage() {
   const longTail = list
     .filter((a) => !used.has(a._id as string))
     .slice(0, 9)
+
+  if (mode === "list") {
+    return (
+      <div className="flex flex-col gap-10">
+        <PageHeader title={name} />
+        <EventListView
+          events={list}
+          emptyLabel={`No upcoming events tied to ${name}.`}
+        />
+      </div>
+    )
+  }
+  if (mode === "month") {
+    return (
+      <div className="flex flex-col gap-10">
+        <PageHeader title={name} />
+        <NeighborhoodMonthView slug={slug} />
+      </div>
+    )
+  }
+  if (mode === "map") {
+    return (
+      <div className="flex flex-col gap-10">
+        <PageHeader title={name} />
+        <NeighborhoodMapView slug={slug} />
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col gap-10">
@@ -401,4 +434,26 @@ function NeighborhoodPage() {
       <BannerAd slot={`neighborhood-${slug}-bottom`} className={BLOCK} />
     </div>
   )
+}
+
+function NeighborhoodMonthView({ slug }: { slug: string }) {
+  const search = Route.useSearch() as { month?: string }
+  const now = new Date()
+  const yearMonth =
+    search.month ??
+    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
+  const { data: monthEvents } = useSuspenseQuery(
+    convexSuspenseQuery(api.events.inMonth, {
+      yearMonth,
+      neighborhoodSlug: slug,
+    }),
+  )
+  return <CalendarMonth events={monthEvents} yearMonth={yearMonth} />
+}
+
+function NeighborhoodMapView({ slug }: { slug: string }) {
+  const { data: mapEvents } = useSuspenseQuery(
+    convexSuspenseQuery(api.events.placedOnMap, { neighborhoodSlug: slug }),
+  )
+  return <EventsMap events={mapEvents} />
 }
