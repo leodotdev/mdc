@@ -14,22 +14,11 @@ const DEFAULT_CENTER: [number, number] = [-80.1918, 25.7617]
 const DEFAULT_ZOOM = 11
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN as string | undefined
-const MAP_STYLE: string | maplibregl.StyleSpecification = MAPBOX_TOKEN
-  ? `https://api.mapbox.com/styles/v1/mapbox/streets-v12?access_token=${MAPBOX_TOKEN}`
-  : {
-      version: 8 as const,
-      sources: {
-        osm: {
-          type: "raster" as const,
-          tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
-          tileSize: 256,
-          attribution: "© OpenStreetMap contributors",
-          maxzoom: 19,
-        },
-      },
-      layers: [{ id: "osm", type: "raster" as const, source: "osm" }],
-      glyphs: "https://fonts.openmaptiles.org/{fontstack}/{range}.pbf",
-    }
+// Mapbox light style — clean, low-contrast basemap that lets the
+// section-tinted accent dots carry the visual weight. Token is a
+// public pk.* (URL-allowlisted in the Mapbox dashboard), so it's
+// safe to bundle into the client.
+const MAP_STYLE = `https://api.mapbox.com/styles/v1/mapbox/light-v11?access_token=${MAPBOX_TOKEN ?? ""}`
 
 // Map view for the View Mode pivot. Takes the hydrated event shape
 // (EventWithRelations) and pins each event with lat/lng populated. The
