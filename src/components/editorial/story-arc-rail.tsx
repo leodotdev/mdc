@@ -28,14 +28,14 @@ export function StoryArcRail({
     <section className="mt-12 border-t pt-8">
       <header className="rule-bottom mb-6 flex items-baseline justify-between pb-2">
         <div>
-          <p className="kicker text-muted-foreground">Story arc</p>
+          <p className="kicker text-muted-foreground">Article series</p>
           <h2 className="font-heading mt-1 text-xl font-semibold leading-tight">
             {data.arc.title}
           </h2>
         </div>
         <span className="meta text-xs">
           {others.length + 1}{" "}
-          {others.length + 1 === 1 ? "story" : "stories"} · in order
+          {others.length + 1 === 1 ? "article" : "articles"} · in order
         </span>
       </header>
       <ol className="grid gap-6 md:grid-cols-3">

@@ -180,7 +180,7 @@ function StoriesPerDayChart({ data }: { data: StatsData }) {
         <p className="font-sans text-3xl font-semibold tabular-nums leading-none">
           {data.totalStories14d}
         </p>
-        <p className="meta text-xs">stories</p>
+        <p className="meta text-xs">events</p>
       </div>
       <Sparkline
         data={data.storiesPerDay}

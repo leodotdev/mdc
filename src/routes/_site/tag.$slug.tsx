@@ -110,7 +110,7 @@ function TagPage() {
         title={`#${humanize(slug).toLowerCase()}`}
         dek={
           data.length > 0
-            ? `${data.length} ${data.length === 1 ? "story" : "stories"} tagged.`
+            ? `${data.length} ${data.length === 1 ? "event" : "events"} tagged.`
             : undefined
         }
       />

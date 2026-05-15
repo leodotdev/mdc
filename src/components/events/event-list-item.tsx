@@ -82,7 +82,7 @@ export function EventListItem({ event: rawEvent }: { event: EventWithSection }) 
           onClick={(e) => openInDrawer(event.article!.slug, e)}
           className="meta inline-flex items-center gap-1 text-xs text-foreground transition-colors hover:text-primary hover:underline"
         >
-          Read the story →
+          Related article →
         </Link>
       ) : null}
     </div>

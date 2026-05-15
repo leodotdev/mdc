@@ -47,7 +47,7 @@ export function ArticleLayout({
 
         <SidebarRail className="lg:col-span-3">
           {article.storyArcId ? (
-            <SidebarRailSection title="On this story">
+            <SidebarRailSection title="On this article">
               <StoryArcRail
                 arcId={article.storyArcId}
                 currentArticleId={article._id}

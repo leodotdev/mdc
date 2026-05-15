@@ -308,7 +308,7 @@ export function EventLayout({ rawEvent }: { rawEvent: EventDoc }) {
 
           {event.article ? (
             <div className="mt-8 rounded-md border border-foreground/15 bg-card p-4">
-              <p className="kicker mb-2 text-xs">Related story</p>
+              <p className="kicker mb-2 text-xs">Related article</p>
               <Link
                 to="/article/$slug"
                 params={{ slug: event.article.slug }}

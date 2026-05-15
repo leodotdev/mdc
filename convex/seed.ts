@@ -117,7 +117,7 @@ const SECTIONS: Array<{
     description:
       "Fitness, wellness, and medical events across Miami — yoga, pilates, cycling, hospital lectures, public-health programs.",
     accentColor: "oklch(0.596 0.145 163.225)",
-    order: 90,
+    order: 85,
   },
   {
     slug: "fitness",
@@ -125,7 +125,7 @@ const SECTIONS: Array<{
     description:
       "Group exercise classes, gym programs, yoga, pilates, cycling, running clubs, swim, barre, HIIT, dance fitness.",
     accentColor: "oklch(0.596 0.145 163.225)",
-    order: 91,
+    order: 86,
     parentSlug: "health",
   },
   {
@@ -134,7 +134,7 @@ const SECTIONS: Array<{
     description:
       "Hospital events, medical conferences, public-health programs, health-screening days, CME, blood drives.",
     accentColor: "oklch(0.586 0.253 17.585)",
-    order: 92,
+    order: 87,
     parentSlug: "health",
   },
   {
@@ -143,7 +143,7 @@ const SECTIONS: Array<{
     description:
       "Meditation, mindfulness, mental-health programs, holistic retreats, self-care workshops.",
     accentColor: "oklch(0.541 0.281 293.009)",
-    order: 93,
+    order: 88,
     parentSlug: "health",
   },
   {
@@ -1365,13 +1365,17 @@ async function installMegaDesk(ctx: {
   // `api.sections.list`, and writes articles with `authorIds: []`.
   // Keeping the FK satisfied is the cheapest path to ship without a
   // schema migration.
-  const news = await ctx.db
+  // Any top-level section works as the FK placeholder; mega-desk
+  // re-reads sections at runtime and writes events with their own
+  // sectionId. Politics is the lowest-ordered top-level so it's stable.
+  const placeholderSection = await ctx.db
     .query("sections")
-    .withIndex("by_slug", (q) => q.eq("slug", "news"))
+    .withIndex("by_slug", (q) => q.eq("slug", "politics"))
     .unique()
-  if (!news) {
-    throw new Error("News section missing — run seed:run first")
+  if (!placeholderSection) {
+    throw new Error("Politics section missing — sections seed didn't run")
   }
+  const news = placeholderSection
   const fallbackAuthor = await ctx.db.query("authors").first()
   if (!fallbackAuthor) {
     throw new Error("No authors exist — run seed:run first to install personas")

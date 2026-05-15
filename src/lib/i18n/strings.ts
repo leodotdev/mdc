@@ -10,10 +10,10 @@ export const STRINGS = {
     "trending.label": "Trending",
     "search.aria": "Search",
     "search.kicker": "Search",
-    "search.title": "Find a story",
+    "search.title": "Find an event",
     "search.subtitle":
-      "Search across every published article — by headline, standfirst, or tag.",
-    "search.placeholder": "Headlines, neighborhoods, beats…",
+      "Search across every published event — by title, venue, neighborhood, or tag.",
+    "search.placeholder": "Titles, venues, neighborhoods…",
     "search.tooShort": "Type at least two characters to search.",
     "search.searching": "Searching…",
     "search.empty.prefix": "No results for",
@@ -48,13 +48,13 @@ export const STRINGS = {
     // Homepage
     "home.empty.title": "Today's edition is being prepared",
     "home.empty.body":
-      "Once the desks file their first stories and an editor publishes them, they'll appear here.",
+      "Once the calendars publish their first events, they'll appear here.",
     "home.subtitle.todaysEdition": "Today's edition",
     "home.thingsToDo": "Things to Do",
     "home.onTheCalendar": "On the Calendar",
     "home.opinion": "Opinion",
     "home.trending": "Trending",
-    "home.moreTopStories": "More Top Stories",
+    "home.moreTopStories": "More Top Events",
     "home.allLink": "All →",
     "home.empty.calendar": "Nothing on the calendar yet.",
     "home.section.more": "More →",
@@ -64,7 +64,7 @@ export const STRINGS = {
     "events.subtitle":
       "Concerts, openings, festivals, neighborhood happenings — every approved event in Miami this month.",
     "events.fullSchedule": "The full schedule",
-    "events.stories": "Stories",
+    "events.stories": "Events",
     "events.empty.title": "No events scheduled for {month} yet.",
     "events.empty.bodyPrefix":
       "Editors add events from the admin tools. Check back soon, or jump to",
@@ -73,13 +73,13 @@ export const STRINGS = {
     "events.nextMonth.label": "Next month: {month}",
 
     // Section page
-    "section.empty.title": "No published stories in {section} yet.",
-    "section.empty.body": "Browse the front page or check how the newsroom works.",
+    "section.empty.title": "No published events in {section} yet.",
+    "section.empty.body": "Browse the front page or check another section.",
     "section.alsoIn": "Also in {section}",
 
     // Article meta
-    "article.relatedTitle": "Story arc",
-    "article.relatedSubtitle": "{count} stories · in order",
+    "article.relatedTitle": "Event series",
+    "article.relatedSubtitle": "{count} events · in order",
     "article.moreFromSection": "More from {section}",
 
     // Footer
@@ -93,7 +93,7 @@ export const STRINGS = {
     "notFound.kicker": "404",
     "notFound.title": "That page is not part of today's edition.",
     "notFound.body":
-      "The story you're looking for may have been moved, archived, or simply never written.",
+      "The event you're looking for may have been moved, archived, or simply never added.",
     "notFound.home": "Back to the front page",
     "notFound.about": "About miami.community",
   },
@@ -104,10 +104,10 @@ export const STRINGS = {
     "trending.label": "Tendencias",
     "search.aria": "Buscar",
     "search.kicker": "Buscar",
-    "search.title": "Encuentra una historia",
+    "search.title": "Encuentra un evento",
     "search.subtitle":
-      "Busca en todos los artículos publicados — por titular, sumario o etiqueta.",
-    "search.placeholder": "Titulares, barrios, secciones…",
+      "Busca entre todos los eventos publicados — por título, lugar, barrio o etiqueta.",
+    "search.placeholder": "Títulos, lugares, barrios…",
     "search.tooShort": "Escribe al menos dos caracteres para buscar.",
     "search.searching": "Buscando…",
     "search.empty.prefix": "Sin resultados para",
@@ -141,13 +141,13 @@ export const STRINGS = {
     // Homepage
     "home.empty.title": "La edición de hoy está en preparación",
     "home.empty.body":
-      "Cuando las redacciones presenten sus primeras historias y un editor las publique, aparecerán aquí.",
+      "Cuando los calendarios publiquen sus primeros eventos, aparecerán aquí.",
     "home.subtitle.todaysEdition": "Edición de hoy",
     "home.thingsToDo": "Qué hacer",
     "home.onTheCalendar": "En la agenda",
     "home.opinion": "Opinión",
     "home.trending": "Tendencias",
-    "home.moreTopStories": "Más noticias",
+    "home.moreTopStories": "Más eventos destacados",
     "home.allLink": "Todos →",
     "home.empty.calendar": "Aún no hay nada en la agenda.",
     "home.section.more": "Más →",
@@ -157,7 +157,7 @@ export const STRINGS = {
     "events.subtitle":
       "Conciertos, aperturas, festivales, eventos de barrio — todos los eventos aprobados en Miami este mes.",
     "events.fullSchedule": "Agenda completa",
-    "events.stories": "Historias",
+    "events.stories": "Eventos",
     "events.empty.title": "Aún no hay eventos para {month}.",
     "events.empty.bodyPrefix":
       "Los editores añaden eventos desde las herramientas de administración. Vuelve pronto o salta a",
@@ -166,13 +166,13 @@ export const STRINGS = {
     "events.nextMonth.label": "Mes siguiente: {month}",
 
     // Section page
-    "section.empty.title": "Aún no hay historias publicadas en {section}.",
-    "section.empty.body": "Explora la portada o revisa cómo funciona la redacción.",
+    "section.empty.title": "Aún no hay eventos publicados en {section}.",
+    "section.empty.body": "Explora la portada o revisa otra sección.",
     "section.alsoIn": "También en {section}",
 
     // Article meta
-    "article.relatedTitle": "Hilo de la historia",
-    "article.relatedSubtitle": "{count} historias · en orden",
+    "article.relatedTitle": "Serie de eventos",
+    "article.relatedSubtitle": "{count} eventos · en orden",
     "article.moreFromSection": "Más de {section}",
 
     // Footer
@@ -186,7 +186,7 @@ export const STRINGS = {
     "notFound.kicker": "404",
     "notFound.title": "Esa página no forma parte de la edición de hoy.",
     "notFound.body":
-      "La historia que buscas puede haber sido movida, archivada, o simplemente nunca se escribió.",
+      "El evento que buscas puede haber sido movido, archivado, o simplemente nunca se añadió.",
     "notFound.home": "Volver a la portada",
     "notFound.about": "Sobre miami.community",
   },

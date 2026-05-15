@@ -91,8 +91,8 @@ export const Route = createRootRouteWithContext<{
         That page is not part of today's edition.
       </h1>
       <p className="font-editorial mt-4 text-lg text-muted-foreground">
-        The story you're looking for may have been moved, archived, or simply
-        never written.
+        The event you're looking for may have been moved, archived, or simply
+        never added.
       </p>
       <div className="mt-8 flex flex-wrap gap-4 text-sm">
         <Link

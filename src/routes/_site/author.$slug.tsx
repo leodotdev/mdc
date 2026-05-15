@@ -65,7 +65,7 @@ function AuthorPage() {
         dek={author.bio}
         right={
           <span className="meta tabular-nums">
-            {articles.length} {articles.length === 1 ? "story" : "stories"}
+            {articles.length} {articles.length === 1 ? "article" : "articles"}
           </span>
         }
       />

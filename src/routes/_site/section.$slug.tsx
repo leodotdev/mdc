@@ -133,7 +133,7 @@ function SectionPage() {
       <div className="flex flex-col gap-10">
         <PageHeader title={sectionName} ruleBottom={false} className="pb-2" />
         <div className="font-editorial mt-12 max-w-2xl text-lg text-muted-foreground">
-          <p>No published stories in {sectionName} yet.</p>
+          <p>No published events in {sectionName} yet.</p>
           <p className="mt-4 text-base">
             <Link to="/" className="underline">
               Browse the front page
