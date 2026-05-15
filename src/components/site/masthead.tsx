@@ -39,9 +39,13 @@ export function Masthead() {
         themed && sectionAccent ? sectionThemeStyle(sectionAccent) : undefined
       }
     >
-      {/* ───── Top utility row ───── */}
+      {/* ───── Top utility row ─────
+          3-column grid so the view-mode switcher reads as the page's
+          primary axis (centered, same emphasis as the brand below),
+          with search/mobile-nav on the left and language/theme on
+          the right. */}
       <div>
-        <div className="container-page flex h-12 items-center justify-between gap-3">
+        <div className="container-page grid h-12 grid-cols-3 items-center gap-3">
           <div className="flex items-center gap-2">
             <MobileNav />
             <Button
@@ -52,12 +56,11 @@ export function Masthead() {
             >
               <Search />
             </Button>
-            {/* View-mode switcher sits immediately right of search —
-                Newspaper / List / Month / Map. Default mode is the
-                implicit landing state. */}
+          </div>
+          <div className="flex justify-center">
             <ViewModeSwitcher />
           </div>
-          <div className="hidden items-center gap-4 sm:flex">
+          <div className="hidden items-center justify-end gap-4 sm:flex">
             <LanguageSwitcher />
             <span
               aria-hidden
