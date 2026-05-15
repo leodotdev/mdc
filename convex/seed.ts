@@ -20,16 +20,16 @@ const SECTIONS: Array<{
     name: "Politics",
     description:
       "Civic life in Miami-Dade — commission meetings, town halls, candidate forums, neighborhood-association meetups, public-comment nights.",
-    accentColor: "oklch(0.586 0.253 17.585)", // rose-600
-    order: 10,
+    accentColor: "oklch(0.541 0.281 293.009)", // violet-600
+    order: 30,
   },
   {
     slug: "city",
     name: "City Government",
     description:
       "City council and commission meetings, zoning boards, town halls — the formal civic agenda for cities across Miami-Dade.",
-    accentColor: "oklch(0.586 0.253 17.585)",
-    order: 11,
+    accentColor: "oklch(0.541 0.281 293.009)",
+    order: 31,
     parentSlug: "politics",
   },
   {
@@ -37,8 +37,8 @@ const SECTIONS: Array<{
     name: "Local",
     description:
       "Neighborhood associations, community councils, hyperlocal meetups, public-comment nights.",
-    accentColor: "oklch(0.586 0.253 17.585)",
-    order: 12,
+    accentColor: "oklch(0.541 0.281 293.009)",
+    order: 32,
     parentSlug: "politics",
   },
   {
@@ -46,7 +46,7 @@ const SECTIONS: Array<{
     name: "Business",
     description:
       "Business events across Miami — conferences, ribbon-cuttings, mixers, networking, port and trade.",
-    accentColor: "oklch(0.596 0.145 163.225)", // emerald-600
+    accentColor: "oklch(0.546 0.245 262.881)", // blue-600
     order: 20,
   },
   {
@@ -72,8 +72,8 @@ const SECTIONS: Array<{
     name: "Education",
     description:
       "Schools and universities — academic events, open houses, lectures, dissertations, alumni nights. NOT athletics; see Sports for game schedules.",
-    accentColor: "oklch(0.541 0.281 293.009)", // violet-600
-    order: 35,
+    accentColor: "oklch(0.577 0.245 27.325)", // red-600
+    order: 40,
   },
   {
     slug: "university-of-miami",
@@ -134,16 +134,16 @@ const SECTIONS: Array<{
     name: "Health",
     description:
       "Fitness, wellness, and medical events across Miami — yoga, pilates, cycling, hospital lectures, public-health programs.",
-    accentColor: "oklch(0.596 0.145 163.225)",
-    order: 85,
+    accentColor: "oklch(0.648 0.20 131.684)", // lime-600
+    order: 70,
   },
   {
     slug: "fitness",
     name: "Fitness",
     description:
       "Group exercise classes, gym programs, yoga, pilates, cycling, running clubs, swim, barre, HIIT, dance fitness.",
-    accentColor: "oklch(0.596 0.145 163.225)",
-    order: 86,
+    accentColor: "oklch(0.648 0.20 131.684)",
+    order: 71,
     parentSlug: "health",
   },
   {
@@ -169,8 +169,8 @@ const SECTIONS: Array<{
     name: "Sports",
     description:
       "Every Miami franchise, every season — from the Dolphins on Sundays to the Hurricanes in Coral Gables.",
-    accentColor: "oklch(0.577 0.245 27.325)", // red-600
-    order: 40,
+    accentColor: "oklch(0.646 0.222 41.116)", // orange-600
+    order: 50,
   },
   {
     slug: "dolphins",
@@ -259,8 +259,8 @@ const SECTIONS: Array<{
     name: "Arts & Culture",
     description:
       "Concerts, exhibitions, theater, film, gallery openings, street art — Miami's creative pulse on stage, on screen, on the walls.",
-    accentColor: "oklch(0.646 0.222 41.116)", // orange-600
-    order: 50,
+    accentColor: "oklch(0.609 0.126 221.723)", // cyan-600
+    order: 10,
   },
   {
     slug: "music",
