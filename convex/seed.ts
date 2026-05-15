@@ -24,6 +24,24 @@ const SECTIONS: Array<{
     order: 10,
   },
   {
+    slug: "city",
+    name: "City Government",
+    description:
+      "City council and commission meetings, zoning boards, town halls — the formal civic agenda for cities across Miami-Dade.",
+    accentColor: "oklch(0.586 0.253 17.585)",
+    order: 11,
+    parentSlug: "politics",
+  },
+  {
+    slug: "local",
+    name: "Local",
+    description:
+      "Neighborhood associations, community councils, hyperlocal meetups, public-comment nights.",
+    accentColor: "oklch(0.586 0.253 17.585)",
+    order: 12,
+    parentSlug: "politics",
+  },
+  {
     slug: "business",
     name: "Business",
     description:
@@ -3702,6 +3720,395 @@ const EXPANSION_FEEDS_V6: ReadonlyArray<ExpansionFeed> = [
 export const seedExpansionSourcesV6 = internalMutation({
   args: {},
   handler: async (ctx) => installExpansionSources(ctx, EXPANSION_FEEDS_V6),
+})
+
+// =====================================================================
+// Phase-7 expansion seed — comprehensive section-by-section source map.
+// Organized by destination section so the file reads as a venue
+// directory, not a URL dump. Patterns favored, in priority order:
+//   1. `?ical=1`        — WordPress + The Events Calendar plugin
+//   2. `/iCalendar.aspx` — CivicEngage / CivicPlus municipal CMS
+//   3. `events-html`    — JSON-LD scraped from a venue events page
+//   4. `/feed/`         — WordPress RSS (when calendar plugin absent)
+//   5. `sitemap-events` — JSON-LD discovery via /sitemap.xml
+//
+// Every URL here is event-rich (passes the allowlist heuristics in
+// migrations:pruneNonEventSources). Sources that 404 or yield no
+// events after the first crawl can be disabled via /admin/sources.
+//
+// Run: `npx convex run seed:seedExpansionSourcesV7`
+// =====================================================================
+const EXPANSION_FEEDS_V7: ReadonlyArray<ExpansionFeed> = [
+  // ─── Politics → city (commission meetings, agendas) ───
+  // Extending the CivicEngage iCalendar.aspx pattern across municipalities
+  // that run the same .NET CMS. catID=14 is "events" in the default
+  // CivicEngage template; municipalities that customize categories
+  // may still serve the root feed when catID is omitted.
+  {
+    name: "City of Doral — events (iCal)",
+    type: "ics",
+    url: "https://www.cityofdoral.com/common/modules/iCalendar/iCalendar.aspx?catID=14&feed=calendar",
+    sectionSlugs: ["city", "politics"],
+    pollMinutes: 360,
+  },
+  {
+    name: "City of Coral Gables — events (iCal)",
+    type: "ics",
+    url: "https://www.coralgables.com/common/modules/iCalendar/iCalendar.aspx?catID=14&feed=calendar",
+    sectionSlugs: ["city", "politics"],
+    pollMinutes: 360,
+  },
+  {
+    name: "City of Aventura — events (iCal)",
+    type: "ics",
+    url: "https://www.cityofaventura.com/common/modules/iCalendar/iCalendar.aspx?catID=14&feed=calendar",
+    sectionSlugs: ["city", "politics"],
+    pollMinutes: 360,
+  },
+  {
+    name: "City of Sunny Isles Beach — events (iCal)",
+    type: "ics",
+    url: "https://www.sibfl.net/common/modules/iCalendar/iCalendar.aspx?catID=14&feed=calendar",
+    sectionSlugs: ["city", "politics"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Town of Surfside — events (iCal)",
+    type: "ics",
+    url: "https://www.townofsurfsidefl.gov/common/modules/iCalendar/iCalendar.aspx?catID=14&feed=calendar",
+    sectionSlugs: ["city", "politics"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Bal Harbour — events (iCal)",
+    type: "ics",
+    url: "https://www.balharbourgov.com/common/modules/iCalendar/iCalendar.aspx?catID=14&feed=calendar",
+    sectionSlugs: ["city", "politics"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Village of Key Biscayne — events (iCal)",
+    type: "ics",
+    url: "https://www.keybiscayne.fl.gov/common/modules/iCalendar/iCalendar.aspx?catID=14&feed=calendar",
+    sectionSlugs: ["city", "politics"],
+    pollMinutes: 360,
+  },
+  {
+    name: "City of Miami Springs — events (iCal)",
+    type: "ics",
+    url: "https://www.miamisprings-fl.gov/common/modules/iCalendar/iCalendar.aspx?catID=14&feed=calendar",
+    sectionSlugs: ["city", "politics"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Village of Pinecrest — events (iCal)",
+    type: "ics",
+    url: "https://www.pinecrest-fl.gov/common/modules/iCalendar/iCalendar.aspx?catID=14&feed=calendar",
+    sectionSlugs: ["city", "politics"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Miami Shores — events (iCal)",
+    type: "ics",
+    url: "https://www.miamishoresvillage.com/common/modules/iCalendar/iCalendar.aspx?catID=14&feed=calendar",
+    sectionSlugs: ["city", "politics"],
+    pollMinutes: 360,
+  },
+  // City of Miami doesn't expose CivicEngage iCal; scrape the events
+  // calendar page (JSON-LD via events-html) instead.
+  {
+    name: "City of Miami — events page",
+    type: "events-html",
+    url: "https://www.miamigov.com/Calendar",
+    sectionSlugs: ["city", "politics"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Miami-Dade County — events page",
+    type: "events-html",
+    url: "https://www.miamidade.gov/global/calendar.page",
+    sectionSlugs: ["city", "politics"],
+    pollMinutes: 360,
+  },
+
+  // ─── Arts → theater (Miami stages) ───
+  {
+    name: "Adrienne Arsht Center — events (iCal)",
+    type: "ics",
+    url: "https://www.arshtcenter.org/?ical=1",
+    sectionSlugs: ["theater", "music", "arts"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Miami New Drama (Colony Theatre) — events page",
+    type: "events-html",
+    url: "https://miaminewdrama.org/season/",
+    sectionSlugs: ["theater"],
+    pollMinutes: 360,
+  },
+  {
+    name: "New World Symphony — events page",
+    type: "events-html",
+    url: "https://www.nws.edu/calendar/",
+    sectionSlugs: ["music", "theater"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Olympia Theater — events page",
+    type: "events-html",
+    url: "https://www.olympiatheater.org/events",
+    sectionSlugs: ["theater", "music"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Miami-Dade County Auditorium — events page",
+    type: "events-html",
+    url: "https://www.miamidadecountyauditorium.org/events",
+    sectionSlugs: ["theater"],
+    pollMinutes: 360,
+  },
+  {
+    name: "South Miami-Dade Cultural Arts Center — events page",
+    type: "events-html",
+    url: "https://www.smdcac.org/events",
+    sectionSlugs: ["theater", "arts"],
+    pollMinutes: 360,
+  },
+  {
+    name: "African Heritage Cultural Arts Center — events page",
+    type: "events-html",
+    url: "https://miamidadearts.org/african-heritage-cultural-arts-center/events",
+    sectionSlugs: ["theater", "arts"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Miracle Theatre / Actors' Playhouse — events page",
+    type: "events-html",
+    url: "https://www.actorsplayhouse.org/upcoming-shows/",
+    sectionSlugs: ["theater"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Miami Theater Center — events page",
+    type: "events-html",
+    url: "https://www.mtcmiami.org/events",
+    sectionSlugs: ["theater"],
+    pollMinutes: 360,
+  },
+
+  // ─── Science → museums (Miami museums) ───
+  {
+    name: "PAMM (Pérez Art Museum Miami) — events page",
+    type: "events-html",
+    url: "https://www.pamm.org/en/calendar/",
+    sectionSlugs: ["museums", "arts"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Frost Art Museum (FIU) — events page",
+    type: "events-html",
+    url: "https://thefrost.fiu.edu/events/",
+    sectionSlugs: ["museums", "arts"],
+    pollMinutes: 360,
+  },
+  {
+    name: "The Bass — events page",
+    type: "events-html",
+    url: "https://thebass.org/calendar/",
+    sectionSlugs: ["museums", "arts"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Vizcaya Museum & Gardens — events page",
+    type: "events-html",
+    url: "https://vizcaya.org/calendar/",
+    sectionSlugs: ["museums", "history"],
+    pollMinutes: 240,
+  },
+  {
+    name: "HistoryMiami Museum — events page",
+    type: "events-html",
+    url: "https://historymiami.org/events/",
+    sectionSlugs: ["museums", "history"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Lowe Art Museum (UM) — events page",
+    type: "events-html",
+    url: "https://www.lowe.miami.edu/visit/events/index.html",
+    sectionSlugs: ["museums", "arts"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Wolfsonian-FIU — events page",
+    type: "events-html",
+    url: "https://www.wolfsonian.org/events",
+    sectionSlugs: ["museums", "arts"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Phillip and Patricia Frost Museum of Science — events page",
+    type: "events-html",
+    url: "https://www.frostscience.org/calendar/",
+    sectionSlugs: ["museums", "science"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Bakehouse Art Complex — events page",
+    type: "events-html",
+    url: "https://bacfl.org/events/",
+    sectionSlugs: ["museums", "arts"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Deering Estate — events page",
+    type: "events-html",
+    url: "https://deeringestate.org/events/",
+    sectionSlugs: ["museums", "history", "nature"],
+    pollMinutes: 240,
+  },
+
+  // ─── Music venues ───
+  {
+    name: "Knight Concert Hall (at Arsht) — events page",
+    type: "events-html",
+    url: "https://www.arshtcenter.org/calendar/",
+    sectionSlugs: ["music"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Ball & Chain — events page",
+    type: "events-html",
+    url: "https://ballandchainmiami.com/events/",
+    sectionSlugs: ["music"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Hard Rock Live (Hollywood) — events page",
+    type: "events-html",
+    url: "https://www.hardrocklivehollywoodfl.com/events",
+    sectionSlugs: ["music"],
+    pollMinutes: 360,
+  },
+
+  // ─── Tech meetups + accelerators ───
+  {
+    name: "The LAB Miami — events (iCal)",
+    type: "ics",
+    url: "https://thelabmiami.com/?ical=1",
+    sectionSlugs: ["tech"],
+    pollMinutes: 360,
+  },
+  {
+    name: "eMerge Americas — events page",
+    type: "events-html",
+    url: "https://emergeamericas.com/events/",
+    sectionSlugs: ["tech"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Endeavor Miami — events page",
+    type: "events-html",
+    url: "https://endeavormiami.org/events/",
+    sectionSlugs: ["tech"],
+    pollMinutes: 360,
+  },
+
+  // ─── Universities (Education) ───
+  // UM Localist exposes per-feed ICS; the main feed covers all of
+  // university events.
+  {
+    name: "University of Miami — events (iCal)",
+    type: "ics",
+    url: "https://events.miami.edu/calendar.ics",
+    sectionSlugs: ["university-of-miami", "education"],
+    pollMinutes: 240,
+  },
+  {
+    name: "FIU — events page",
+    type: "events-html",
+    url: "https://calendar.fiu.edu/",
+    sectionSlugs: ["fiu", "education"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Miami Dade College — events page",
+    type: "events-html",
+    url: "https://www.mdc.edu/calendar/",
+    sectionSlugs: ["mdc", "education"],
+    pollMinutes: 360,
+  },
+
+  // ─── College athletics (Sports) ───
+  // Pro teams don't expose public ICS; college athletics often expose
+  // events on their schedule pages with JSON-LD.
+  {
+    name: "Miami Hurricanes — schedule page",
+    type: "events-html",
+    url: "https://miamihurricanes.com/calendar/",
+    sectionSlugs: ["the-u", "sports"],
+    pollMinutes: 360,
+  },
+  {
+    name: "FIU Panthers — schedule page",
+    type: "events-html",
+    url: "https://fiusports.com/calendar",
+    sectionSlugs: ["fiu-panthers", "sports"],
+    pollMinutes: 360,
+  },
+
+  // ─── Books (literary scene) ───
+  {
+    name: "Books & Books (Coral Gables) — events page",
+    type: "events-html",
+    url: "https://www.booksandbooks.com/events/",
+    sectionSlugs: ["books"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Miami Book Fair — events page",
+    type: "events-html",
+    url: "https://www.miamibookfair.com/events/",
+    sectionSlugs: ["books"],
+    pollMinutes: 360,
+  },
+
+  // ─── Galleries (Wynwood / Little River / Design District) ───
+  {
+    name: "Locust Projects — events page",
+    type: "events-html",
+    url: "https://locustprojects.org/events/",
+    sectionSlugs: ["galleries", "arts"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Wynwood Walls — events page",
+    type: "events-html",
+    url: "https://thewynwoodwalls.com/events/",
+    sectionSlugs: ["galleries", "street-art"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Oolite Arts — events page",
+    type: "events-html",
+    url: "https://oolitearts.org/events/",
+    sectionSlugs: ["galleries", "arts"],
+    pollMinutes: 360,
+  },
+
+  // ─── Health / fitness venues ───
+  {
+    name: "Fairchild Tropical Botanic Garden — events page",
+    type: "events-html",
+    url: "https://www.fairchildgarden.org/events/",
+    sectionSlugs: ["nature", "wellness", "science"],
+    pollMinutes: 240,
+  },
+]
+
+export const seedExpansionSourcesV7 = internalMutation({
+  args: {},
+  handler: async (ctx) => installExpansionSources(ctx, EXPANSION_FEEDS_V7),
 })
 
 // One-shot pruner — flips `enabled: false` on sources whose coverage

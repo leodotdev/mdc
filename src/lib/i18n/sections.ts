@@ -5,6 +5,8 @@ import type { Lang } from "./strings"
 // the locale isn't available. Less invasive than a schema migration for v1.
 const SECTION_NAMES: Record<string, Record<Lang, string>> = {
   politics: { en: "Politics", es: "Política" },
+  city: { en: "City Government", es: "Gobierno municipal" },
+  local: { en: "Local", es: "Local" },
   business: { en: "Business", es: "Negocios" },
   tech: { en: "Tech", es: "Tecnología" },
   "real-estate": { en: "Real Estate", es: "Bienes raíces" },
@@ -47,6 +49,14 @@ const SECTION_DESCRIPTIONS: Record<string, Record<Lang, string>> = {
   politics: {
     en: "Civic life in Miami-Dade — commission meetings, town halls, candidate forums, neighborhood-association meetups, public-comment nights.",
     es: "Vida cívica en Miami-Dade — reuniones de la comisión, asambleas, foros de candidatos, encuentros vecinales, audiencias públicas.",
+  },
+  city: {
+    en: "City council and commission meetings, zoning boards, town halls — the formal civic agenda for cities across Miami-Dade.",
+    es: "Reuniones del concejo y la comisión municipal, juntas de zonificación, asambleas — la agenda cívica formal de las ciudades de Miami-Dade.",
+  },
+  local: {
+    en: "Neighborhood associations, community councils, hyperlocal meetups, public-comment nights.",
+    es: "Asociaciones vecinales, consejos comunitarios, encuentros hiperlocales, audiencias públicas.",
   },
   business: {
     en: "Business events across Miami — conferences, ribbon-cuttings, mixers, networking, port and trade.",
