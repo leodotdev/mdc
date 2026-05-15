@@ -11,6 +11,7 @@ import { ShareWidget } from "./share-widget"
 import { SidebarRail, SidebarRailSection } from "./sidebar-rail"
 import { SourcesBlock } from "./sources-block"
 import type { FunctionReturnType } from "convex/server"
+import { EventLocationMap } from "./event-location-map"
 import { AddToCalendar } from "@/components/events/add-to-calendar"
 import { EventListItem } from "@/components/events/event-list-item"
 import { HeroImg } from "@/components/site/hero-img"
@@ -266,6 +267,42 @@ export function EventLayout({ rawEvent }: { rawEvent: EventDoc }) {
           {event.description ? (
             <div className="prose-editorial">
               <p>{event.description}</p>
+            </div>
+          ) : null}
+
+          {/* Location map — shown when the event has resolved coords.
+              A single accent-colored pin centered on (lng, lat). Below
+              the map, the venue + address + a Maps link mirror the
+              header strip so readers can hand off to navigation. */}
+          {typeof event.lat === "number" && typeof event.lng === "number" ? (
+            <div className="mt-8">
+              <EventLocationMap
+                lat={event.lat}
+                lng={event.lng}
+                accentColor={event.section?.accentColor ?? "var(--foreground)"}
+                title={event.title}
+              />
+              {locationText || event.locationAddress ? (
+                <div className="font-sans mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm text-muted-foreground">
+                  <MapPin className="size-3.5 shrink-0" aria-hidden />
+                  <span className="font-medium text-foreground">
+                    {event.locationName || locationText}
+                  </span>
+                  {event.locationAddress ? (
+                    <span>{event.locationAddress}</span>
+                  ) : null}
+                  {mapsHref ? (
+                    <a
+                      href={mapsHref}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="ml-auto hover:text-foreground hover:underline"
+                    >
+                      Open in Maps →
+                    </a>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           ) : null}
 
