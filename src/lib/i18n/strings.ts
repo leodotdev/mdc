@@ -37,7 +37,6 @@ export const STRINGS = {
     // Nav
     "nav.events": "Events",
     "nav.neighborhoods": "Neighborhoods",
-    "nav.about": "About",
     "nav.menu": "Open menu",
     "nav.signOut": "Sign out",
 
@@ -85,9 +84,8 @@ export const STRINGS = {
 
     // Footer
     "footer.sections": "Sections",
-    "footer.more": "More",
     "footer.tagline":
-      "Hyper-local Miami news, aggregated from the city's best sources, edited by humans, sourced and cited.",
+      "Every event in Miami, gathered from the calendars that run the city — concerts, openings, council meetings, ballgames, gallery nights — and put in one place.",
     "footer.copyright": "© {year} miami.community",
     "footer.byline": "Established 2026",
 
@@ -132,7 +130,6 @@ export const STRINGS = {
     // Nav
     "nav.events": "Eventos",
     "nav.neighborhoods": "Barrios",
-    "nav.about": "Acerca de",
     "nav.menu": "Abrir menú",
     "nav.signOut": "Cerrar sesión",
 
@@ -180,9 +177,8 @@ export const STRINGS = {
 
     // Footer
     "footer.sections": "Secciones",
-    "footer.more": "Más",
     "footer.tagline":
-      "Noticias hiperlocales de Miami, reunidas de las mejores fuentes de la ciudad, editadas por personas, con citas y referencias.",
+      "Todos los eventos de Miami, reunidos desde los calendarios que mueven la ciudad — conciertos, inauguraciones, reuniones del concejo, partidos, noches de galerías — en un solo lugar.",
     "footer.copyright": "© {year} miami.community",
     "footer.byline": "Fundado en 2026",
 

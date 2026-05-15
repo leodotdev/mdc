@@ -62,15 +62,6 @@ export function MobileNav() {
                 {t("search.kicker")}
               </button>
             </li>
-            <li>
-              <Link
-                to="/about"
-                onClick={() => setOpen(false)}
-                className="block py-3 font-sans text-base font-semibold text-foreground transition-colors hover:text-primary"
-              >
-                {t("nav.about")}
-              </Link>
-            </li>
           </ul>
         </div>
 

@@ -13,7 +13,6 @@ import { Route as SiteRouteImport } from './routes/_site'
 import { Route as AdminRouteImport } from './routes/_admin'
 import { Route as SiteIndexRouteImport } from './routes/_site/index'
 import { Route as AdminLoginRouteImport } from './routes/admin.login'
-import { Route as SiteAboutRouteImport } from './routes/_site/about'
 import { Route as AdminAdminIndexRouteImport } from './routes/_admin/admin.index'
 import { Route as SiteTagSlugRouteImport } from './routes/_site/tag.$slug'
 import { Route as SiteSectionSlugRouteImport } from './routes/_site/section.$slug'
@@ -44,11 +43,6 @@ const AdminLoginRoute = AdminLoginRouteImport.update({
   id: '/admin/login',
   path: '/admin/login',
   getParentRoute: () => rootRouteImport,
-} as any)
-const SiteAboutRoute = SiteAboutRouteImport.update({
-  id: '/about',
-  path: '/about',
-  getParentRoute: () => SiteRoute,
 } as any)
 const AdminAdminIndexRoute = AdminAdminIndexRouteImport.update({
   id: '/admin/',
@@ -113,7 +107,6 @@ const AdminAdminArticleIdRoute = AdminAdminArticleIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof SiteIndexRoute
-  '/about': typeof SiteAboutRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/published': typeof AdminAdminPublishedRoute
   '/admin/runs': typeof AdminAdminRunsRoute
@@ -130,7 +123,6 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof SiteIndexRoute
-  '/about': typeof SiteAboutRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/published': typeof AdminAdminPublishedRoute
   '/admin/runs': typeof AdminAdminRunsRoute
@@ -149,7 +141,6 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_admin': typeof AdminRouteWithChildren
   '/_site': typeof SiteRouteWithChildren
-  '/_site/about': typeof SiteAboutRoute
   '/admin/login': typeof AdminLoginRoute
   '/_site/': typeof SiteIndexRoute
   '/_admin/admin/published': typeof AdminAdminPublishedRoute
@@ -169,7 +160,6 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
-    | '/about'
     | '/admin/login'
     | '/admin/published'
     | '/admin/runs'
@@ -186,7 +176,6 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
-    | '/about'
     | '/admin/login'
     | '/admin/published'
     | '/admin/runs'
@@ -204,7 +193,6 @@ export interface FileRouteTypes {
     | '__root__'
     | '/_admin'
     | '/_site'
-    | '/_site/about'
     | '/admin/login'
     | '/_site/'
     | '/_admin/admin/published'
@@ -256,13 +244,6 @@ declare module '@tanstack/react-router' {
       fullPath: '/admin/login'
       preLoaderRoute: typeof AdminLoginRouteImport
       parentRoute: typeof rootRouteImport
-    }
-    '/_site/about': {
-      id: '/_site/about'
-      path: '/about'
-      fullPath: '/about'
-      preLoaderRoute: typeof SiteAboutRouteImport
-      parentRoute: typeof SiteRoute
     }
     '/_admin/admin/': {
       id: '/_admin/admin/'
@@ -372,7 +353,6 @@ const AdminRouteChildren: AdminRouteChildren = {
 const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
 
 interface SiteRouteChildren {
-  SiteAboutRoute: typeof SiteAboutRoute
   SiteIndexRoute: typeof SiteIndexRoute
   SiteArticleSlugRoute: typeof SiteArticleSlugRoute
   SiteAuthorSlugRoute: typeof SiteAuthorSlugRoute
@@ -383,7 +363,6 @@ interface SiteRouteChildren {
 }
 
 const SiteRouteChildren: SiteRouteChildren = {
-  SiteAboutRoute: SiteAboutRoute,
   SiteIndexRoute: SiteIndexRoute,
   SiteArticleSlugRoute: SiteArticleSlugRoute,
   SiteAuthorSlugRoute: SiteAuthorSlugRoute,

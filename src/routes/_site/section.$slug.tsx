@@ -137,10 +137,6 @@ function SectionPage() {
           <p className="mt-4 text-base">
             <Link to="/" className="underline">
               Browse the front page
-            </Link>{" "}
-            or check{" "}
-            <Link to="/about" className="underline">
-              how the newsroom works
             </Link>
             .
           </p>

@@ -69,9 +69,7 @@ export function Footer() {
         {/* Taxonomy grid. One column per top-level section (header is
             the section link; sub-sections list under it). Independent
             top-level sections without children still get their own
-            column — the heading itself is the destination. A trailing
-            "More" column carries page routes (Events, Neighborhoods,
-            About) that don't live in the section tree. */}
+            column — the heading itself is the destination. */}
         <nav
           aria-label={t("footer.sections")}
           className="grid grid-cols-2 gap-x-6 gap-y-8 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5"
@@ -107,23 +105,6 @@ export function Footer() {
               </div>
             )
           })}
-
-          {/* Misc page routes that aren't part of the section tree. */}
-          <div>
-            <h3 className="font-sans text-sm font-semibold tracking-tight">
-              {t("footer.more")}
-            </h3>
-            <ul className="flex flex-col gap-1 mt-2">
-              <li>
-                <Link
-                  to="/about"
-                  className="text-sm text-muted-foreground hover:underline hover:text-foreground"
-                >
-                  {t("nav.about")}
-                </Link>
-              </li>
-            </ul>
-          </div>
         </nav>
 
         <div className="mt-10 flex flex-col-reverse items-start justify-between gap-2 border-t border-border pt-6 md:flex-row md:items-center">

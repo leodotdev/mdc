@@ -101,12 +101,6 @@ export const Route = createRootRouteWithContext<{
         >
           Back to the front page
         </Link>
-        <Link
-          to="/about"
-          className="rounded-md border px-4 py-2 hover:bg-muted"
-        >
-          About miami.community
-        </Link>
       </div>
     </main>
   ),
