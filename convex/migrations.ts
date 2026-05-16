@@ -1268,3 +1268,91 @@ export const nestTechAndRealEstate = internalMutation({
     return { ok: true, patched }
   },
 })
+
+// =====================================================================
+// Event hygiene — every published event must have a where, what, when.
+//
+// `deleteUnlocatedEvents`: hard-deletes events with no `locationName`
+// AND no `locationAddress`. These are usually news headlines the LLM
+// mis-extracted as events (e.g. "Florida Legislature Budget Special
+// Session" with no venue). Without a place, they're not actionable.
+//
+// `disableNewsSources`: flips `enabled: false` on every source whose
+// `type` isn't calendar-shaped — keeps `ics`, `events-html`,
+// `sitemap-events`, `data`; disables `rss`, `bluesky`, `reddit`,
+// `youtube`. Reversible via /admin/sources.
+//
+// Run dev:  npx convex run migrations:deleteUnlocatedEvents
+//           npx convex run migrations:disableNewsSources
+// Run prod: same with --prod
+// =====================================================================
+
+export const deleteUnlocatedEvents = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const events = await ctx.db.query("events").take(2000)
+    let deleted = 0
+    for (const e of events) {
+      const hasLocation =
+        (e.locationName && e.locationName.trim().length > 0) ||
+        (e.locationAddress && e.locationAddress.trim().length > 0)
+      if (hasLocation) continue
+      await ctx.db.delete(e._id)
+      deleted += 1
+    }
+    return { scanned: events.length, deleted }
+  },
+})
+
+export const disableNewsSources = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const sources = await ctx.db.query("sources").collect()
+    const CALENDAR_TYPES = new Set([
+      "ics",
+      "events-html",
+      "sitemap-events",
+      "data",
+    ])
+    let disabled = 0
+    for (const s of sources) {
+      if (!s.enabled) continue
+      if (CALENDAR_TYPES.has(s.type)) continue
+      await ctx.db.patch(s._id, { enabled: false })
+      disabled += 1
+    }
+    return { scanned: sources.length, disabled }
+  },
+})
+
+// Deletes events in politics / city / local whose title doesn't look
+// civic. The LLM occasionally tags concerts, screenings, and bike
+// rides as "politics" when the news article happens to mention a
+// neighborhood; this filter drops anything not matching the civic
+// vocabulary (commission, council, hearing, agenda, etc.).
+//
+// Run dev:  npx convex run migrations:purgeMissectionedPolitics
+// Run prod: npx convex run migrations:purgeMissectionedPolitics --prod
+export const purgeMissectionedPolitics = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const POLITICS_SLUGS = new Set(["politics", "city", "local"])
+    const CIVIC =
+      /\b(commission|council|hearing|agenda|town[\s-]?hall|public[\s-]?comment|board\s+meeting|zoning|elect(?:ion|oral)|candidate\s+forum|inauguration|legislature|special\s+session|budget\s+hearing|workshop|caucus|forum|civic|ballot|vote|advocacy|protest|rally|mayor|commissioner)\b/i
+    const sections = await ctx.db.query("sections").collect()
+    const politicsIds = new Set(
+      sections
+        .filter((s) => POLITICS_SLUGS.has(s.slug))
+        .map((s) => s._id as string),
+    )
+    const events = await ctx.db.query("events").take(2000)
+    let deleted = 0
+    for (const e of events) {
+      if (!politicsIds.has(e.sectionId as string)) continue
+      if (CIVIC.test(e.title)) continue
+      await ctx.db.delete(e._id)
+      deleted += 1
+    }
+    return { scanned: events.length, deleted }
+  },
+})
