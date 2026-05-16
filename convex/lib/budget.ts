@@ -18,7 +18,7 @@
 // adjust it from /admin without a redeploy. This constant is the
 // fallback used until that row is set + a sanity floor for code
 // paths that can't read the settings (none currently).
-export const BUDGET_DAILY_CENTS_DEFAULT = 500
+export const BUDGET_DAILY_CENTS_DEFAULT = 100
 // Warning threshold = 80% of cap; rendered on the dashboard.
 export function budgetWarningCents(capCents: number): number {
   return Math.floor(capCents * 0.8)

@@ -943,12 +943,12 @@ export const translateEventAction = internalAction({
       return { translated: false }
     }
     const reservation = await ctx.runMutation(internal.budget.reserve, {
-      estimatedCents: estimatedCallCents("claude-sonnet-4-6"),
+      estimatedCents: estimatedCallCents("claude-haiku-4-5-20251001"),
       label: "translateEvent",
     })
     if (!reservation.allowed) return { translated: false }
     const result = await generateEventTranslation({
-      model: "claude-sonnet-4-6",
+      model: "claude-haiku-4-5-20251001",
       event: {
         title: event.title,
         description: event.description,
