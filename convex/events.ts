@@ -20,7 +20,7 @@ import { findHeroCandidates } from "./lib/media"
 import { filterNeighborhoodSlugs, neighborhoodCoords } from "./lib/neighborhoods"
 import type { HeroCandidate, HeroFinderDiagnostics } from "./lib/media"
 import type { Doc, Id } from "./_generated/dataModel"
-import type { MutationCtx, QueryCtx } from "./_generated/server"
+import type { ActionCtx, MutationCtx, QueryCtx } from "./_generated/server"
 
 const heroSourceValidator = v.union(
   v.literal("source"),
@@ -928,11 +928,13 @@ export const setTranslation = internalMutation({
 export const translateEventAction = internalAction({
   args: { eventId: v.id("events"), lang: v.literal("es") },
   handler: async (ctx, { eventId, lang }) => {
-    const event = await ctx.runQuery(api.events.getByIdAdmin, { id: eventId })
+    // Use the public `get` (no auth gate) — the scheduler / cron fires
+    // this without a user identity, so `getByIdAdmin` would 401. Only
+    // approved events are returned, which matches what the translation
+    // pipeline operates on (`needingTranslation` already filters by
+    // status=approved).
+    const event = await ctx.runQuery(api.events.get, { id: eventId })
     if (!event) return { translated: false }
-    if (event.status === "rejected" || event.status === "archived") {
-      return { translated: false }
-    }
     const sourceHash = eventSourceHash({
       title: event.title,
       description: event.description,
@@ -989,28 +991,52 @@ export const bulkTranslateEventsInternal = internalAction({
     if (!cronsEnabled()) {
       return { processed: 0, translated: 0, errors: 0 }
     }
-    const cap = maxEvents ?? 10
-    const stale = await ctx.runQuery(api.events.needingTranslation, {
-      limit: cap,
-    })
-    let processed = 0
-    let translated = 0
-    let errors = 0
-    for (const s of stale) {
-      processed += 1
-      try {
-        const r = await ctx.runAction(
-          internal.events.translateEventAction,
-          { eventId: s._id, lang: "es" },
-        )
-        if (r.translated) translated += 1
-      } catch {
-        errors += 1
-      }
-    }
-    return { processed, translated, errors }
+    return await drainEventTranslations(ctx, maxEvents ?? 10)
   },
 })
+
+// Manual / non-gated drain — same loop as the cron-fired variant, but
+// without the `cronsEnabled()` short-circuit. Useful for one-shot
+// backfills after a big drain, on dev (where CRONS_ENABLED is unset),
+// or when an editor explicitly wants the queue flushed now.
+//
+// Run: `npx convex run events:drainTranslationsNow '{"maxEvents": 100}'`
+export const drainTranslationsNow = internalAction({
+  args: { maxEvents: v.optional(v.number()) },
+  handler: async (
+    ctx,
+    { maxEvents },
+  ): Promise<{
+    processed: number
+    translated: number
+    errors: number
+  }> => drainEventTranslations(ctx, maxEvents ?? 50),
+})
+
+async function drainEventTranslations(
+  ctx: ActionCtx,
+  cap: number,
+): Promise<{ processed: number; translated: number; errors: number }> {
+  const stale = await ctx.runQuery(api.events.needingTranslation, {
+    limit: cap,
+  })
+  let processed = 0
+  let translated = 0
+  let errors = 0
+  for (const s of stale) {
+    processed += 1
+    try {
+      const r = await ctx.runAction(internal.events.translateEventAction, {
+        eventId: s._id,
+        lang: "es",
+      })
+      if (r.translated) translated += 1
+    } catch {
+      errors += 1
+    }
+  }
+  return { processed, translated, errors }
+}
 
 // Approved events in the last 24h that look weak. Same shape as the
 // article anomaly query — surfaces "look at this, it auto-published but
