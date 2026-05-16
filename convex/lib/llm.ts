@@ -659,6 +659,128 @@ export async function generateEventTranslation(opts: {
   return validateEventTranslation(toolUse.input)
 }
 
+// =====================================================================
+// Event enrichment — Haiku call that returns structured tags +
+// neighborhood slugs + optional section refinement for one event.
+// Used by the deterministic ingest pipeline as the only LLM step:
+// title / description / venue come from the source verbatim; this
+// call only fills in metadata.
+// =====================================================================
+
+export type EventEnrichmentOutput = {
+  tags: Array<string>
+  neighborhoodSlugs: Array<string>
+  sectionSlug?: string
+}
+
+const ENRICH_EVENT_TOOL = {
+  name: "enrich_event",
+  description:
+    "Tag, place, and (optionally) re-section a Miami event. Outputs metadata only — do NOT rewrite the title or description.",
+  input_schema: {
+    type: "object",
+    properties: {
+      tags: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          "0-6 short tag slugs (lowercase, hyphenated). Topical: e.g. 'jazz', 'family-friendly', 'free-events', 'art-basel', 'haitian-heritage-month'. Avoid 'miami' / 'miami-dade' (redundant) and venue-name tags (use the venue field instead).",
+      },
+      neighborhoodSlugs: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          "0-2 Miami-Dade neighborhood slugs the event is tied to. ONLY use these slugs (or leave empty if uncertain): wynwood, little-havana, little-haiti, brickell, downtown, midtown, design-district, edgewater, allapattah, overtown, liberty-city, coral-gables, coconut-grove, key-biscayne, south-beach, mid-beach, north-beach, surfside, bal-harbour, sunny-isles-beach, north-miami-beach, north-miami, miami-shores, el-portal, miami-springs, doral, hialeah, opa-locka, miami-gardens, aventura, pinecrest, palmetto-bay, cutler-bay, kendall, homestead, florida-city, fisher-island.",
+      },
+      sectionSlug: {
+        type: "string",
+        description:
+          "Optional override for the source's declared section when the event clearly belongs elsewhere. Use the section slugs from the input. Omit when unsure.",
+      },
+    },
+    required: ["tags", "neighborhoodSlugs"],
+  },
+} as const
+
+function validateEventEnrichment(
+  raw: unknown,
+): EventEnrichmentOutput | null {
+  if (!raw || typeof raw !== "object") return null
+  const t = raw as Record<string, unknown>
+  const tags = Array.isArray(t.tags)
+    ? t.tags
+        .filter((x): x is string => typeof x === "string")
+        .slice(0, 6)
+    : []
+  const hoods = Array.isArray(t.neighborhoodSlugs)
+    ? t.neighborhoodSlugs
+        .filter((x): x is string => typeof x === "string")
+        .slice(0, 2)
+    : []
+  const section =
+    typeof t.sectionSlug === "string" && t.sectionSlug.trim().length > 0
+      ? t.sectionSlug
+      : undefined
+  return { tags, neighborhoodSlugs: hoods, sectionSlug: section }
+}
+
+export async function generateEventEnrichment(opts: {
+  model: string
+  event: {
+    title: string
+    description: string
+    locationName?: string
+    locationAddress?: string
+    currentSectionSlug?: string
+  }
+  sectionChoices: ReadonlyArray<{ slug: string; name: string }>
+}): Promise<EventEnrichmentOutput | null> {
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set in Convex env")
+  const client = new Anthropic({ apiKey })
+
+  const sectionLines = opts.sectionChoices
+    .map((s) => `- ${s.slug}: ${s.name}`)
+    .join("\n")
+
+  const userPrompt = [
+    `Tag and place this Miami event. Output metadata only — never rewrite the title/description.`,
+    ``,
+    `Event:`,
+    `Title: ${opts.event.title}`,
+    `Description: ${opts.event.description}`,
+    opts.event.locationName ? `Venue: ${opts.event.locationName}` : "",
+    opts.event.locationAddress ? `Address: ${opts.event.locationAddress}` : "",
+    opts.event.currentSectionSlug
+      ? `Currently filed under: ${opts.event.currentSectionSlug}`
+      : "",
+    ``,
+    `Sections (slug : name):`,
+    sectionLines,
+    ``,
+    `Rules:`,
+    `- Only suggest a sectionSlug when the current one is clearly wrong (e.g. concert filed under politics).`,
+    `- Neighborhood: infer from the address or venue, never guess from the title alone.`,
+    `- Tags: topical, not venue-named, no 'miami' / 'miami-dade'.`,
+  ]
+    .filter(Boolean)
+    .join("\n")
+
+  const response = await client.messages.create({
+    model: opts.model,
+    max_tokens: 512,
+    messages: [{ role: "user", content: userPrompt }],
+    tools: [ENRICH_EVENT_TOOL],
+    tool_choice: { type: "tool", name: "enrich_event" },
+  })
+
+  const toolUse = response.content.find(
+    (block): block is Anthropic.ToolUseBlock => block.type === "tool_use",
+  )
+  if (!toolUse) return null
+  return validateEventEnrichment(toolUse.input)
+}
+
 export async function generateTranslation(opts: {
   model: string
   article: {

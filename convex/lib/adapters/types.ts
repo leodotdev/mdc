@@ -11,6 +11,17 @@ export type RawItem = {
    *  "Recurs weekly on Saturdays" instead of one row per occurrence.
    *  Adapters that don't have recurrence data leave it undefined. */
   recurrenceRule?: string
+  // ── Structured event fields ──
+  // Populated by adapters that ingest event-shaped sources (ICS,
+  // events-html JSON-LD, sitemap-events). The deterministic ingest
+  // pipeline uses these directly — no LLM rewrite needed. Adapters
+  // that return news-shaped content (RSS, reddit, etc.) leave them
+  // undefined and those items get skipped at ingest time.
+  startsAt?: number
+  endsAt?: number
+  locationName?: string
+  locationAddress?: string
+  allDay?: boolean
 }
 
 export type SourceForAdapter = {

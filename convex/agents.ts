@@ -611,6 +611,209 @@ export const runMegaDeskInternal = internalAction({
   },
 })
 
+// Deterministic event-ingest pipeline — no LLM rewrite. Reads
+// structured event fields from `ingestedItems` (populated by ICS /
+// JSON-LD / sitemap adapters), copies them verbatim into the events
+// table, and assigns the source's first declared section as the home.
+//
+// What's gone vs. the mega-desk:
+// - No title / description / dek / body LLM rewrite — text is the
+//   venue's own copy.
+// - No LLM section / tag / neighborhood inference — section comes
+//   from the source's sectionIds[], tags + neighborhoods start empty
+//   and get filled by the bulkEnrichEventsInternal backfill cron.
+// - No related-event LLM linking, no rubric grader, no hero search.
+//   Hero is the source's `mediaUrl` if it shipped one, otherwise none.
+//
+// Items lacking `startsAt` (no "when") OR `locationName` /
+// `locationAddress` (no "where") get marked consumed and skipped —
+// they're news-shaped, not event-shaped.
+//
+// Budget: this pass is FREE (no LLM call). The downstream
+// translation + enrichment crons are budget-gated and gracefully
+// degrade — events still ingest with empty tags / no ES when the cap
+// hits; next day's backfill catches up.
+export const runEventIngestInternal = internalAction({
+  args: { lookbackHoursOverride: v.optional(v.number()) },
+  handler: async (
+    ctx,
+    { lookbackHoursOverride },
+  ): Promise<{
+    runId: Id<"agentRuns"> | null
+    itemsConsidered: number
+    eventsCreated: number
+    skipped: number
+    error?: string
+  }> => {
+    const agent = await ctx.runQuery(api.agentsData.getBySlug, {
+      slug: MEGA_DESK_SLUG,
+    })
+    if (!agent) {
+      throw new Error(
+        `Mega desk "${MEGA_DESK_SLUG}" not found — run seed:seedMegaDesk to install it.`,
+      )
+    }
+    const lookbackHours =
+      lookbackHoursOverride ?? agent.lookbackHours ?? MEGA_DEFAULT_LOOKBACK_HOURS
+    const runId = await ctx.runMutation(api.agentsData.startRun, {
+      agentId: agent._id,
+    })
+    const log = (line: string) =>
+      ctx.runMutation(api.agentsData.appendLog, { runId, line })
+
+    let itemsConsidered = 0
+    let eventsCreated = 0
+    let skipped = 0
+
+    try {
+      // 1. Refresh every enabled source. Same logic as the mega-desk —
+      //    network IO only, no LLM, so we always tick every source.
+      const sources = await ctx.runQuery(internal.sourcesData.listInternal, {})
+      const enabled = sources.filter((s) => s.enabled)
+      const sourceById = new Map(enabled.map((s) => [s._id as string, s]))
+      await log(`Refreshing ${enabled.length} sources`)
+      for (const src of enabled) {
+        if (src.type === "data") continue
+        try {
+          const items = await fetchItems({
+            type: src.type,
+            url: src.url,
+            config: src.config,
+          })
+          const result = await ctx.runMutation(api.sourcesData.recordFetch, {
+            sourceId: src._id,
+            items,
+            status: "ok",
+          })
+          await log(
+            `[${src.name}] fetched ${items.length}, new ${result.inserted}`,
+          )
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          await ctx.runMutation(api.sourcesData.recordFetch, {
+            sourceId: src._id,
+            items: [],
+            status: "error",
+            error: msg,
+          })
+          await log(`[${src.name}] FAILED: ${msg}`)
+        }
+      }
+
+      // 2. Pull unconsumed items + filter to event-shaped only.
+      const sinceMs = Date.now() - lookbackHours * 3_600_000
+      const candidates = await ctx.runQuery(
+        api.agentsData.unconsumedItemsAll,
+        { sinceMs, limit: MEGA_MAX_ITEMS },
+      )
+      itemsConsidered = candidates.length
+      await log(`Selected ${candidates.length} unconsumed items`)
+
+      // 3. Section fallback when the source declared no sectionIds.
+      const allSections = await ctx.runQuery(api.sections.list, {})
+      const fallbackSectionId =
+        allSections.find((s) => s.slug === "politics")?._id ??
+        allSections[0]?._id
+      if (!fallbackSectionId) {
+        throw new Error("No sections configured — cannot insert events")
+      }
+
+      const consumedIds: Array<Id<"ingestedItems">> = []
+      for (const c of candidates) {
+        consumedIds.push(c.item._id)
+        // Event-shape filter: must have both a "when" and a "where".
+        // Adapters that yield news-shaped content (RSS, reddit) leave
+        // these undefined; those items get marked consumed below
+        // without producing an event.
+        const startsAt = c.item.startsAt
+        const where = c.item.locationName ?? c.item.locationAddress
+        if (!startsAt || !where) {
+          skipped += 1
+          continue
+        }
+        const src = sourceById.get(c.item.sourceId as unknown as string)
+        const sectionId =
+          (src?.sectionIds && src.sectionIds[0]) ?? fallbackSectionId
+
+        try {
+          await ctx.runMutation(internal.events.insertExtracted, {
+            event: {
+              slug: slugify(c.item.title),
+              title: c.item.title,
+              description: c.item.snippet ?? c.item.body ?? "",
+              kind: "scheduled",
+              startsAt,
+              endsAt: c.item.endsAt,
+              allDay: c.item.allDay ?? false,
+              locationName: c.item.locationName,
+              locationAddress: c.item.locationAddress,
+              recurrenceRule: c.item.recurrenceRule,
+              url: c.item.url,
+              heroImage: c.item.mediaUrl,
+              heroSource: c.item.mediaUrl ? "source" : "none",
+              sectionId,
+              tags: [],
+              neighborhoods: [],
+              citations: [
+                {
+                  url: c.item.url,
+                  title: c.item.title,
+                  publisher: c.sourceName,
+                  fetchedAt: c.item.fetchedAt,
+                  snippet: c.item.snippet,
+                },
+              ],
+            },
+            agentSlug: MEGA_DESK_SLUG,
+            agentRunId: runId,
+            derivedFromItems: [c.item._id],
+          })
+          eventsCreated += 1
+        } catch (e) {
+          await log(
+            `Skipped "${c.item.title}": ${e instanceof Error ? e.message : String(e)}`,
+          )
+        }
+      }
+      // Mark every candidate consumed — whether it became an event
+      // or got skipped as news-shaped. They don't recycle on the queue.
+      if (consumedIds.length > 0) {
+        await ctx.runMutation(api.agentsData.markItemsConsumed, {
+          itemIds: consumedIds,
+        })
+      }
+      await log(
+        `Created ${eventsCreated} events, skipped ${skipped} non-event items`,
+      )
+
+      await ctx.runMutation(api.agentsData.finishRun, {
+        runId,
+        status: "succeeded",
+        itemsConsidered,
+        draftsCreated: eventsCreated,
+      })
+      return { runId, itemsConsidered, eventsCreated, skipped }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      await log(`FAILED: ${msg}`)
+      await ctx.runMutation(api.agentsData.finishRun, {
+        runId,
+        status: "failed",
+        itemsConsidered,
+        draftsCreated: eventsCreated,
+        errorMessage: msg,
+      })
+      return {
+        runId,
+        itemsConsidered,
+        eventsCreated,
+        skipped,
+        error: msg,
+      }
+    }
+  },
+})
+
 // Public mega-desk action — editor-triggered "Run desk" button.
 // Editor-gated, not just authenticated: any signed-in user could
 // otherwise force an Opus call and burn the daily budget.
@@ -626,7 +829,18 @@ export const runMegaDesk = action({
     error?: string
   }> => {
     await requireEditorInAction(ctx)
-    return await ctx.runAction(internal.agents.runMegaDeskInternal, {})
+    const r = await ctx.runAction(internal.agents.runEventIngestInternal, {})
+    // Map the deterministic pipeline's return shape onto the legacy
+    // mega-desk shape so the admin dashboard's "Run desk" button +
+    // toasts keep working without a frontend change. `draftsCreated`
+    // mirrors `eventsCreated` (no draft/event split any more).
+    return {
+      runId: r.runId,
+      itemsConsidered: r.itemsConsidered,
+      draftsCreated: r.eventsCreated,
+      eventsCreated: r.eventsCreated,
+      error: r.error,
+    }
   },
 })
 
@@ -658,18 +872,22 @@ export const cronRunMegaDesk = internalAction({
   args: {},
   handler: async (ctx): Promise<{ summary: string }> => {
     if (!cronsEnabled()) {
-      return { summary: "mega-desk: skipped — CRONS_ENABLED not set" }
+      return { summary: "ingest: skipped — CRONS_ENABLED not set" }
     }
+    // Quiet hours don't really save money any more (the ingest pass is
+    // LLM-free) but keeping the window lets translation backlog drain
+    // overnight without competing for budget. Translation + enrichment
+    // crons are separate and still tick during this window.
     const hour = miamiHour()
     if (hour >= QUIET_HOURS_START && hour < QUIET_HOURS_END) {
       return {
-        summary: `mega-desk: skipped — quiet hours (${hour}:00 ET, runs resume at ${QUIET_HOURS_END}:00 ET)`,
+        summary: `ingest: skipped — quiet hours (${hour}:00 ET, resumes at ${QUIET_HOURS_END}:00 ET)`,
       }
     }
-    const r = await ctx.runAction(internal.agents.runMegaDeskInternal, {})
-    if (r.error) return { summary: `mega-desk: ERROR ${r.error}` }
+    const r = await ctx.runAction(internal.agents.runEventIngestInternal, {})
+    if (r.error) return { summary: `ingest: ERROR ${r.error}` }
     return {
-      summary: `mega-desk: ${r.draftsCreated} drafts, ${r.eventsCreated} events from ${r.itemsConsidered} items`,
+      summary: `ingest: ${r.eventsCreated} events from ${r.itemsConsidered} items (${r.skipped} non-event-shaped)`,
     }
   },
 })
@@ -689,12 +907,12 @@ export const megaBackfill = action({
   }> => {
     await requireEditorInAction(ctx)
     const totalDays = Math.max(1, Math.min(days ?? 30, 90))
-    const r = await ctx.runAction(internal.agents.runMegaDeskInternal, {
+    const r = await ctx.runAction(internal.agents.runEventIngestInternal, {
       lookbackHoursOverride: totalDays * 24,
     })
     return {
       days: totalDays,
-      draftsCreated: r.draftsCreated,
+      draftsCreated: r.eventsCreated,
       eventsCreated: r.eventsCreated,
       itemsConsidered: r.itemsConsidered,
       error: r.error,

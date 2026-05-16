@@ -115,6 +115,16 @@ crons.interval(
   internal.events.bulkTranslateEventsInternal,
   { maxEvents: 10 },
 )
+// Enrichment backfill — every 6h drains events the deterministic
+// ingest inserted with empty tags (either the source had no
+// structured tags, or the on-publish Haiku enrichment was budget-
+// blocked). Cheap Haiku calls; budget-gated.
+crons.interval(
+  "enrich events backfill",
+  { hours: 6 },
+  internal.events.bulkEnrichEventsInternal,
+  { maxEvents: 10 },
+)
 
 // Right-rail widgets — daily Opus batch at 04:30 ET (08:30 UTC during
 // EDT). Single call, ~7-12¢, produces fun-fact / on-this-day / landmark

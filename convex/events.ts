@@ -15,7 +15,7 @@ import { requireEditor } from "./lib/guard"
 import { estimatedCallCents } from "./lib/budget"
 import { cronsEnabled } from "./lib/cronGate"
 import { requireEditorInAction } from "./lib/guard"
-import { generateEventTranslation } from "./lib/llm"
+import { generateEventEnrichment, generateEventTranslation } from "./lib/llm"
 import { findHeroCandidates } from "./lib/media"
 import { filterNeighborhoodSlugs, neighborhoodCoords } from "./lib/neighborhoods"
 import type { HeroCandidate, HeroFinderDiagnostics } from "./lib/media"
@@ -1038,6 +1038,152 @@ async function drainEventTranslations(
   return { processed, translated, errors }
 }
 
+// ───────── Haiku event enrichment (tags + neighborhood + section) ─────────
+
+// Events with no tags AND status=approved — the enrichment backfill
+// drain target. The deterministic ingest pipeline inserts events with
+// empty tags; this query feeds the cron + the manual drain.
+export const needingEnrichment = query({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, { limit }) => {
+    const cap = limit ?? 20
+    const events = await ctx.db
+      .query("events")
+      .withIndex("by_status_starts", (q) => q.eq("status", "approved"))
+      .order("desc")
+      .take(200)
+    const stale: Array<{ _id: Id<"events">; title: string }> = []
+    for (const e of events) {
+      if (e.tags && e.tags.length > 0) continue
+      stale.push({ _id: e._id, title: e.title })
+      if (stale.length >= cap) break
+    }
+    return stale
+  },
+})
+
+export const setEnrichment = internalMutation({
+  args: {
+    eventId: v.id("events"),
+    tags: v.array(v.string()),
+    neighborhoods: v.array(v.string()),
+    sectionId: v.optional(v.id("sections")),
+  },
+  handler: async (ctx, { eventId, tags, neighborhoods, sectionId }) => {
+    const cleaned = cleanTags(tags)
+    const hoods = filterNeighborhoodSlugs(neighborhoods)
+    const patch: Record<string, unknown> = {
+      tags: cleaned,
+      neighborhoods: hoods,
+    }
+    // Neighborhood-centroid coords if the event didn't have any yet
+    // and Haiku gave us a slug we recognize.
+    const existing = await ctx.db.get(eventId)
+    if (
+      existing &&
+      existing.lat === undefined &&
+      existing.lng === undefined &&
+      hoods.length > 0
+    ) {
+      const coords = neighborhoodCoords(hoods[0])
+      if (coords) {
+        patch.lat = coords.lat
+        patch.lng = coords.lng
+      }
+    }
+    if (sectionId) patch.sectionId = sectionId
+    await ctx.db.patch(eventId, patch)
+  },
+})
+
+export const enrichEventAction = internalAction({
+  args: { eventId: v.id("events") },
+  handler: async (ctx, { eventId }): Promise<{ enriched: boolean }> => {
+    const event = await ctx.runQuery(api.events.get, { id: eventId })
+    if (!event) return { enriched: false }
+    const reservation = await ctx.runMutation(internal.budget.reserve, {
+      estimatedCents: estimatedCallCents("claude-haiku-4-5-20251001"),
+      label: "enrichEvent",
+    })
+    if (!reservation.allowed) return { enriched: false }
+    const sections = await ctx.runQuery(api.sections.list, {})
+    const sectionSlugToId = new Map<string, Id<"sections">>()
+    for (const s of sections) sectionSlugToId.set(s.slug, s._id)
+    const result = await generateEventEnrichment({
+      model: "claude-haiku-4-5-20251001",
+      event: {
+        title: event.title,
+        description: event.description,
+        locationName: event.locationName,
+        locationAddress: event.locationAddress,
+        currentSectionSlug: event.section?.slug,
+      },
+      sectionChoices: sections.map((s) => ({ slug: s.slug, name: s.name })),
+    })
+    if (!result) return { enriched: false }
+    const overrideId = result.sectionSlug
+      ? sectionSlugToId.get(result.sectionSlug)
+      : undefined
+    await ctx.runMutation(internal.events.setEnrichment, {
+      eventId,
+      tags: result.tags,
+      neighborhoods: result.neighborhoodSlugs,
+      sectionId: overrideId,
+    })
+    return { enriched: true }
+  },
+})
+
+// Manual / non-gated drain for the enrichment backlog. Mirrors
+// drainTranslationsNow — useful after a big ingest pass or on dev
+// where CRONS_ENABLED is unset.
+//
+// Run: `npx convex run events:drainEnrichmentNow '{"maxEvents": 100}'`
+export const drainEnrichmentNow = internalAction({
+  args: { maxEvents: v.optional(v.number()) },
+  handler: async (
+    ctx,
+    { maxEvents },
+  ): Promise<{ processed: number; enriched: number; errors: number }> =>
+    drainEventEnrichment(ctx, maxEvents ?? 50),
+})
+
+// Cron-fired version — gated on CRONS_ENABLED so dev doesn't double-bill.
+export const bulkEnrichEventsInternal = internalAction({
+  args: { maxEvents: v.optional(v.number()) },
+  handler: async (
+    ctx,
+    { maxEvents },
+  ): Promise<{ processed: number; enriched: number; errors: number }> => {
+    if (!cronsEnabled()) {
+      return { processed: 0, enriched: 0, errors: 0 }
+    }
+    return await drainEventEnrichment(ctx, maxEvents ?? 20)
+  },
+})
+
+async function drainEventEnrichment(
+  ctx: ActionCtx,
+  cap: number,
+): Promise<{ processed: number; enriched: number; errors: number }> {
+  const stale = await ctx.runQuery(api.events.needingEnrichment, { limit: cap })
+  let processed = 0
+  let enriched = 0
+  let errors = 0
+  for (const s of stale) {
+    processed += 1
+    try {
+      const r = await ctx.runAction(internal.events.enrichEventAction, {
+        eventId: s._id,
+      })
+      if (r.enriched) enriched += 1
+    } catch {
+      errors += 1
+    }
+  }
+  return { processed, enriched, errors }
+}
+
 // Approved events in the last 24h that look weak. Same shape as the
 // article anomaly query — surfaces "look at this, it auto-published but
 // might be off" rows for the editor.
@@ -1408,10 +1554,18 @@ export const insertExtracted = internalMutation({
       derivedFromItems,
       createdAt: now,
     })
+    // Schedule both auto-translation (ES) and auto-enrichment (tags +
+    // neighborhood). Both are Haiku-budgeted; if the daily cap is hit
+    // they silently no-op and the bulk drain crons catch up next day.
     await ctx.scheduler.runAfter(
       60_000,
       internal.events.translateEventAction,
       { eventId: id, lang: "es" },
+    )
+    await ctx.scheduler.runAfter(
+      90_000,
+      internal.events.enrichEventAction,
+      { eventId: id },
     )
     return id
   },

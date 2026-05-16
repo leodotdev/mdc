@@ -87,14 +87,33 @@ export async function fetchEventsHtml(
                 ? decodeEntities(obj.description)
                 : undefined
             const loc = obj.location
-            const locName =
+            const locObj =
               loc && typeof loc === "object"
-                ? (loc as Record<string, unknown>).name
+                ? (loc as Record<string, unknown>)
+                : null
+            const locName =
+              typeof locObj?.name === "string"
+                ? decodeEntities(locObj.name)
                 : undefined
-            const locStr =
-              typeof locName === "string" ? decodeEntities(locName) : undefined
+            // schema.org Place uses `address` — either a string or a
+            // PostalAddress object with streetAddress / addressLocality.
+            const addrRaw = locObj?.address
+            const locAddress = (() => {
+              if (typeof addrRaw === "string") return decodeEntities(addrRaw)
+              if (addrRaw && typeof addrRaw === "object") {
+                const a = addrRaw as Record<string, unknown>
+                const parts = [a.streetAddress, a.addressLocality, a.addressRegion]
+                  .filter((v): v is string => typeof v === "string")
+                  .map((v) => decodeEntities(v))
+                if (parts.length > 0) return parts.join(", ")
+              }
+              return undefined
+            })()
+            const endRaw =
+              typeof obj.endDate === "string" ? obj.endDate : undefined
+            const endMs = endRaw ? Date.parse(endRaw) : undefined
             const body =
-              [description, locStr ? `Location: ${locStr}` : null]
+              [description, locName ? `Location: ${locName}` : null]
                 .filter(Boolean)
                 .join("\n\n") || undefined
             events.push({
@@ -104,6 +123,12 @@ export async function fetchEventsHtml(
               snippet: description?.slice(0, 400),
               body,
               publishedAt: startMs,
+              // Structured event fields — fed straight to the
+              // deterministic ingest pipeline.
+              startsAt: startMs,
+              endsAt: Number.isFinite(endMs) ? endMs : undefined,
+              locationName: locName,
+              locationAddress: locAddress,
             })
           }
         }

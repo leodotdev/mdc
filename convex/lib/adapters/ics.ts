@@ -55,6 +55,10 @@ export async function fetchIcs(
     const url = readProp(body, "URL")
     const dtRaw = readPropLine(body, "DTSTART")
     const startMs = dtRaw ? parseIcsDate(dtRaw) : undefined
+    const dtEndRaw = readPropLine(body, "DTEND")
+    const endMs = dtEndRaw ? parseIcsDate(dtEndRaw) : undefined
+    // All-day events have DATE-only DTSTART (no T component).
+    const allDay = dtRaw ? !dtRaw.includes("T") : undefined
     // RRULE value — strip the property name prefix. When present, the
     // event is recurring and we skip the cutoff check (a recurring
     // VEVENT can have a DTSTART in the past while remaining current).
@@ -77,6 +81,14 @@ export async function fetchIcs(
       body: composedBody || undefined,
       publishedAt: startMs,
       recurrenceRule: rrule,
+      // Structured event fields — used by the deterministic ingest
+      // pipeline. iCal already carries the canonical start/end/venue,
+      // so we forward them verbatim instead of leaning on the LLM
+      // to re-derive them from the text body.
+      startsAt: startMs,
+      endsAt: endMs,
+      locationName: location,
+      allDay,
     })
   }
 

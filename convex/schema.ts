@@ -221,6 +221,16 @@ export default defineSchema({
     // table without going through the LLM (the rule is structured
     // data, not editorial copy).
     recurrenceRule: v.optional(v.string()),
+    // Structured event fields — populated by ICS / JSON-LD / sitemap
+    // adapters when the source's data carries the equivalent. Used by
+    // the deterministic ingest pipeline to insert events without an
+    // LLM rewrite pass. News-shaped adapters (RSS, reddit) leave them
+    // undefined and their items get skipped at ingest time.
+    startsAt: v.optional(v.number()),
+    endsAt: v.optional(v.number()),
+    locationName: v.optional(v.string()),
+    locationAddress: v.optional(v.string()),
+    allDay: v.optional(v.boolean()),
   })
     .index("by_source_external", ["sourceId", "externalId"])
     .index("by_consumed_fetched", ["consumed", "fetchedAt"]),
