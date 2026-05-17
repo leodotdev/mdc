@@ -22,7 +22,6 @@ import { SportsWidget } from "@/components/widgets/sports-widget"
 import { WeatherWidget } from "@/components/widgets/weather-widget"
 import { convexSuspenseQuery } from "@/lib/convex-suspense"
 import { useTranslation } from "@/lib/i18n/context"
-import { localizeSectionName } from "@/lib/i18n/sections"
 import { useViewMode } from "@/lib/view-mode"
 import { useOpenEventDrawer } from "@/lib/use-open-article-drawer"
 import { EventListView } from "@/components/editorial/event-list-view"
@@ -51,6 +50,11 @@ export const Route = createFileRoute("/_site/")({
       context.queryClient.ensureQueryData(convexQuery(api.sections.list, {})),
       context.queryClient.ensureQueryData(
         convexQuery(api.events.upcoming, { limit: 5, days: 14 }),
+      ),
+      // Long chronological tail used by the all-events list below the
+      // importance-driven hero blocks.
+      context.queryClient.ensureQueryData(
+        convexQuery(api.events.upcoming, { limit: 200, days: 60 }),
       ),
     ])
     // The lead image is the LCP candidate — top event preferred, latest
@@ -116,11 +120,15 @@ function HomePage() {
   const { data: latest } = useSuspenseQuery(
     convexSuspenseQuery(api.events.latestEditorial, { limit: 40 }),
   )
-  const { data: sections } = useSuspenseQuery(
-    convexSuspenseQuery(api.sections.list, {}),
-  )
   const { data: upcomingEvents } = useSuspenseQuery(
     convexSuspenseQuery(api.events.upcoming, { limit: 5, days: 14 }),
+  )
+  // Long chronological tail — feeds the "All upcoming events" list at
+  // the bottom of the page. 200/60d is wide enough to read as a real
+  // events feed without paginating; events older than 24h drop off
+  // inside EventListView.
+  const { data: allUpcoming } = useSuspenseQuery(
+    convexSuspenseQuery(api.events.upcoming, { limit: 200, days: 60 }),
   )
 
   if (latest.length === 0) {
@@ -168,15 +176,6 @@ function HomePage() {
   const moreRail = take(allPool, 4)
 
   const trending = rankedPool.slice(0, 4)
-
-  const railsBySection = new Map<string, typeof latest>()
-  for (const article of latest) {
-    if (used.has(article._id)) continue
-    if (!article.section) continue
-    const list = railsBySection.get(article.section.slug) ?? []
-    list.push(article)
-    railsBySection.set(article.section.slug, list)
-  }
 
   // Alternate view modes — chronological list / month grid / map view.
   // Default mode (newspaper) falls through to the WaPo-style layout
@@ -414,56 +413,18 @@ function HomePage() {
         </section>
       ) : null}
 
-      {/* ════════════════════ Per-section blocks ════════════════════
-          Mirrors WaPo's "double-wide-layout": image+headline feature on the
-          left half, four text-only headlines stacked on the right half with
-          a vertical hairline between. Section header banner sits on top. */}
-      {sections.map((section) => {
-        const items = railsBySection.get(section.slug) ?? []
-        if (items.length < 2) return null
-        const [feature, ...rest] = items.slice(0, 5)
-        return (
-          <section key={section._id} className={BLOCK}>
-            <SectionHeaderCell
-              title={localizeSectionName(section, lang)}
-              accent={section.accentColor}
-              moreHref="/section/$slug"
-              moreParams={{ slug: section.slug }}
-              className="mb-6"
-            />
-            <div className="grid grid-cols-1 gap-x-8 gap-y-6 lg:grid-cols-12 lg:divide-x lg:divide-foreground/15">
-              <div className="lg:col-span-6 lg:pr-6">
-                <StoryItem
-                  article={feature}
-                  layout="image-top"
-                  size="lead"
-                  showDek
-                />
-              </div>
-              <div className="flex flex-col divide-y divide-foreground/15 lg:col-span-6 lg:pl-6">
-                {rest.map((a, i) => (
-                  <div
-                    key={a._id}
-                    className={
-                      i === 0
-                        ? "pb-4"
-                        : i === rest.length - 1
-                          ? "pt-4"
-                          : "py-4"
-                    }
-                  >
-                    <StoryItem
-                      article={a}
-                      layout="text-only"
-                      size="compact"
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
-          </section>
-        )
-      })}
+      {/* ════════════════════ All upcoming events ════════════════════
+          A chronological feed of every event across the whole site —
+          grouped by day, sticky day headers. Drops the per-section
+          blocks that used to live here: the homepage is the all-events
+          view; section/subsection pages do the filtering. */}
+      <section className={BLOCK}>
+        <SectionHeaderCell
+          title="All upcoming events"
+          className="mb-6"
+        />
+        <EventListView events={allUpcoming} />
+      </section>
 
       <BannerAd slot="home-bottom" className={BLOCK} />
     </div>

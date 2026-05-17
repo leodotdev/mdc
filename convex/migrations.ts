@@ -1325,6 +1325,80 @@ export const disableNewsSources = internalMutation({
   },
 })
 
+// Re-points source rows by URL when seed.ts sectionSlugs change.
+// installExpansionSources is URL-idempotent (skips inserts when the
+// URL already exists), so the only way to fix a wrong sectionIds[]
+// on a long-lived source is to patch it directly. This migration is
+// safe to re-run; it's a no-op when the source already matches the
+// desired section set.
+//
+// Also re-routes already-published events tied to the patched source
+// when their current sectionId is the wrong one. New events going
+// forward pick up the corrected sectionIds via the deterministic
+// ingest pipeline.
+//
+// Run dev:  npx convex run migrations:fixUniversityEventSources
+// Run prod: npx convex run migrations:fixUniversityEventSources --prod
+export const fixUniversityEventSources = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const TARGETS: Array<{ url: string; sectionSlugs: ReadonlyArray<string> }> = [
+      {
+        url: "https://events.miami.edu/calendar.ics",
+        sectionSlugs: ["university-of-miami", "education"],
+      },
+      {
+        url: "https://events.miami.edu/calendar.xml",
+        sectionSlugs: ["university-of-miami", "education"],
+      },
+      {
+        url: "https://calendar.fiu.edu/calendar.xml",
+        sectionSlugs: ["fiu", "education"],
+      },
+    ]
+    const sectionBySlug = new Map(
+      (await ctx.db.query("sections").collect()).map((s) => [s.slug, s]),
+    )
+    let sourcesPatched = 0
+    let eventsRehomed = 0
+    for (const t of TARGETS) {
+      const src = await ctx.db
+        .query("sources")
+        .filter((q) => q.eq(q.field("url"), t.url))
+        .first()
+      if (!src) continue
+      const newIds = t.sectionSlugs
+        .map((slug) => sectionBySlug.get(slug)?._id)
+        .filter((id): id is NonNullable<typeof id> => id !== undefined)
+      if (newIds.length === 0) continue
+      await ctx.db.patch(src._id, { sectionIds: newIds })
+      sourcesPatched += 1
+
+      // Re-route every event whose derivedFromItems trace back to this
+      // source AND whose current sectionId is one of the old IDs that
+      // shouldn't have been the primary. We use the new primary as
+      // the corrected home.
+      const newPrimary = newIds[0]
+      const sourceItems = await ctx.db
+        .query("ingestedItems")
+        .withIndex("by_source_external", (q) => q.eq("sourceId", src._id))
+        .collect()
+      const sourceItemIds = new Set(sourceItems.map((i) => i._id as string))
+      const events = await ctx.db.query("events").take(2000)
+      for (const e of events) {
+        if (e.sectionId === newPrimary) continue
+        const fromThisSource = (e.derivedFromItems ?? []).some((id) =>
+          sourceItemIds.has(id as string),
+        )
+        if (!fromThisSource) continue
+        await ctx.db.patch(e._id, { sectionId: newPrimary })
+        eventsRehomed += 1
+      }
+    }
+    return { sourcesPatched, eventsRehomed }
+  },
+})
+
 // Deletes events in politics / city / local whose title doesn't look
 // civic. The LLM occasionally tags concerts, screenings, and bike
 // rides as "politics" when the news article happens to mention a

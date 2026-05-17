@@ -102,27 +102,21 @@ function SectionPage() {
         }
       : { title: e.title, heroCaption: e.heroCaption }
 
-  // Top events ranked by importance (above-fold candidates).
+  // Top events ranked by importance — feeds the above-fold hero
+  // blocks AND the right rail "Top events" list. Pulling 8 gives the
+  // rail 5 + a few extras after dedup with the lead picks.
   const { data: top } = useSuspenseQuery(
     convexSuspenseQuery(api.events.topInSection, {
       sectionSlug: slug,
       limit: 8,
     }),
   )
-  // Recent events paginated (long tail).
+  // All events for this section, paginated. Long-tail chronological
+  // feed beneath the importance-ranked hero blocks.
   const { data: list } = useSuspenseQuery(
     convexSuspenseQuery(api.events.listBySection, {
       sectionSlug: slug,
       paginationOpts: { numItems: 40, cursor: null },
-    }),
-  )
-  // Upcoming events filed under this section. Empty array when none —
-  // we still render the rail with an empty-state line, matching the
-  // homepage's pattern.
-  const { data: sectionEvents } = useSuspenseQuery(
-    convexSuspenseQuery(api.events.upcomingBySectionSlug, {
-      sectionSlug: slug,
-      limit: 5,
     }),
   )
 
@@ -333,25 +327,25 @@ function SectionPage() {
           ))}
         </div>
 
-        {/* Right rail — events scoped to this section + section-relevant
-            widgets. The Sports widget is hoisted into this rail on the
+        {/* Right rail — Top Events for this section (importance-ranked,
+            5 max). Mirrors the homepage's "Top events" treatment but
+            scoped. The Sports widget is hoisted into this rail on the
             sports section so every franchise's latest result lives next
-            to the section's coverage instead of in a separate strip
-            below the fold. */}
+            to the section's coverage. */}
         <aside className="flex flex-col gap-8 lg:col-span-3 lg:border-l lg:border-foreground/15 lg:pl-6">
           {slug === "sports" ? <TeamWidgets /> : null}
           <div>
             <SectionHeaderCell
-              title={`${sectionName} ${t("nav.events").toLowerCase()}`}
+              title="Top events"
               accent={section.accentColor}
             />
             <div className="flex flex-col divide-y divide-foreground/15">
-              {sectionEvents.length === 0 ? (
+              {top.length === 0 ? (
                 <p className="meta py-6 text-xs">
                   No upcoming events in {sectionName}.
                 </p>
               ) : (
-                sectionEvents.map((e) => (
+                top.slice(0, 5).map((e) => (
                   <div key={e._id} className="py-4 first:pt-5 last:pb-0">
                     <EventListItem event={e} />
                   </div>

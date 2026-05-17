@@ -3423,25 +3423,29 @@ const EXPANSION_FEEDS_V5: ReadonlyArray<ExpansionFeed> = [
   },
 
   // ─── University events (large catalogs — hundreds of items each) ───
+  // Academic event calendars — these are NOT athletics. UM/FIU
+  // athletics live in Sports under the-u / fiu-panthers respectively.
+  // Filing the academic calendar under those was the bug behind
+  // "UM Law Family Weekend" appearing in Hurricanes.
   {
     name: "University of Miami — events (iCal)",
     type: "ics",
     url: "https://events.miami.edu/calendar.ics",
-    sectionSlugs: ["the-u", "arts"],
+    sectionSlugs: ["university-of-miami", "education"],
     pollMinutes: 360,
   },
   {
     name: "University of Miami — events (RSS)",
     type: "rss",
     url: "https://events.miami.edu/calendar.xml",
-    sectionSlugs: ["the-u", "news"],
+    sectionSlugs: ["university-of-miami", "education"],
     pollMinutes: 360,
   },
   {
     name: "FIU — events calendar",
     type: "rss",
     url: "https://calendar.fiu.edu/calendar.xml",
-    sectionSlugs: ["news", "arts"],
+    sectionSlugs: ["fiu", "education"],
     pollMinutes: 360,
   },
 
@@ -4109,6 +4113,194 @@ const EXPANSION_FEEDS_V7: ReadonlyArray<ExpansionFeed> = [
 export const seedExpansionSourcesV7 = internalMutation({
   args: {},
   handler: async (ctx) => installExpansionSources(ctx, EXPANSION_FEEDS_V7),
+})
+
+// =====================================================================
+// Phase-8 expansion seed — section-targeted depth pass.
+// Each entry's sectionSlugs[] is set so its events land in the right
+// home section by default. The deterministic ingest pipeline reads
+// sectionSlugs[0] as the primary; downstream Haiku enrichment can
+// refine.
+//
+// Focus: bookstores + Miami-Dade public libraries (Books), neighborhood
+// BIDs (Local), additional music venues (Music), Wynwood + Design
+// District galleries (Galleries), and a handful of food / chef
+// calendars (Food).
+//
+// Run: `npx convex run seed:seedExpansionSourcesV8`
+// =====================================================================
+const EXPANSION_FEEDS_V8: ReadonlyArray<ExpansionFeed> = [
+  // ─── Books — bookstores + library system ───
+  // Books & Books has multiple locations; each has its own event
+  // calendar feeding off the same WordPress site under different
+  // category slugs. We already have the main /feed/; add the per-
+  // location event pages where they exist.
+  {
+    name: "Books & Books — events calendar",
+    type: "events-html",
+    url: "https://www.booksandbooks.com/events/",
+    sectionSlugs: ["books"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Miami-Dade Public Library System — events",
+    type: "events-html",
+    url: "https://mdpls.org/calendar",
+    sectionSlugs: ["books", "education"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Bookleggers Library — events",
+    type: "events-html",
+    url: "https://bookleggerslibrary.com/events",
+    sectionSlugs: ["books"],
+    pollMinutes: 360,
+  },
+
+  // ─── Music — venues + clubs ───
+  {
+    name: "Gramps (Wynwood) — events",
+    type: "events-html",
+    url: "https://gramps.com/events/",
+    sectionSlugs: ["music"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Sweat Records — events",
+    type: "events-html",
+    url: "https://www.sweatrecordsmiami.com/events/",
+    sectionSlugs: ["music"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Lagniappe Miami — events",
+    type: "events-html",
+    url: "https://lagniappemia.com/events/",
+    sectionSlugs: ["music", "food"],
+    pollMinutes: 360,
+  },
+  {
+    name: "The Anderson (Wynwood) — events",
+    type: "events-html",
+    url: "https://theandersonmiami.com/events",
+    sectionSlugs: ["music"],
+    pollMinutes: 360,
+  },
+
+  // ─── Galleries — Wynwood + Design District ───
+  {
+    name: "Spinello Projects — events",
+    type: "events-html",
+    url: "https://www.spinelloprojects.com/events",
+    sectionSlugs: ["galleries", "arts"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Mindy Solomon Gallery — events",
+    type: "events-html",
+    url: "https://mindysolomon.com/events",
+    sectionSlugs: ["galleries", "arts"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Nina Johnson Gallery — events",
+    type: "events-html",
+    url: "https://ninajohnson.com/events",
+    sectionSlugs: ["galleries", "arts"],
+    pollMinutes: 360,
+  },
+
+  // ─── Local — neighborhood BIDs + community councils ───
+  {
+    name: "Wynwood BID — events",
+    type: "events-html",
+    url: "https://wynwoodmiami.com/events/",
+    sectionSlugs: ["local", "arts"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Coconut Grove BID — events",
+    type: "events-html",
+    url: "https://coconutgrove.com/events/",
+    sectionSlugs: ["local"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Downtown Miami DDA — events",
+    type: "events-html",
+    url: "https://www.miamidda.com/events/",
+    sectionSlugs: ["local", "business"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Brickell BID — events",
+    type: "events-html",
+    url: "https://www.brickellhomeownersassociation.com/events/",
+    sectionSlugs: ["local"],
+    pollMinutes: 360,
+  },
+
+  // ─── Food — restaurant weeks + chef calendars ───
+  {
+    name: "Miami Spice — events",
+    type: "events-html",
+    url: "https://www.miamiandbeaches.com/things-to-do/miami-spice",
+    sectionSlugs: ["food"],
+    pollMinutes: 720,
+  },
+  {
+    name: "Time Out Market Miami — events",
+    type: "events-html",
+    url: "https://www.timeoutmarket.com/miami/events/",
+    sectionSlugs: ["food", "music"],
+    pollMinutes: 360,
+  },
+
+  // ─── Health / wellness ───
+  {
+    name: "Equinox Miami — class schedule",
+    type: "events-html",
+    url: "https://www.equinox.com/clubs/florida/southbeach/classes",
+    sectionSlugs: ["fitness", "health"],
+    pollMinutes: 720,
+  },
+  {
+    name: "Miami Marathon — events",
+    type: "events-html",
+    url: "https://themiamimarathon.com/events/",
+    sectionSlugs: ["fitness", "sports"],
+    pollMinutes: 720,
+  },
+
+  // ─── Education — public school districts + non-UM colleges ───
+  {
+    name: "Miami-Dade County Public Schools — events",
+    type: "events-html",
+    url: "https://www.dadeschools.net/calendar",
+    sectionSlugs: ["high-schools", "education"],
+    pollMinutes: 720,
+  },
+  {
+    name: "Barry University — events",
+    type: "events-html",
+    url: "https://www.barry.edu/en/events/",
+    sectionSlugs: ["education"],
+    pollMinutes: 720,
+  },
+
+  // ─── Real estate ───
+  {
+    name: "Master Brokers Forum — events",
+    type: "events-html",
+    url: "https://www.masterbrokersforum.com/events",
+    sectionSlugs: ["real-estate", "business"],
+    pollMinutes: 720,
+  },
+]
+
+export const seedExpansionSourcesV8 = internalMutation({
+  args: {},
+  handler: async (ctx) => installExpansionSources(ctx, EXPANSION_FEEDS_V8),
 })
 
 // One-shot pruner — flips `enabled: false` on sources whose coverage
