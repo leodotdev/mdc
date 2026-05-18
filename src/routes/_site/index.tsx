@@ -143,16 +143,35 @@ function HomePage() {
   }
 
   const used = new Set<string>()
+  // Picks the next `n` items from a pool, optionally requiring a hero
+  // image. The image-required path falls back to images-not-required
+  // when the filtered pool runs short — better to fill the slot than
+  // leave it blank, but try for visual weight first.
   const take = (
     pool: Array<(typeof latest)[number]>,
     n: number,
+    opts: { requireImage?: boolean } = {},
   ): Array<(typeof latest)[number]> => {
     const picked: Array<(typeof latest)[number]> = []
+    const eligible = (a: (typeof latest)[number]): boolean => {
+      if (used.has(a._id)) return false
+      if (opts.requireImage && !a.heroImage) return false
+      return true
+    }
     for (const a of pool) {
-      if (used.has(a._id)) continue
+      if (!eligible(a)) continue
       picked.push(a)
       used.add(a._id)
       if (picked.length >= n) break
+    }
+    // Topped up below the cap — fall back to anything unused.
+    if (picked.length < n && opts.requireImage) {
+      for (const a of pool) {
+        if (used.has(a._id)) continue
+        picked.push(a)
+        used.add(a._id)
+        if (picked.length >= n) break
+      }
     }
     return picked
   }
@@ -161,18 +180,23 @@ function HomePage() {
   const allPool = [...rankedPool, ...latest]
 
   // Top hero (mirrors WaPo hp-top-table-main):
-  // • Lead split — 1 article with image + dek; 2 text-only headlines
+  // • Lead split — 1 event with image + dek; 2 text-only headlines
   //   stacked under the lead's text column (sharing the row with the image).
   // • Followed by 5 wide "xl" rows where text sits left, image sits right —
-  //   one article per row, with a heavy rule between rows.
-  const lead = take(rankedPool, 1)[0]
+  //   one event per row, with a heavy rule between rows.
+  // Image-bearing events are preferred for every slot that renders
+  // with a photo (lead + xl rows + morelead) so the visual frame above
+  // the fold doesn't have empty image holes. Text-only stacks fall
+  // back to the unfiltered pool — having more headlines is worth more
+  // than gating them on image presence.
+  const lead = take(rankedPool, 1, { requireImage: true })[0]
   const leadStack = take(allPool, 2)
-  const xlRows = take(allPool, 5)
+  const xlRows = take(allPool, 5, { requireImage: true })
 
   // More Top Stories (mirrors WaPo's second hero block):
   // • Lead xl on the left.
   // • 4 text-only headlines stacked on the right.
-  const morelead = take(allPool, 1)[0]
+  const morelead = take(allPool, 1, { requireImage: true })[0]
   const moreRail = take(allPool, 4)
 
   const trending = rankedPool.slice(0, 4)

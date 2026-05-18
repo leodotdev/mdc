@@ -117,6 +117,9 @@ export async function fetchEventsHtml(
             // when price is 0; otherwise prefix with the currency
             // symbol when it's USD, else keep the ISO code.
             const price = extractPrice(obj.offers)
+            // schema.org Event.image — string URL, array of URLs, or
+            // an ImageObject. Pick the first usable URL.
+            const mediaUrl = extractImage(obj.image)
             const body =
               [description, locName ? `Location: ${locName}` : null]
                 .filter(Boolean)
@@ -127,6 +130,7 @@ export async function fetchEventsHtml(
               title: decodeEntities(name),
               snippet: description?.slice(0, 400),
               body,
+              mediaUrl,
               publishedAt: startMs,
               // Structured event fields — fed straight to the
               // deterministic ingest pipeline.
@@ -149,6 +153,31 @@ export async function fetchEventsHtml(
 
   events.sort((a, b) => (a.publishedAt ?? 0) - (b.publishedAt ?? 0))
   return events.slice(0, 50)
+}
+
+// schema.org Event.image is "Text|URL|ImageObject" or array. Walk the
+// shape and return the first plausible URL. Filters out empty strings
+// and obvious data:image URIs.
+function extractImage(raw: unknown): string | undefined {
+  const candidates = Array.isArray(raw) ? raw : raw != null ? [raw] : []
+  for (const c of candidates) {
+    if (typeof c === "string") {
+      const trimmed = c.trim()
+      if (trimmed.length > 0 && !trimmed.startsWith("data:")) return trimmed
+    } else if (c && typeof c === "object") {
+      const obj = c as Record<string, unknown>
+      const url =
+        typeof obj.url === "string"
+          ? obj.url
+          : typeof obj.contentUrl === "string"
+            ? obj.contentUrl
+            : undefined
+      if (url && url.trim().length > 0 && !url.startsWith("data:")) {
+        return url.trim()
+      }
+    }
+  }
+  return undefined
 }
 
 // Format a schema.org Offer (or array of Offers) into a human-readable

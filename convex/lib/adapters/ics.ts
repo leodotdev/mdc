@@ -66,6 +66,14 @@ export async function fetchIcs(
 
     if (!rrule && startMs != null && startMs < cutoff) continue
 
+    // iCal IMAGE property (RFC 7986) — calendar feeds that opt in
+    // ship a hero URL here. Some platforms also use the older
+    // X-IMAGE or X-WP-IMAGES-URL extension; try both.
+    const image =
+      readProp(body, "IMAGE") ??
+      readProp(body, "X-IMAGE") ??
+      readProp(body, "X-WP-IMAGES-URL")
+
     const composedBody = [
       description,
       location ? `Location: ${location}` : null,
@@ -79,6 +87,7 @@ export async function fetchIcs(
       title: summary,
       snippet: description?.slice(0, 400),
       body: composedBody || undefined,
+      mediaUrl: image,
       publishedAt: startMs,
       recurrenceRule: rrule,
       // Structured event fields — used by the deterministic ingest
