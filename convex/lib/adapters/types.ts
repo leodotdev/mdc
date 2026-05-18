@@ -22,6 +22,11 @@ export type RawItem = {
   locationName?: string
   locationAddress?: string
   allDay?: boolean
+  /** Free-text price label as it should render on the event card.
+   *  Examples: "Free", "$15", "$15-25", "$25 / $20 members". Adapters
+   *  format the source's structured offers data into a human-readable
+   *  string so the renderer can show it verbatim. */
+  price?: string
 }
 
 export type SourceForAdapter = {

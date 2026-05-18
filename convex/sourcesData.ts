@@ -172,6 +172,7 @@ export const recordFetch = mutation({
         locationName: v.optional(v.string()),
         locationAddress: v.optional(v.string()),
         allDay: v.optional(v.boolean()),
+        price: v.optional(v.string()),
       }),
     ),
   },
@@ -201,6 +202,7 @@ export const recordFetch = mutation({
         locationName: item.locationName,
         locationAddress: item.locationAddress,
         allDay: item.allDay,
+        price: item.price,
         fetchedAt: now,
         consumed: false,
       })

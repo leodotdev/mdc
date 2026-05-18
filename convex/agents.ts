@@ -206,6 +206,7 @@ export const runEventIngestInternal = internalAction({
               allDay: c.item.allDay ?? false,
               locationName: c.item.locationName,
               locationAddress: c.item.locationAddress,
+              price: c.item.price,
               recurrenceRule: c.item.recurrenceRule,
               url: c.item.url,
               heroImage: c.item.mediaUrl,

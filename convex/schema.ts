@@ -231,6 +231,7 @@ export default defineSchema({
     locationName: v.optional(v.string()),
     locationAddress: v.optional(v.string()),
     allDay: v.optional(v.boolean()),
+    price: v.optional(v.string()),
   })
     .index("by_source_external", ["sourceId", "externalId"])
     .index("by_consumed_fetched", ["consumed", "fetchedAt"]),

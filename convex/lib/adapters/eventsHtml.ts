@@ -112,6 +112,11 @@ export async function fetchEventsHtml(
             const endRaw =
               typeof obj.endDate === "string" ? obj.endDate : undefined
             const endMs = endRaw ? Date.parse(endRaw) : undefined
+            // schema.org Offer — single object or array. Format the
+            // lowest-priced one as a human-readable string. "Free" wins
+            // when price is 0; otherwise prefix with the currency
+            // symbol when it's USD, else keep the ISO code.
+            const price = extractPrice(obj.offers)
             const body =
               [description, locName ? `Location: ${locName}` : null]
                 .filter(Boolean)
@@ -129,6 +134,7 @@ export async function fetchEventsHtml(
               endsAt: Number.isFinite(endMs) ? endMs : undefined,
               locationName: locName,
               locationAddress: locAddress,
+              price,
             })
           }
         }
@@ -143,6 +149,41 @@ export async function fetchEventsHtml(
 
   events.sort((a, b) => (a.publishedAt ?? 0) - (b.publishedAt ?? 0))
   return events.slice(0, 50)
+}
+
+// Format a schema.org Offer (or array of Offers) into a human-readable
+// price label. Picks the lowest non-null price; renders "Free" at 0,
+// "$N" for USD, "N CUR" for anything else. Returns undefined when no
+// usable price is present so the renderer can omit the price slot.
+function extractPrice(raw: unknown): string | undefined {
+  const offers = Array.isArray(raw) ? raw : raw != null ? [raw] : []
+  type Parsed = { value: number; currency: string }
+  const parsed: Array<Parsed> = []
+  for (const o of offers) {
+    if (!o || typeof o !== "object") continue
+    const obj = o as Record<string, unknown>
+    const priceRaw = obj.price ?? obj.lowPrice
+    const value =
+      typeof priceRaw === "number"
+        ? priceRaw
+        : typeof priceRaw === "string"
+          ? Number(priceRaw.replace(/[^0-9.]/g, ""))
+          : NaN
+    if (!Number.isFinite(value)) continue
+    const currency =
+      typeof obj.priceCurrency === "string" ? obj.priceCurrency : "USD"
+    parsed.push({ value, currency })
+  }
+  if (parsed.length === 0) return undefined
+  parsed.sort((a, b) => a.value - b.value)
+  const cheapest = parsed[0]
+  if (cheapest.value === 0) return "Free"
+  if (cheapest.currency === "USD") return `$${formatPrice(cheapest.value)}`
+  return `${formatPrice(cheapest.value)} ${cheapest.currency}`
+}
+
+function formatPrice(v: number): string {
+  return Number.isInteger(v) ? String(v) : v.toFixed(2)
 }
 
 // Decode the common WordPress / Yoast HTML entities that show up in
