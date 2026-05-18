@@ -310,11 +310,27 @@ export const topToday = query({
       .take(TOP_EVENTS_SCAN)
     const ranked = candidates
       .filter((e) => (e.publishedAt ?? e.createdAt) >= since)
-      .sort((a, b) => compareByImportance(asScorable(a), asScorable(b), now))
+      .sort(rankEventsForHero(now))
       .slice(0, limit)
     return await Promise.all(ranked.map((e) => hydrate(ctx, e)))
   },
 })
+
+// Hero-rank comparator with a recurrence penalty: non-recurring events
+// sort ahead of recurring ones before the article-style importance
+// score breaks ties. A "Daily Guided Museum Tour" still has a high raw
+// score (image, citations, soon-startsAt) but recurring=true bumps it
+// out of the lead slot — one-off shows / openings / talks rise instead.
+function rankEventsForHero(
+  now: number,
+): (a: Doc<"events">, b: Doc<"events">) => number {
+  return (a, b) => {
+    const aRec = a.recurrenceRule ? 1 : 0
+    const bRec = b.recurrenceRule ? 1 : 0
+    if (aRec !== bRec) return aRec - bRec
+    return compareByImportance(asScorable(a), asScorable(b), now)
+  }
+}
 
 // Section top: importance-ranked recent events scoped to a section
 // (plus its child sub-sections). Mirrors `articles.topInSection`.
@@ -394,7 +410,7 @@ export const topInSection = query({
         merged.push(e)
       }
     }
-    merged.sort((a, b) => compareByImportance(asScorable(a), asScorable(b), now))
+    merged.sort(rankEventsForHero(now))
     return await Promise.all(
       merged.slice(0, limit).map((e) => hydrate(ctx, e)),
     )
