@@ -68,9 +68,7 @@ export function EventListItem({ event: rawEvent }: { event: EventWithSection }) 
             {location}
           </span>
         ) : null}
-        <span>
-          · {event.price && event.price.trim().length > 0 ? event.price : "Check listing"}
-        </span>
+        {event.price ? <span>· {event.price}</span> : null}
       </div>
       {event.description ? (
         <p className="font-sans text-sm leading-snug text-muted-foreground line-clamp-2">
