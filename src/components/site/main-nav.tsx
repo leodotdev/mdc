@@ -73,7 +73,7 @@ export function MainNav() {
       <ul className="flex flex-wrap items-center justify-center gap-x-1 gap-y-1 [&:has([data-nav-state=inactive]:hover)_[data-nav-state=inactive]:not(:hover)]:opacity-70">
         {/* Site-wide neighborhood filter — lives BEFORE the section
             beats so it reads as the room-selector for the whole page,
-            not a peer of the topical beats. Default "All Miami" =
+            not a peer of the topical beats. Default "All Neighborhoods" =
             no filter active. */}
         <li>
           <NeighborhoodFilterMenu activeAccent={activeAccent} />
@@ -216,7 +216,7 @@ function brandVars(_activeAccent: string | null): React.CSSProperties {
 
 // Site-wide neighborhood filter dropdown. Multi-select via checkboxes.
 // Empty selection = "all" = no filter applied. The trigger label
-// summarizes the current state ("All Miami" / "Wynwood" / "3
+// summarizes the current state ("All Neighborhoods" / "Wynwood" / "3
 // neighborhoods"). When the reader is on a /neighborhood/$slug page,
 // that route's loader pre-applies the filter to that single slug, so
 // the dropdown reads the matching state from the shared context.
@@ -229,7 +229,7 @@ function NeighborhoodFilterMenu({
   const active = selected.length > 0
 
   const triggerLabel = (() => {
-    if (selected.length === 0) return "All Miami"
+    if (selected.length === 0) return "All Neighborhoods"
     if (selected.length === 1) {
       const match = NEIGHBORHOODS.find((n) => n.slug === selected[0])
       return match?.name ?? "1 neighborhood"
@@ -252,7 +252,7 @@ function NeighborhoodFilterMenu({
         sideOffset={6}
         className="max-h-[28rem] overflow-y-auto [&:has([data-nav-state=inactive]:hover)_[data-nav-state=inactive]:not(:hover)]:opacity-70"
       >
-        {/* All Miami row — clearing collapses to the empty / unfiltered
+        {/* All Neighborhoods row — clearing collapses to the empty / unfiltered
             state. Bolds when no filter active so the reader can see
             "you're seeing everything". */}
         <DropdownMenuItem
@@ -266,7 +266,7 @@ function NeighborhoodFilterMenu({
           <span className="mr-2 inline-flex size-4 items-center justify-center">
             {!active ? <Check className="size-3.5" aria-hidden /> : null}
           </span>
-          All Miami
+          All Neighborhoods
         </DropdownMenuItem>
         <div className="my-1 h-px bg-foreground/10" />
         {NEIGHBORHOODS.map((n) => {
