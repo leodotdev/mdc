@@ -240,7 +240,7 @@ function NeighborhoodFilterMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        className={`${linkClass} inline-flex w-44 items-center justify-between gap-1`}
+        className={`${linkClass} inline-flex w-52 items-center justify-between gap-1`}
         data-nav-state={active ? "active" : "inactive"}
         style={brandVars(activeAccent)}
       >
