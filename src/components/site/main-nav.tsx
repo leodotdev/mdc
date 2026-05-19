@@ -240,7 +240,7 @@ function NeighborhoodFilterMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        className={`${linkClass} inline-flex w-52 items-center justify-between gap-1`}
+        className={`${linkClass} inline-flex items-center gap-1`}
         data-nav-state={active ? "active" : "inactive"}
         // When the reader is on a section page, tint hover/active with
         // that section's accent so the filter pill reads as part of
@@ -250,13 +250,16 @@ function NeighborhoodFilterMenu({
           activeAccent ? accentVars(activeAccent, activeAccent) : brandVars(activeAccent)
         }
       >
-        <span className="truncate">{triggerLabel}</span>
+        {triggerLabel}
         <ChevronDown className="size-4 shrink-0" aria-hidden />
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
         sideOffset={6}
-        className="max-h-[28rem] overflow-y-auto [&:has([data-nav-state=inactive]:hover)_[data-nav-state=inactive]:not(:hover)]:opacity-70"
+        // Fixed width on the popover so the menu stays a consistent
+        // size even though the trigger hugs its label. Overrides the
+        // base `w-(--anchor-width)` via tailwind-merge.
+        className="w-56 max-h-[28rem] overflow-y-auto [&:has([data-nav-state=inactive]:hover)_[data-nav-state=inactive]:not(:hover)]:opacity-70"
       >
         {/* All Neighborhoods row — clearing collapses to the empty / unfiltered
             state. Bolds when no filter active so the reader can see
