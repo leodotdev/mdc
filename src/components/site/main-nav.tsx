@@ -258,10 +258,7 @@ function NeighborhoodFilterMenu({
         <DropdownMenuItem
           className="cursor-pointer transition font-semibold"
           data-nav-state={!active ? "active" : "inactive"}
-          onSelect={(e) => {
-            e.preventDefault()
-            clear()
-          }}
+          onClick={() => clear()}
         >
           <span className="mr-2 inline-flex size-4 items-center justify-center">
             {!active ? <Check className="size-3.5" aria-hidden /> : null}
@@ -276,12 +273,11 @@ function NeighborhoodFilterMenu({
               key={n.slug}
               className="cursor-pointer transition"
               data-nav-state={checked ? "active" : "inactive"}
-              onSelect={(e) => {
-                // Keep the menu open so the reader can pick multiple
-                // neighborhoods without re-opening it each time.
-                e.preventDefault()
-                toggle(n.slug)
-              }}
+              // Base UI's Menu.Item closes the menu on click by
+              // default; the multi-select dropdown needs to stay open
+              // so the reader can tick several neighborhoods in a row.
+              closeOnClick={false}
+              onClick={() => toggle(n.slug)}
             >
               <span className="mr-2 inline-flex size-4 items-center justify-center">
                 {checked ? <Check className="size-3.5" aria-hidden /> : null}
