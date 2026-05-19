@@ -240,12 +240,12 @@ function NeighborhoodFilterMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        className={`${linkClass} inline-flex items-center gap-1`}
+        className={`${linkClass} inline-flex w-44 items-center justify-between gap-1`}
         data-nav-state={active ? "active" : "inactive"}
         style={brandVars(activeAccent)}
       >
-        {triggerLabel}
-        <ChevronDown className="size-4" aria-hidden />
+        <span className="truncate">{triggerLabel}</span>
+        <ChevronDown className="size-4 shrink-0" aria-hidden />
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
