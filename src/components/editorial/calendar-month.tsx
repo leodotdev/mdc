@@ -101,10 +101,24 @@ export function CalendarMonth({ events, yearMonth }: Props) {
     year: "numeric",
   }).format(monthStart)
 
+  // Chunk the flat day list into weekly rows (7 days each). Each week
+  // gets its own scroll group so day-numbers can sticky-stick within
+  // their week and roll out as the next week scrolls in.
+  const weeks: Array<Array<Date>> = []
+  for (let i = 0; i < days.length; i += 7) {
+    weeks.push(days.slice(i, i + 7))
+  }
+
+  const todayKey = dayKey(Date.now())
+
   return (
-    <div className="flex flex-col gap-4">
-      {/* Header — current month label + prev/next/today controls */}
-      <div className="flex items-center justify-between">
+    // Full-bleed wrapper: break out of the route's container-page
+    // padding so the grid spans edge-to-edge. The negative margins
+    // match the container's responsive paddings.
+    <div className="-mx-4 sm:-mx-6 lg:-mx-8 xl:-mx-12">
+      {/* Header band — month title + prev/next/today. Stays inside
+          the page padding so the controls don't fly off-screen. */}
+      <div className="mx-4 sm:mx-6 lg:mx-8 xl:mx-12 mb-3 flex items-center justify-between">
         <h2 className="font-heading text-2xl font-semibold tracking-tight md:text-3xl">
           {title}
         </h2>
@@ -135,43 +149,72 @@ export function CalendarMonth({ events, yearMonth }: Props) {
         </div>
       </div>
 
-      {/* Weekday header — 7 column labels, vertical dividers between. */}
-      <div className="grid grid-cols-7 [&>*:not(:nth-child(7n))]:border-r [&>*]:border-foreground/15">
-        {WEEKDAYS.map((d) => (
+      {/* Weekday header — sticky band that pins to the viewport top
+          as the user scrolls through the calendar. */}
+      <div className="sticky top-0 z-20 grid grid-cols-7 border-y border-foreground/15 bg-background [&>*:not(:nth-child(7n))]:border-r [&>*]:border-foreground/15">
+        {WEEKDAYS.map((d, i) => (
           <div
             key={d}
-            className="kicker bg-background py-2 text-center text-foreground"
+            className="kicker py-1.5 text-center text-[0.6rem] text-foreground sm:py-2 sm:text-xs"
           >
-            {d}
+            <span className="sm:hidden">{d.charAt(0)}</span>
+            <span className="hidden sm:inline">{d}</span>
+            {/* Hidden index helper, keeps lint happy w/o changing render */}
+            <span hidden>{i}</span>
           </div>
         ))}
       </div>
 
-      {/* Kanban-style grid. Cells are tall flex columns; the grid
-          uses `auto-rows-fr` so all cells in a row stretch to the
-          tallest in that row, keeping the weekly row aligned even
-          when one day's stack is much denser than another's.
-          Vertical dividers between columns (every cell except the
-          last in each row of 7 carries a right border) — no
-          horizontal lines, no per-cell box. */}
-      <div className="grid grid-cols-7 auto-rows-fr [&>*:not(:nth-child(7n))]:border-r [&>*]:border-foreground/15">
-        {days.map((day) => {
-          const inMonth = day.getMonth() === month
-          const todayKey = dayKey(Date.now())
-          const isToday = dayKey(day.getTime()) === todayKey
-          const key = dayKey(day.getTime())
-          const evs = cells.get(key) ?? []
-          return (
-            <DayCell
-              key={key}
-              date={day}
-              events={evs}
-              dim={!inMonth}
-              today={isToday}
-            />
-          )
-        })}
-      </div>
+      {/* Weekly rows. Each week is its own block: a sticky day-number
+          band that pins below the weekday header, then the kanban
+          event content below it. When you scroll past a week, its
+          day-number band rolls out and the next week's rolls in. */}
+      {weeks.map((week, wi) => (
+        <div key={`w-${wi}`} className="border-b border-foreground/15">
+          {/* Day-number band — sticky just below the weekday header.
+              `top-8` ≈ 2rem ≈ weekday header height (matches py-1.5
+              on small + py-2 on sm+). */}
+          <div className="sticky top-8 z-10 grid grid-cols-7 border-b border-foreground/10 bg-background [&>*:not(:nth-child(7n))]:border-r [&>*]:border-foreground/15">
+            {week.map((day) => {
+              const inMonth = day.getMonth() === month
+              const isToday = dayKey(day.getTime()) === todayKey
+              return (
+                <div
+                  key={`hd-${dayKey(day.getTime())}`}
+                  className={cn(
+                    "font-sans flex items-center justify-end px-1.5 py-1 text-xs tabular-nums sm:px-2 sm:text-sm",
+                    inMonth ? "text-foreground" : "text-muted-foreground/50",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      isToday &&
+                        "inline-flex h-5 w-5 items-center justify-center rounded-full bg-foreground text-background sm:h-6 sm:w-6",
+                    )}
+                  >
+                    {day.getDate()}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+
+          {/* Event content row. auto-rows-fr keeps every column in the
+              week aligned to the tallest cell. Cells grow as events
+              stack; the day-number band above stays put while you
+              scroll within the week. */}
+          <div className="grid grid-cols-7 auto-rows-fr [&>*:not(:nth-child(7n))]:border-r [&>*]:border-foreground/10">
+            {week.map((day) => {
+              const inMonth = day.getMonth() === month
+              const key = dayKey(day.getTime())
+              const evs = cells.get(key) ?? []
+              return (
+                <DayCell key={key} events={evs} dim={!inMonth} />
+              )
+            })}
+          </div>
+        </div>
+      ))}
     </div>
   )
 }
@@ -206,49 +249,24 @@ function parseYM(ym: string): [number, number] | null {
 }
 
 function DayCell({
-  date,
   events,
   dim,
-  today,
 }: {
-  date: Date
   events: ReadonlyArray<EventOnDay>
   dim: boolean
-  today: boolean
 }) {
   const openInDrawer = useOpenEventDrawer()
   // Kanban-style: every event in the day shows, vertically stacked.
   // Each card is its own bordered block with the section accent as a
-  // left stripe, so density reads at a glance and the column stays
-  // scannable even on a packed day. Cells grow vertically to fit
-  // their contents; CSS grid auto-rows handle the height variance.
+  // left stripe. The day number / today badge live in the sticky
+  // header band above, so this cell is just events + padding.
   return (
     <div
       className={cn(
-        "flex flex-col gap-1.5 bg-background p-2 min-h-[10rem] md:min-h-[13rem] text-left",
+        "flex flex-col gap-1 bg-background p-1 min-h-[6rem] text-left sm:gap-1.5 sm:p-2 sm:min-h-[10rem] md:min-h-[13rem]",
         dim && "bg-muted/30",
       )}
     >
-      <div
-        className={cn(
-          "font-sans flex h-6 items-center justify-between text-sm tabular-nums",
-          dim ? "text-muted-foreground/60" : "text-foreground",
-        )}
-      >
-        <span className="kicker text-[0.6rem] text-muted-foreground/80">
-          {events.length > 0
-            ? `${events.length} event${events.length === 1 ? "" : "s"}`
-            : ""}
-        </span>
-        <span
-          className={cn(
-            today &&
-              "inline-flex h-6 w-6 items-center justify-center rounded-full bg-foreground text-background",
-          )}
-        >
-          {date.getDate()}
-        </span>
-      </div>
       <ul className="flex flex-col gap-1">
         {events.map((it) => {
           const slug = it.event.slug ?? ""

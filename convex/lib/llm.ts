@@ -78,14 +78,14 @@ function validateTranslation(raw: unknown): TranslationOutput | null {
 
 export type EventTranslationOutput = {
   title: string
-  description: string
+  dek: string
   heroCaption?: string
 }
 
 const TRANSLATE_EVENT_TOOL = {
   name: "translate_event",
   description:
-    "Translate a published event into Spanish, preserving the house voice. NOT a literal translation — re-write in the same snappy local-paper register, in Spanish. Hard caps: title ≤ 60 chars, description ≤ 300 chars / 1–2 sentences. Miami Spanish; mixing in natural anglicisms is fine. Proper nouns (venues, place names, person names) stay in their original form.",
+    "Translate a published event's title + 1-sentence dek into Spanish, preserving the house voice. NOT a literal translation — re-write in the same snappy local-paper register, in Spanish. Hard caps: title ≤ 60 chars, dek ≤ 200 chars / 1 sentence. Miami Spanish; mixing in natural anglicisms is fine. Proper nouns (venues, place names, person names) stay in their original form.",
   input_schema: {
     type: "object",
     properties: {
@@ -94,10 +94,10 @@ const TRANSLATE_EVENT_TOOL = {
         description:
           "Spanish event title. ≤ 60 chars. Active voice. Lead with what the event IS, not its publisher / sponsor.",
       },
-      description: {
+      dek: {
         type: "string",
         description:
-          "Spanish description. 1–2 sentences, ≤ 300 chars. Same register as the EN: punchy, factual, concrete.",
+          "Spanish dek. EXACTLY one sentence, ≤ 200 chars. Same register as the EN: punchy, factual, concrete.",
       },
       heroCaption: {
         type: "string",
@@ -105,7 +105,7 @@ const TRANSLATE_EVENT_TOOL = {
           "Spanish image caption when an English caption was provided. Omit when no EN caption.",
       },
     },
-    required: ["title", "description"],
+    required: ["title", "dek"],
   },
 } as const
 
@@ -115,10 +115,10 @@ function validateEventTranslation(
   if (!raw || typeof raw !== "object") return null
   const t = raw as Record<string, unknown>
   if (typeof t.title !== "string" || !t.title.trim()) return null
-  if (typeof t.description !== "string" || !t.description.trim()) return null
+  if (typeof t.dek !== "string" || !t.dek.trim()) return null
   return {
     title: t.title.slice(0, 200),
-    description: t.description.slice(0, 600),
+    dek: t.dek.slice(0, 400),
     heroCaption:
       typeof t.heroCaption === "string" && t.heroCaption.trim().length > 0
         ? t.heroCaption
@@ -130,7 +130,7 @@ export async function generateEventTranslation(opts: {
   model: string
   event: {
     title: string
-    description: string
+    dek: string
     heroCaption?: string
     sectionSlug?: string
     tags: ReadonlyArray<string>
@@ -147,7 +147,7 @@ export async function generateEventTranslation(opts: {
     ``,
     `Hard rules:`,
     `- Title: ≤ 60 chars. Active voice.`,
-    `- Description: 1–2 sentences, ≤ 300 chars. Concrete facts only.`,
+    `- Dek: EXACTLY 1 sentence, ≤ 200 chars. Concrete facts only.`,
     `- Miami Spanish (Cuban / South-American influences). OK to mix in natural anglicisms.`,
     `- Proper nouns stay in their original form (venue names, neighborhood names, person names).`,
     `- Don't add facts. Don't drop facts. Don't invent dates or prices.`,
@@ -158,7 +158,7 @@ export async function generateEventTranslation(opts: {
     ``,
     `=== EN ===`,
     `Title: ${opts.event.title}`,
-    `Description: ${opts.event.description}`,
+    `Dek: ${opts.event.dek}`,
     opts.event.heroCaption
       ? `Hero caption: ${opts.event.heroCaption}`
       : "",

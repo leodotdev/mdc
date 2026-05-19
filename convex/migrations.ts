@@ -1325,6 +1325,30 @@ export const disableNewsSources = internalMutation({
   },
 })
 
+// Derives `dek` for events that don't have one by taking the first
+// sentence of their existing description / body. Idempotent — events
+// that already have a non-empty dek are left alone. Run once after
+// the dek-only switch lands.
+//
+// Run: `npx convex run migrations:backfillEventDeks`
+import { firstSentence as _firstSentence } from "./lib/firstSentence"
+
+export const backfillEventDeks = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const events = await ctx.db.query("events").take(2000)
+    let patched = 0
+    for (const e of events) {
+      if (e.dek && e.dek.trim().length > 0) continue
+      const next = _firstSentence(e.description) ?? _firstSentence(e.body)
+      if (!next) continue
+      await ctx.db.patch(e._id, { dek: next })
+      patched += 1
+    }
+    return { scanned: events.length, patched }
+  },
+})
+
 // Backfills `price` on existing events using the same deterministic
 // rules adapters / ingest now apply at write time:
 //   1. Regex pull from event.description / event.body

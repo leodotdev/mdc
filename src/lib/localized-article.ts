@@ -31,8 +31,10 @@ export function localizedArticle<T extends ArticleWithRelations>(
   }
 }
 
-// Event version — same idea, with event-side translation field names
-// (description instead of dek, optional dek/body for kind=reported).
+// Event version — `dek` is now the only translated body field.
+// `description` is still on the translation shape for legacy rows
+// (it'll be removed in a future narrow); when present, it acts as a
+// fallback for events whose dek hasn't been backfilled yet.
 export function localizedEvent<T extends EventWithRelations>(
   event: T,
   lang: Lang,
@@ -40,11 +42,12 @@ export function localizedEvent<T extends EventWithRelations>(
   if (lang === "en") return event
   const tr = event.translations?.es
   if (!tr) return event
+  const trDek = tr.dek ?? tr.description ?? event.dek
   return {
     ...event,
     title: tr.title,
-    description: tr.description,
-    dek: tr.dek ?? event.dek,
+    dek: trDek,
+    description: trDek ?? event.description,
     body: tr.body ?? event.body,
     heroCaption: tr.heroCaption ?? event.heroCaption,
   }

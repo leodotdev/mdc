@@ -18,10 +18,14 @@ export function localizedEvent<T extends EventWithSection>(
   if (lang === "en") return event
   const tr = event.translations?.es
   if (!tr) return event
+  // dek replaces description as the translated body field. Fall
+  // through legacy translations that only have description set.
+  const trDek = tr.dek ?? tr.description ?? event.dek
   return {
     ...event,
     title: tr.title,
-    description: tr.description,
+    dek: trDek,
+    description: trDek ?? event.description,
     heroCaption: tr.heroCaption ?? event.heroCaption,
   }
 }

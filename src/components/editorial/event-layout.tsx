@@ -108,8 +108,12 @@ export function EventLayout({ rawEvent }: { rawEvent: EventDoc }) {
                 {locationText}
               </span>
             ) : null}
-            {event.price ? <span aria-hidden>·</span> : null}
-            {event.price ? <span>{event.price}</span> : null}
+            <span aria-hidden>·</span>
+            <span>
+              {event.price && event.price.trim().length > 0
+                ? event.price
+                : "Price unknown"}
+            </span>
           </div>
 
           {/* Recurrence — when the source provided an RFC 5545 RRULE,
@@ -264,10 +268,13 @@ export function EventLayout({ rawEvent }: { rawEvent: EventDoc }) {
       {/* Body + rail. Same 9/3 split as article pages. */}
       <div className="mt-12 grid grid-cols-1 gap-x-10 lg:grid-cols-12">
         <div className="lg:col-span-9 lg:pr-2">
-          {event.description ? (
-            <div className="prose-editorial">
-              <p>{event.description}</p>
-            </div>
+          {/* Single 1-sentence dek replaces the longer description.
+              Falls through to `description` for legacy rows whose
+              backfill hasn't run yet — those are still concise. */}
+          {(event.dek || event.description) ? (
+            <p className="font-editorial text-lg leading-snug text-foreground">
+              {event.dek || event.description}
+            </p>
           ) : null}
 
           {/* Location map — shown when the event has resolved coords.

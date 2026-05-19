@@ -4,6 +4,7 @@ import { action, internalAction } from "./_generated/server"
 import { fetchItems } from "./lib/adapters"
 import { cronsEnabled } from "./lib/cronGate"
 import { requireEditorInAction } from "./lib/guard"
+import { firstSentence } from "./lib/firstSentence"
 import { defaultFreeForSourceUrl } from "./lib/priceExtract"
 import type { Id } from "./_generated/dataModel"
 
@@ -200,7 +201,12 @@ export const runEventIngestInternal = internalAction({
             event: {
               slug: slugify(c.item.title),
               title: c.item.title,
-              description: c.item.snippet ?? c.item.body ?? "",
+              // Single 1-sentence dek replaces the long description.
+              // Renderer reads `dek`; `description` is kept empty for
+              // schema compatibility (still a required field) until a
+              // future narrow can drop it entirely.
+              description: "",
+              dek: firstSentence(c.item.snippet ?? c.item.body),
               kind: "scheduled",
               startsAt,
               endsAt: c.item.endsAt,

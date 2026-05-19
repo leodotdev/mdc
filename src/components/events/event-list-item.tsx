@@ -70,9 +70,11 @@ export function EventListItem({ event: rawEvent }: { event: EventWithSection }) 
         ) : null}
         {event.price ? <span>· {event.price}</span> : null}
       </div>
-      {event.description ? (
+      {/* 1-sentence dek. Legacy events without a dek fall back to
+          description; clamp to a single line on cards. */}
+      {(event.dek || event.description) ? (
         <p className="font-sans text-sm leading-snug text-muted-foreground line-clamp-2">
-          {event.description}
+          {event.dek || event.description}
         </p>
       ) : null}
       {event.article ? (

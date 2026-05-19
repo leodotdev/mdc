@@ -138,9 +138,13 @@ function buildSearchableText(
 // row for re-translation. Mirrors articles.articleSourceHash.
 function eventSourceHash(event: {
   title: string
-  description: string
+  dek?: string
 }): string {
-  const s = `${event.title}|${event.description}`
+  // Hashing on title + dek — `dek` is now the single translated text
+  // body. `description` lingers in the schema but isn't shown or
+  // translated; including it in the hash would force re-translations
+  // every time a backfill clears it.
+  const s = `${event.title}|${event.dek ?? ""}`
   let h = 5381
   for (let i = 0; i < s.length; i += 1) h = ((h << 5) + h + s.charCodeAt(i)) | 0
   return (h >>> 0).toString(16)
@@ -893,7 +897,7 @@ export const needingTranslation = query({
     for (const e of all) {
       const hash = eventSourceHash({
         title: e.title,
-        description: e.description,
+        dek: e.dek,
       })
       const tr = e.translations?.es
       if (!tr || tr.sourceHash !== hash) {
@@ -916,7 +920,11 @@ export const setTranslation = internalMutation({
     lang: v.literal("es"),
     translation: v.object({
       title: v.string(),
-      description: v.string(),
+      dek: v.string(),
+      // Legacy field kept on the validator only so older callers
+      // that still pass it don't break. New translations write
+      // empty string here — the frontend reads `dek`.
+      description: v.optional(v.string()),
       heroCaption: v.optional(v.string()),
     }),
     sourceHash: v.string(),
@@ -951,10 +959,13 @@ export const translateEventAction = internalAction({
     // status=approved).
     const event = await ctx.runQuery(api.events.get, { id: eventId })
     if (!event) return { translated: false }
-    const sourceHash = eventSourceHash({
-      title: event.title,
-      description: event.description,
-    })
+    // Source for translation = title + dek. Legacy events written
+    // before the dek-only switch may only have description text;
+    // fall back to it so they translate cleanly before they get
+    // backfilled.
+    const sourceDek = event.dek ?? event.description ?? ""
+    if (!sourceDek.trim()) return { translated: false }
+    const sourceHash = eventSourceHash({ title: event.title, dek: sourceDek })
     if (event.translations?.es?.sourceHash === sourceHash) {
       return { translated: false }
     }
@@ -967,7 +978,7 @@ export const translateEventAction = internalAction({
       model: "claude-haiku-4-5-20251001",
       event: {
         title: event.title,
-        description: event.description,
+        dek: sourceDek,
         heroCaption: event.heroCaption,
         sectionSlug: event.section?.slug,
         tags: event.tags ?? [],
@@ -980,7 +991,8 @@ export const translateEventAction = internalAction({
       lang,
       translation: {
         title: result.title,
-        description: result.description,
+        dek: result.dek,
+        description: "",
         heroCaption: result.heroCaption,
       },
       sourceHash,

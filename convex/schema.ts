@@ -479,7 +479,10 @@ export default defineSchema({
         es: v.optional(
           v.object({
             title: v.string(),
-            description: v.string(),
+            // Legacy field — kept on the validator so existing
+            // translations still validate. New writes leave it
+            // empty; the frontend reads `dek`.
+            description: v.optional(v.string()),
             dek: v.optional(v.string()),
             body: v.optional(v.string()),
             heroCaption: v.optional(v.string()),
