@@ -1,3 +1,4 @@
+import { extractPriceFromText } from "../priceExtract"
 import type { RawItem, SourceForAdapter } from "./types"
 
 // iCalendar (.ics) feed adapter. Targets RFC 5545 calendars served by
@@ -98,6 +99,11 @@ export async function fetchIcs(
       endsAt: endMs,
       locationName: location,
       allDay,
+      // RFC 5545 doesn't define price — many calendars stuff it into
+      // DESCRIPTION ("Admission $15", "Free and open to the public").
+      // Pull it out deterministically here so the deterministic ingest
+      // pipeline doesn't have to.
+      price: extractPriceFromText(description),
     })
   }
 

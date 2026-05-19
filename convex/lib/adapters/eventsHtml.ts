@@ -1,3 +1,4 @@
+import { extractPriceFromText } from "../priceExtract"
 import type { RawItem, SourceForAdapter } from "./types"
 
 // JSON-LD events scraper. Many Miami venues (Vizcaya, Deering Estate,
@@ -115,8 +116,11 @@ export async function fetchEventsHtml(
             // schema.org Offer — single object or array. Format the
             // lowest-priced one as a human-readable string. "Free" wins
             // when price is 0; otherwise prefix with the currency
-            // symbol when it's USD, else keep the ISO code.
-            const price = extractPrice(obj.offers)
+            // symbol when it's USD, else keep the ISO code. Falls back
+            // to regex over the description text when no Offer is
+            // present.
+            const price =
+              extractPrice(obj.offers) ?? extractPriceFromText(description)
             // schema.org Event.image — string URL, array of URLs, or
             // an ImageObject. Pick the first usable URL.
             const mediaUrl = extractImage(obj.image)

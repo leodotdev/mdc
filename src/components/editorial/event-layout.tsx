@@ -108,8 +108,8 @@ export function EventLayout({ rawEvent }: { rawEvent: EventDoc }) {
                 {locationText}
               </span>
             ) : null}
-            {event.price ? <span aria-hidden>·</span> : null}
-            {event.price ? <span>{event.price}</span> : null}
+            <span aria-hidden>·</span>
+            <span>{event.price && event.price.trim().length > 0 ? event.price : "Check listing"}</span>
           </div>
 
           {/* Recurrence — when the source provided an RFC 5545 RRULE,

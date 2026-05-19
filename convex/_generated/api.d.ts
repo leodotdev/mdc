@@ -40,6 +40,7 @@ import type * as lib_guardData from "../lib/guardData.js";
 import type * as lib_llm from "../lib/llm.js";
 import type * as lib_media from "../lib/media.js";
 import type * as lib_neighborhoods from "../lib/neighborhoods.js";
+import type * as lib_priceExtract from "../lib/priceExtract.js";
 import type * as lib_scoring from "../lib/scoring.js";
 import type * as lib_storyArcs from "../lib/storyArcs.js";
 import type * as me from "../me.js";
@@ -92,6 +93,7 @@ declare const fullApi: ApiFromModules<{
   "lib/llm": typeof lib_llm;
   "lib/media": typeof lib_media;
   "lib/neighborhoods": typeof lib_neighborhoods;
+  "lib/priceExtract": typeof lib_priceExtract;
   "lib/scoring": typeof lib_scoring;
   "lib/storyArcs": typeof lib_storyArcs;
   me: typeof me;

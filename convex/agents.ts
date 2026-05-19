@@ -4,6 +4,7 @@ import { action, internalAction } from "./_generated/server"
 import { fetchItems } from "./lib/adapters"
 import { cronsEnabled } from "./lib/cronGate"
 import { requireEditorInAction } from "./lib/guard"
+import { defaultFreeForSourceUrl } from "./lib/priceExtract"
 import type { Id } from "./_generated/dataModel"
 
 // Tags that add no signal (every story is local to Miami-Dade by definition).
@@ -206,7 +207,11 @@ export const runEventIngestInternal = internalAction({
               allDay: c.item.allDay ?? false,
               locationName: c.item.locationName,
               locationAddress: c.item.locationAddress,
-              price: c.item.price,
+              // Adapter-provided price wins; otherwise default to
+              // "Free" when the source URL is a known-free venue
+              // pattern (.gov / library / school district).
+              price:
+                c.item.price ?? defaultFreeForSourceUrl(src?.url),
               recurrenceRule: c.item.recurrenceRule,
               url: c.item.url,
               heroImage: c.item.mediaUrl,

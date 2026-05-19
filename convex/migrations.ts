@@ -1325,6 +1325,39 @@ export const disableNewsSources = internalMutation({
   },
 })
 
+// Backfills `price` on existing events using the same deterministic
+// rules adapters / ingest now apply at write time:
+//   1. Regex pull from event.description / event.body
+//   2. defaultFreeForSourceUrl on the first cited URL
+// Events that already have a non-empty price are left alone.
+//
+// Run: `npx convex run migrations:backfillEventPrices`
+import {
+  extractPriceFromText as _extractPriceFromText,
+  defaultFreeForSourceUrl as _defaultFreeForSourceUrl,
+} from "./lib/priceExtract"
+
+export const backfillEventPrices = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const events = await ctx.db.query("events").take(2000)
+    let patched = 0
+    for (const e of events) {
+      if (e.price && e.price.trim().length > 0) continue
+      const fromText =
+        _extractPriceFromText(e.description) ??
+        _extractPriceFromText(e.body)
+      const firstCite = e.citations?.[0]?.url
+      const fromSource = _defaultFreeForSourceUrl(firstCite)
+      const next = fromText ?? fromSource
+      if (!next) continue
+      await ctx.db.patch(e._id, { price: next })
+      patched += 1
+    }
+    return { scanned: events.length, patched }
+  },
+})
+
 // Re-points source rows by URL when seed.ts sectionSlugs change.
 // installExpansionSources is URL-idempotent (skips inserts when the
 // URL already exists), so the only way to fix a wrong sectionIds[]
