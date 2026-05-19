@@ -346,7 +346,7 @@ function SectionPage() {
           {slug === "sports" ? <TeamWidgets /> : null}
           <div>
             <SectionHeaderCell
-              title="Top events"
+              title="Top"
               accent={section.accentColor}
             />
             <div className="flex flex-col divide-y divide-foreground/15">
