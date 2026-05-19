@@ -242,7 +242,13 @@ function NeighborhoodFilterMenu({
       <DropdownMenuTrigger
         className={`${linkClass} inline-flex w-52 items-center justify-between gap-1`}
         data-nav-state={active ? "active" : "inactive"}
-        style={brandVars(activeAccent)}
+        // When the reader is on a section page, tint hover/active with
+        // that section's accent so the filter pill reads as part of
+        // the section's chrome instead of breaking out to the brand
+        // brown. Off-section, fall back to the brand pair.
+        style={
+          activeAccent ? accentVars(activeAccent, activeAccent) : brandVars(activeAccent)
+        }
       >
         <span className="truncate">{triggerLabel}</span>
         <ChevronDown className="size-4 shrink-0" aria-hidden />
