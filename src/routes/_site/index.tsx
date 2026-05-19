@@ -135,13 +135,42 @@ function HomePage() {
   // Site-wide neighborhood filter — when active, drops events whose
   // `neighborhoods[]` don't intersect the user's selection. Empty
   // selection = no filter = identical to today.
-  const { matches } = useNeighborhoodFilter()
-  const top = topRaw.filter(matches)
-  const latest = latestRaw.filter(matches)
+  const { matches, selected, clear } = useNeighborhoodFilter()
+  const filterActive = selected.length > 0
+  const topFiltered = topRaw.filter(matches)
+  const latestFiltered = latestRaw.filter(matches)
   const upcomingEvents = upcomingEventsRaw.filter(matches)
   const allUpcoming = allUpcomingRaw.filter(matches)
+  // When the filter is active, the small top/latest pools (capped at
+  // 8 / 40 by query limits) frequently come back empty even when the
+  // wider `allUpcoming` (200 events) has matches in the chosen
+  // neighborhood. Fall through to the broader pool so the hero blocks
+  // stay populated under any filter.
+  const top = topFiltered.length > 0 ? topFiltered : allUpcoming
+  const latest =
+    latestFiltered.length > 0 ? latestFiltered : allUpcoming
 
-  if (latest.length === 0) {
+  // Empty state: only when nothing matches the filter (or no events
+  // exist at all). Filter-aware copy when the user is filtering by
+  // neighborhood, with a "clear filter" CTA so they can recover.
+  if (allUpcoming.length === 0 && latest.length === 0) {
+    if (filterActive) {
+      return (
+        <div className="mx-auto max-w-2xl py-16 text-center">
+          <h1 className="display-lg">No events in this filter yet</h1>
+          <p className="font-editorial mt-4 text-lg text-muted-foreground">
+            No upcoming events match the neighborhoods you picked.
+          </p>
+          <button
+            type="button"
+            onClick={() => clear()}
+            className="mt-6 inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/85"
+          >
+            Show all neighborhoods
+          </button>
+        </div>
+      )
+    }
     return (
       <div className="mx-auto max-w-2xl py-16 text-center">
         <h1 className="display-lg">{t("home.empty.title")}</h1>
