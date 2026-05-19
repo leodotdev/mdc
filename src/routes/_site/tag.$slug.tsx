@@ -16,6 +16,7 @@ import { StoryItem } from "@/components/editorial/story-item"
 import { XlRowList } from "@/components/editorial/xl-row-list"
 import { BannerAd } from "@/components/site/banner-ad"
 import { convexSuspenseQuery } from "@/lib/convex-suspense"
+import { useNeighborhoodFilter } from "@/lib/neighborhood-filter"
 import { useViewMode } from "@/lib/view-mode"
 
 function humanize(slug: string): string {
@@ -40,9 +41,11 @@ export const Route = createFileRoute("/_site/tag/$slug")({
 function TagPage() {
   const { slug } = Route.useParams()
   const { mode } = useViewMode()
-  const { data } = useSuspenseQuery(
+  const { data: dataRaw } = useSuspenseQuery(
     convexSuspenseQuery(api.events.listByTag, { tag: slug, limit: 60 }),
   )
+  const { matches } = useNeighborhoodFilter()
+  const data = dataRaw.filter(matches)
 
   // Same wave layout as section pages: hero split → xl rows → long
   // tail. Tag pages don't have an importance ranking yet, so we use
@@ -202,12 +205,16 @@ function TagMonthView({ tag }: { tag: string }) {
   const { data: monthEvents } = useSuspenseQuery(
     convexSuspenseQuery(api.events.inMonth, { yearMonth, tag }),
   )
-  return <CalendarMonth events={monthEvents} yearMonth={yearMonth} />
+  const { matches } = useNeighborhoodFilter()
+  return (
+    <CalendarMonth events={monthEvents.filter(matches)} yearMonth={yearMonth} />
+  )
 }
 
 function TagMapView({ tag }: { tag: string }) {
   const { data: mapEvents } = useSuspenseQuery(
     convexSuspenseQuery(api.events.placedOnMap, { tag }),
   )
-  return <EventsMap events={mapEvents} />
+  const { matches } = useNeighborhoodFilter()
+  return <EventsMap events={mapEvents.filter(matches)} />
 }

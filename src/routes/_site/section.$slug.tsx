@@ -21,6 +21,7 @@ import { convexSuspenseQuery } from "@/lib/convex-suspense"
 import { useTranslation } from "@/lib/i18n/context"
 import { useOpenEventDrawer } from "@/lib/use-open-article-drawer"
 import { localizeSectionName } from "@/lib/i18n/sections"
+import { useNeighborhoodFilter } from "@/lib/neighborhood-filter"
 import { useViewMode } from "@/lib/view-mode"
 import { EventListView } from "@/components/editorial/event-list-view"
 import { CalendarMonth } from "@/components/editorial/calendar-month"
@@ -105,7 +106,7 @@ function SectionPage() {
   // Top events ranked by importance — feeds the above-fold hero
   // blocks AND the right rail "Top events" list. Pulling 8 gives the
   // rail 5 + a few extras after dedup with the lead picks.
-  const { data: top } = useSuspenseQuery(
+  const { data: topRaw } = useSuspenseQuery(
     convexSuspenseQuery(api.events.topInSection, {
       sectionSlug: slug,
       limit: 8,
@@ -113,12 +114,21 @@ function SectionPage() {
   )
   // All events for this section, paginated. Long-tail chronological
   // feed beneath the importance-ranked hero blocks.
-  const { data: list } = useSuspenseQuery(
+  const { data: listRaw } = useSuspenseQuery(
     convexSuspenseQuery(api.events.listBySection, {
       sectionSlug: slug,
       paginationOpts: { numItems: 40, cursor: null },
     }),
   )
+
+  // Site-wide neighborhood filter — applied after query results so
+  // section pages respect the dropdown selection too.
+  const { matches } = useNeighborhoodFilter()
+  const top = topRaw.filter(matches)
+  const list = {
+    ...listRaw,
+    page: listRaw.page.filter(matches),
+  }
 
   const sectionName = localizeSectionName(section, lang)
 
@@ -480,12 +490,16 @@ function SectionMonthView({ slug }: { slug: string }) {
       sectionSlug: slug,
     }),
   )
-  return <CalendarMonth events={monthEvents} yearMonth={yearMonth} />
+  const { matches } = useNeighborhoodFilter()
+  return (
+    <CalendarMonth events={monthEvents.filter(matches)} yearMonth={yearMonth} />
+  )
 }
 
 function SectionMapView({ slug }: { slug: string }) {
   const { data: mapEvents } = useSuspenseQuery(
     convexSuspenseQuery(api.events.placedOnMap, { sectionSlug: slug }),
   )
-  return <EventsMap events={mapEvents} />
+  const { matches } = useNeighborhoodFilter()
+  return <EventsMap events={mapEvents.filter(matches)} />
 }

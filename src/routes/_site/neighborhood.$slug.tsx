@@ -5,6 +5,7 @@ import {
   createFileRoute,
   notFound,
 } from "@tanstack/react-router"
+import { useEffect } from "react"
 
 import { api } from "../../../convex/_generated/api"
 import { neighborhoodName } from "../../../convex/lib/neighborhoods"
@@ -22,6 +23,7 @@ import { HeroImg } from "@/components/site/hero-img"
 import { convexSuspenseQuery } from "@/lib/convex-suspense"
 import { useTranslation } from "@/lib/i18n/context"
 import { useOpenEventDrawer } from "@/lib/use-open-article-drawer"
+import { useNeighborhoodFilter } from "@/lib/neighborhood-filter"
 import { useViewMode } from "@/lib/view-mode"
 
 const BLOCK = "pt-10"
@@ -73,6 +75,19 @@ function NeighborhoodPage() {
   const { lang, t } = useTranslation()
   const { mode } = useViewMode()
   const openInDrawer = useOpenEventDrawer()
+
+  // /neighborhood/$slug stays as a deep-link shortcut: visiting one
+  // pre-applies the site-wide filter to that single slug, so the
+  // dropdown elsewhere reflects "you're seeing wynwood events". The
+  // hook reads the URL on mount; this effect ensures bookmark loads
+  // also propagate into the filter context.
+  const { selected, setSelected } = useNeighborhoodFilter()
+  useEffect(() => {
+    if (selected.length === 1 && selected[0] === slug) return
+    setSelected([slug])
+    // Only fire when slug or filter state changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slug])
 
   const tr = (a: {
     heroCaption?: string

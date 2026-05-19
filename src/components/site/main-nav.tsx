@@ -1,13 +1,10 @@
 import { convexQuery } from "@convex-dev/react-query"
 import { useQuery } from "@tanstack/react-query"
-import { Link, useLocation, useNavigate } from "@tanstack/react-router"
-import { ChevronDown } from "lucide-react"
+import { Link, useLocation } from "@tanstack/react-router"
+import { Check, ChevronDown } from "lucide-react"
 
 import { api } from "../../../convex/_generated/api"
-import {
-  NEIGHBORHOODS,
-  neighborhoodName,
-} from "../../../convex/lib/neighborhoods"
+import { NEIGHBORHOODS } from "../../../convex/lib/neighborhoods"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -16,6 +13,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { useTranslation } from "@/lib/i18n/context"
 import { localizeSectionName } from "@/lib/i18n/sections"
+import { useNeighborhoodFilter } from "@/lib/neighborhood-filter"
 
 // Section ordering: sections with order >= SPECIALTY_THRESHOLD render
 // after the news-y / lifestyle ones in the same flat row (the explicit
@@ -55,11 +53,6 @@ export function MainNav() {
     }
   }
 
-  const neighborhoodMatch = location.pathname.match(
-    /^\/neighborhood\/([^/]+)\/?$/,
-  )
-  const currentNeighborhoodSlug = neighborhoodMatch?.[1]
-
   // When the reader is on a section page, the entire nav row reads in
   // that section's voice — every item's idle / hover / active text is
   // tinted to the active section's -950, so News-active makes the row
@@ -78,6 +71,17 @@ export function MainNav() {
           Using `:has()` on the row avoids React mouse handlers — pure
           CSS, in sync with the browser's hover state. */}
       <ul className="flex flex-wrap items-center justify-center gap-x-1 gap-y-1 [&:has([data-nav-state=inactive]:hover)_[data-nav-state=inactive]:not(:hover)]:opacity-70">
+        {/* Site-wide neighborhood filter — lives BEFORE the section
+            beats so it reads as the room-selector for the whole page,
+            not a peer of the topical beats. Default "All Miami" =
+            no filter active. */}
+        <li>
+          <NeighborhoodFilterMenu activeAccent={activeAccent} />
+        </li>
+        {/* Vertical divider between the filter and the section beats. */}
+        <li aria-hidden className="px-1">
+          <span className="block h-5 w-px bg-foreground/20" />
+        </li>
         {regular.map((s) => (
           <li key={s._id}>
             <SectionLink
@@ -89,21 +93,6 @@ export function MainNav() {
             />
           </li>
         ))}
-        {/* Vertical divider between section beats and the standalone
-            Neighborhoods anchor. The /events and /watch anchors were
-            retired in the events-only pivot — the homepage IS the
-            events feed, and video embeds render inline on event pages
-            instead of getting their own destination. */}
-        <li aria-hidden className="px-1">
-          <span className="block h-5 w-px bg-foreground/20" />
-        </li>
-        <li>
-          <NeighborhoodsMenu
-            label={t("nav.neighborhoods")}
-            currentSlug={currentNeighborhoodSlug}
-            activeAccent={activeAccent}
-          />
-        </li>
         {specialty.map((s) => (
           <li key={s._id}>
             <SectionLink
@@ -225,31 +214,29 @@ function brandVars(_activeAccent: string | null): React.CSSProperties {
 }
 
 
-// Neighborhoods is a dropdown rather than a route — there's no
-// /neighborhoods index page; each entry deep-links straight into
-// /neighborhood/$slug. The trigger lights up while the reader is on any
-// neighborhood page so they can tell where they are in the tree, and the
-// matching item inside the menu is marked active too — same dim-on-hover
-// behavior as the main nav (active item never dims, inactive siblings
-// drop to 70% when one of them is hovered).
-function NeighborhoodsMenu({
-  label,
-  currentSlug,
+// Site-wide neighborhood filter dropdown. Multi-select via checkboxes.
+// Empty selection = "all" = no filter applied. The trigger label
+// summarizes the current state ("All Miami" / "Wynwood" / "3
+// neighborhoods"). When the reader is on a /neighborhood/$slug page,
+// that route's loader pre-applies the filter to that single slug, so
+// the dropdown reads the matching state from the shared context.
+function NeighborhoodFilterMenu({
   activeAccent,
 }: {
-  label: string
-  currentSlug?: string
   activeAccent: string | null
 }) {
-  const navigate = useNavigate()
-  const active = currentSlug != null
-  // When on a neighborhood page, the trigger swaps from the generic
-  // "Neighborhoods" label to the active neighborhood's name — same
-  // selected-value treatment as a `<select>` so the chrome reflects
-  // where the reader actually is.
-  const triggerLabel = currentSlug
-    ? neighborhoodName(currentSlug) ?? label
-    : label
+  const { selected, toggle, clear } = useNeighborhoodFilter()
+  const active = selected.length > 0
+
+  const triggerLabel = (() => {
+    if (selected.length === 0) return "All Miami"
+    if (selected.length === 1) {
+      const match = NEIGHBORHOODS.find((n) => n.slug === selected[0])
+      return match?.name ?? "1 neighborhood"
+    }
+    return `${selected.length} neighborhoods`
+  })()
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -261,24 +248,44 @@ function NeighborhoodsMenu({
         <ChevronDown className="size-4" aria-hidden />
       </DropdownMenuTrigger>
       <DropdownMenuContent
-        align="center"
+        align="start"
         sideOffset={6}
-        className="[&:has([data-nav-state=inactive]:hover)_[data-nav-state=inactive]:not(:hover)]:opacity-70"
+        className="max-h-[28rem] overflow-y-auto [&:has([data-nav-state=inactive]:hover)_[data-nav-state=inactive]:not(:hover)]:opacity-70"
       >
+        {/* All Miami row — clearing collapses to the empty / unfiltered
+            state. Bolds when no filter active so the reader can see
+            "you're seeing everything". */}
+        <DropdownMenuItem
+          className="cursor-pointer transition font-semibold"
+          data-nav-state={!active ? "active" : "inactive"}
+          onSelect={(e) => {
+            e.preventDefault()
+            clear()
+          }}
+        >
+          <span className="mr-2 inline-flex size-4 items-center justify-center">
+            {!active ? <Check className="size-3.5" aria-hidden /> : null}
+          </span>
+          All Miami
+        </DropdownMenuItem>
+        <div className="my-1 h-px bg-foreground/10" />
         {NEIGHBORHOODS.map((n) => {
-          const itemActive = currentSlug === n.slug
+          const checked = selected.includes(n.slug)
           return (
             <DropdownMenuItem
               key={n.slug}
               className="cursor-pointer transition"
-              data-nav-state={itemActive ? "active" : "inactive"}
-              onClick={() =>
-                void navigate({
-                  to: "/neighborhood/$slug",
-                  params: { slug: n.slug },
-                })
-              }
+              data-nav-state={checked ? "active" : "inactive"}
+              onSelect={(e) => {
+                // Keep the menu open so the reader can pick multiple
+                // neighborhoods without re-opening it each time.
+                e.preventDefault()
+                toggle(n.slug)
+              }}
             >
+              <span className="mr-2 inline-flex size-4 items-center justify-center">
+                {checked ? <Check className="size-3.5" aria-hidden /> : null}
+              </span>
               {n.name}
             </DropdownMenuItem>
           )

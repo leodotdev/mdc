@@ -20,6 +20,7 @@ import type { QueryClient } from "@tanstack/react-query"
 import { Toaster } from "@/components/ui/sonner"
 import { WatercolorFilterDefs } from "@/components/widgets/wildlife-illustration"
 import { LangProvider } from "@/lib/i18n/context"
+import { NeighborhoodFilterProvider } from "@/lib/neighborhood-filter"
 import { ViewModeProvider } from "@/lib/view-mode"
 import { ThemeProvider } from "@/lib/theme/context"
 
@@ -135,7 +136,11 @@ function RootDocument({ children }: { children: React.ReactNode }) {
       <body>
         <ThemeProvider>
           <LangProvider>
-            <ViewModeProvider>{children}</ViewModeProvider>
+            <ViewModeProvider>
+              <NeighborhoodFilterProvider>
+                {children}
+              </NeighborhoodFilterProvider>
+            </ViewModeProvider>
           </LangProvider>
         </ThemeProvider>
         <Toaster richColors closeButton />

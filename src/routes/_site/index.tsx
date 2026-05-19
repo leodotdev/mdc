@@ -22,6 +22,7 @@ import { SportsWidget } from "@/components/widgets/sports-widget"
 import { WeatherWidget } from "@/components/widgets/weather-widget"
 import { convexSuspenseQuery } from "@/lib/convex-suspense"
 import { useTranslation } from "@/lib/i18n/context"
+import { useNeighborhoodFilter } from "@/lib/neighborhood-filter"
 import { useViewMode } from "@/lib/view-mode"
 import { useOpenEventDrawer } from "@/lib/use-open-article-drawer"
 import { EventListView } from "@/components/editorial/event-list-view"
@@ -114,22 +115,31 @@ function HomePage() {
           heroCaption: e.translations?.es?.heroCaption ?? e.heroCaption,
         }
       : { title: e.title, heroCaption: e.heroCaption }
-  const { data: top } = useSuspenseQuery(
+  const { data: topRaw } = useSuspenseQuery(
     convexSuspenseQuery(api.events.topToday, { limit: 8 }),
   )
-  const { data: latest } = useSuspenseQuery(
+  const { data: latestRaw } = useSuspenseQuery(
     convexSuspenseQuery(api.events.latestEditorial, { limit: 40 }),
   )
-  const { data: upcomingEvents } = useSuspenseQuery(
+  const { data: upcomingEventsRaw } = useSuspenseQuery(
     convexSuspenseQuery(api.events.upcoming, { limit: 5, days: 14 }),
   )
   // Long chronological tail — feeds the "All upcoming events" list at
   // the bottom of the page. 200/60d is wide enough to read as a real
   // events feed without paginating; events older than 24h drop off
   // inside EventListView.
-  const { data: allUpcoming } = useSuspenseQuery(
+  const { data: allUpcomingRaw } = useSuspenseQuery(
     convexSuspenseQuery(api.events.upcoming, { limit: 200, days: 60 }),
   )
+
+  // Site-wide neighborhood filter — when active, drops events whose
+  // `neighborhoods[]` don't intersect the user's selection. Empty
+  // selection = no filter = identical to today.
+  const { matches } = useNeighborhoodFilter()
+  const top = topRaw.filter(matches)
+  const latest = latestRaw.filter(matches)
+  const upcomingEvents = upcomingEventsRaw.filter(matches)
+  const allUpcoming = allUpcomingRaw.filter(matches)
 
   if (latest.length === 0) {
     return (
@@ -470,7 +480,10 @@ function HomepageMonthView() {
   const { data: monthEvents } = useSuspenseQuery(
     convexSuspenseQuery(api.events.inMonth, { yearMonth }),
   )
-  return <CalendarMonth events={monthEvents} yearMonth={yearMonth} />
+  const { matches } = useNeighborhoodFilter()
+  return (
+    <CalendarMonth events={monthEvents.filter(matches)} yearMonth={yearMonth} />
+  )
 }
 
 // Homepage map-view renderer. Pulls events with lat/lng populated
@@ -481,5 +494,6 @@ function HomepageMapView() {
   const { data: mapEvents } = useSuspenseQuery(
     convexSuspenseQuery(api.events.placedOnMap, {}),
   )
-  return <EventsMap events={mapEvents} />
+  const { matches } = useNeighborhoodFilter()
+  return <EventsMap events={mapEvents.filter(matches)} />
 }
