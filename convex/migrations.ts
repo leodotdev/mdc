@@ -1438,6 +1438,65 @@ export const tagSourceNeighborhoods = internalMutation({
   },
 })
 
+// Backfills `dedupeKey` on every event and folds duplicates into the
+// oldest existing row. After the dedup logic was added to
+// insertExtracted, run this once to clean up the existing pile.
+//
+// Run: `npx convex run migrations:dedupeEvents`
+import { eventDedupeKey as _eventDedupeKey } from "./lib/eventDedupe"
+
+export const dedupeEvents = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const events = await ctx.db.query("events").take(2000)
+    const groups = new Map<string, Array<typeof events[number]>>()
+    for (const e of events) {
+      const key = _eventDedupeKey({ title: e.title, startsAt: e.startsAt })
+      if (!groups.has(key)) groups.set(key, [])
+      groups.get(key)!.push(e)
+    }
+    let merged = 0
+    let stamped = 0
+    for (const [key, rows] of groups.entries()) {
+      // Sort oldest-first so the canonical row is the original insert.
+      rows.sort((a, b) => a.createdAt - b.createdAt)
+      const winner = rows[0]
+      // Stamp the canonical row's dedupeKey if missing.
+      if (winner.dedupeKey !== key) {
+        await ctx.db.patch(winner._id, { dedupeKey: key })
+        stamped += 1
+      }
+      if (rows.length === 1) continue
+      // Merge dup rows into the winner, then delete them.
+      let nextCitations = winner.citations ?? []
+      let nextItems = (winner.derivedFromItems ?? []) as Array<string>
+      for (let i = 1; i < rows.length; i += 1) {
+        const loser = rows[i]
+        nextCitations = [...nextCitations, ...(loser.citations ?? [])]
+        nextItems = [
+          ...nextItems,
+          ...((loser.derivedFromItems ?? []) as Array<string>),
+        ]
+        await ctx.db.delete(loser._id)
+        merged += 1
+      }
+      const seenUrls = new Set<string>()
+      const dedupedCitations = nextCitations.filter((c) => {
+        if (seenUrls.has(c.url)) return false
+        seenUrls.add(c.url)
+        return true
+      })
+      const dedupedItems = Array.from(new Set(nextItems))
+      await ctx.db.patch(winner._id, {
+        citations: dedupedCitations,
+        derivedFromItems:
+          dedupedItems as unknown as typeof winner.derivedFromItems,
+      })
+    }
+    return { scanned: events.length, dedupeMerged: merged, stamped }
+  },
+})
+
 // Sweeps already-published events that match the audience-filter
 // patterns (faculty meeting, dissertation defense, course code in
 // title, members-only, students-only, etc.). The new ingest pipeline

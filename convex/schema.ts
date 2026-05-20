@@ -498,11 +498,18 @@ export default defineSchema({
       }),
     ),
     createdAt: v.number(),
+    // Content-derived dedup key: normalize(title) + day(startsAt).
+    // Set on every new event; used by insertExtracted to detect when
+    // the same event arrives from two different sources (e.g. FIU
+    // events.fiu.edu iCal + calendar.fiu.edu events-html) and merge
+    // their citations instead of inserting twice.
+    dedupeKey: v.optional(v.string()),
   })
     .index("by_slug", ["slug"])
     .index("by_starts", ["startsAt"])
     .index("by_status_starts", ["status", "startsAt"])
     .index("by_section_starts", ["sectionId", "status", "startsAt"])
+    .index("by_dedupe_key", ["dedupeKey"])
     // Reported-events feed sorts by publishedAt (newspaper-style), so
     // the homepage's "latest editorial" query is O(log n) instead of
     // a full table scan.

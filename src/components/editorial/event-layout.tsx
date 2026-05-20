@@ -1,5 +1,3 @@
-import { convexQuery } from "@convex-dev/react-query"
-import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import { ExternalLink, MapPin } from "lucide-react"
 
@@ -8,12 +6,10 @@ import { neighborhoodName } from "../../../convex/lib/neighborhoods"
 import { HeroCaption } from "./hero-caption"
 import { SectionBadge } from "./section-badge"
 import { ShareWidget } from "./share-widget"
-import { SidebarRail, SidebarRailSection } from "./sidebar-rail"
 import { SourcesBlock } from "./sources-block"
 import type { FunctionReturnType } from "convex/server"
 import { EventLocationMap } from "./event-location-map"
 import { AddToCalendar } from "@/components/events/add-to-calendar"
-import { EventListItem } from "@/components/events/event-list-item"
 import { HeroImg } from "@/components/site/hero-img"
 import { Button } from "@/components/ui/button"
 import { useTranslation } from "@/lib/i18n/context"
@@ -275,9 +271,10 @@ export function EventLayout({ rawEvent }: { rawEvent: EventDoc }) {
         ) : null}
       </header>
 
-      {/* Body + rail. Same 9/3 split as article pages. */}
-      <div className="mt-12 grid grid-cols-1 gap-x-10 lg:grid-cols-12">
-        <div className="lg:col-span-9 lg:pr-2">
+      {/* Body — full-width single column now that the "More in section"
+          rail is gone. Constrains width on wide viewports for readability. */}
+      <div className="mt-12 grid grid-cols-1">
+        <div className="mx-auto w-full max-w-3xl">
           {/* Single 1-sentence dek replaces the longer description.
               Falls through to `description` for legacy rows whose
               backfill hasn't run yet — those are still concise. */}
@@ -338,119 +335,11 @@ export function EventLayout({ rawEvent }: { rawEvent: EventDoc }) {
           ) : null}
         </div>
 
-        <SidebarRail className="lg:col-span-3">
-          {event.section ? (
-            <RailMoreInSection
-              sectionSlug={event.section.slug}
-              sectionName={event.section.name}
-              accentColor={event.section.accentColor}
-              eventId={event._id}
-            />
-          ) : null}
-        </SidebarRail>
       </div>
 
       {event.citations && event.citations.length > 0 ? (
         <SourcesBlock citations={event.citations} />
       ) : null}
-
-      {event.section ? (
-        <FullMoreInSection
-          sectionSlug={event.section.slug}
-          sectionName={event.section.name}
-          accentColor={event.section.accentColor}
-          eventId={event._id}
-        />
-      ) : null}
     </article>
-  )
-}
-
-function RailMoreInSection({
-  sectionSlug,
-  sectionName,
-  accentColor,
-  eventId,
-}: {
-  sectionSlug: string
-  sectionName: string
-  accentColor: string
-  eventId: string
-}) {
-  const { data } = useQuery(
-    convexQuery(api.events.moreInSection, {
-      sectionSlug,
-      excludeId: eventId as never,
-      limit: 4,
-    }),
-  )
-  if (!data || data.events.length === 0) return null
-  return (
-    <SidebarRailSection
-      title={`More ${sectionName} events`}
-      more={
-        <Link
-          to="/section/$slug"
-          params={{ slug: sectionSlug }}
-          className="meta hover:underline"
-          style={{ color: accentColor }}
-        >
-          All →
-        </Link>
-      }
-    >
-      <ul className="flex flex-col divide-y divide-foreground/10">
-        {data.events.map((e) => (
-          <li key={e._id} className="py-3 first:pt-0 last:pb-0">
-            <EventListItem event={e} />
-          </li>
-        ))}
-      </ul>
-    </SidebarRailSection>
-  )
-}
-
-function FullMoreInSection({
-  sectionSlug,
-  sectionName,
-  accentColor,
-  eventId,
-}: {
-  sectionSlug: string
-  sectionName: string
-  accentColor: string
-  eventId: string
-}) {
-  const { data } = useQuery(
-    convexQuery(api.events.moreInSection, {
-      sectionSlug,
-      excludeId: eventId as never,
-      limit: 5,
-    }),
-  )
-  if (!data || data.events.length === 0) return null
-  return (
-    <section className="mt-12 border-t border-foreground/15 pt-8">
-      <header className="mb-5 flex items-baseline justify-between gap-3">
-        <h2 className="kicker" style={{ color: accentColor }}>
-          More from {sectionName}
-        </h2>
-        <Link
-          to="/section/$slug"
-          params={{ slug: sectionSlug }}
-          className="meta hover:underline"
-          style={{ color: accentColor }}
-        >
-          All →
-        </Link>
-      </header>
-      <ul className="grid grid-cols-1 gap-y-6 md:grid-cols-2 md:gap-x-8 lg:grid-cols-3">
-        {data.events.map((e) => (
-          <li key={e._id}>
-            <EventListItem event={e} />
-          </li>
-        ))}
-      </ul>
-    </section>
   )
 }

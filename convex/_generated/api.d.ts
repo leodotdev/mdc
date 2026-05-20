@@ -36,6 +36,7 @@ import type * as lib_adapters_youtube from "../lib/adapters/youtube.js";
 import type * as lib_audienceFilter from "../lib/audienceFilter.js";
 import type * as lib_budget from "../lib/budget.js";
 import type * as lib_cronGate from "../lib/cronGate.js";
+import type * as lib_eventDedupe from "../lib/eventDedupe.js";
 import type * as lib_firstSentence from "../lib/firstSentence.js";
 import type * as lib_guard from "../lib/guard.js";
 import type * as lib_guardData from "../lib/guardData.js";
@@ -91,6 +92,7 @@ declare const fullApi: ApiFromModules<{
   "lib/audienceFilter": typeof lib_audienceFilter;
   "lib/budget": typeof lib_budget;
   "lib/cronGate": typeof lib_cronGate;
+  "lib/eventDedupe": typeof lib_eventDedupe;
   "lib/firstSentence": typeof lib_firstSentence;
   "lib/guard": typeof lib_guard;
   "lib/guardData": typeof lib_guardData;

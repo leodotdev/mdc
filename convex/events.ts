@@ -15,6 +15,7 @@ import { requireEditor } from "./lib/guard"
 import { estimatedCallCents } from "./lib/budget"
 import { cronsEnabled } from "./lib/cronGate"
 import { requireEditorInAction } from "./lib/guard"
+import { eventDedupeKey } from "./lib/eventDedupe"
 import { generateEventEnrichment, generateEventTranslation } from "./lib/llm"
 import { findHeroCandidates } from "./lib/media"
 import { filterNeighborhoodSlugs, neighborhoodCoords } from "./lib/neighborhoods"
@@ -1535,6 +1536,43 @@ export const insertExtracted = internalMutation({
     derivedFromItems: v.array(v.id("ingestedItems")),
   },
   handler: async (ctx, { event, agentSlug, agentRunId, derivedFromItems }) => {
+    // Dedup: same normalized-title + same-day = same event. When a
+    // matching row already exists, fold the new source's citation +
+    // derivedFromItems into the existing row and return its id
+    // instead of inserting a duplicate.
+    const dedupeKey = eventDedupeKey({
+      title: event.title,
+      startsAt: event.startsAt,
+    })
+    const existing = await ctx.db
+      .query("events")
+      .withIndex("by_dedupe_key", (q) => q.eq("dedupeKey", dedupeKey))
+      .first()
+    if (existing) {
+      const mergedCitations = [
+        ...(existing.citations ?? []),
+        ...(event.citations ?? []),
+      ]
+      // Drop dup citations by URL.
+      const seen = new Set<string>()
+      const dedupedCitations = mergedCitations.filter((c) => {
+        if (seen.has(c.url)) return false
+        seen.add(c.url)
+        return true
+      })
+      const mergedItems = Array.from(
+        new Set([
+          ...((existing.derivedFromItems ?? []) as Array<string>),
+          ...derivedFromItems.map((i) => i as unknown as string),
+        ]),
+      ) as unknown as Array<Id<"ingestedItems">>
+      await ctx.db.patch(existing._id, {
+        citations: dedupedCitations,
+        derivedFromItems: mergedItems,
+      })
+      return existing._id
+    }
+
     const slug = await uniqueSlug(
       ctx,
       event.slug || event.title,
@@ -1581,6 +1619,7 @@ export const insertExtracted = internalMutation({
       agentRunId,
       derivedFromItems,
       createdAt: now,
+      dedupeKey,
     })
     // Schedule both auto-translation (ES) and auto-enrichment (tags +
     // neighborhood). Both are Haiku-budgeted; if the daily cap is hit
