@@ -238,10 +238,10 @@ function NeighborhoodFilterMenu({
   })()
 
   return (
-    <span className="relative inline-flex items-center">
+    <span className="inline-flex items-center gap-1">
       <DropdownMenu>
         <DropdownMenuTrigger
-          className={`${linkClass} inline-flex items-center gap-1 ${active ? "pr-9" : ""}`}
+          className={`${linkClass} inline-flex items-center gap-1`}
           data-nav-state={active ? "active" : "inactive"}
           // When the reader is on a section page, tint hover/active with
           // that section's accent so the filter pill reads as part of
@@ -254,28 +254,6 @@ function NeighborhoodFilterMenu({
           {triggerLabel}
           <ChevronDown className="size-4 shrink-0" aria-hidden />
         </DropdownMenuTrigger>
-        {/* X-to-clear button — only renders when a filter is active.
-            Sits absolutely on top of the trigger's right-padding gap
-            so it reads as part of the pill but has its own click
-            target that bypasses the dropdown open. */}
-        {active ? (
-          <button
-            type="button"
-            aria-label="Clear neighborhood filter"
-            title="Clear neighborhood filter"
-            onClick={(e) => {
-              e.stopPropagation()
-              clear()
-            }}
-            // Base UI's Menu.Trigger handles open on pointerdown, so
-            // intercept that too — without this, the dropdown pops
-            // open on the way to the click handler.
-            onPointerDown={(e) => e.stopPropagation()}
-            className="absolute right-1.5 top-1/2 -translate-y-1/2 inline-flex size-5 items-center justify-center rounded-sm text-current opacity-70 hover:opacity-100 hover:bg-foreground/10"
-          >
-            <X className="size-3.5" aria-hidden />
-          </button>
-        ) : null}
       <DropdownMenuContent
         align="start"
         sideOffset={6}
@@ -320,6 +298,19 @@ function NeighborhoodFilterMenu({
         })}
       </DropdownMenuContent>
     </DropdownMenu>
+    {/* X-to-clear — sits outside the trigger as its own button so the
+        click target is unambiguous and the trigger pill stays compact. */}
+    {active ? (
+      <button
+        type="button"
+        aria-label="Clear neighborhood filter"
+        title="Clear neighborhood filter"
+        onClick={() => clear()}
+        className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      >
+        <X className="size-3.5" aria-hidden />
+      </button>
+    ) : null}
     </span>
   )
 }
