@@ -201,6 +201,11 @@ export default defineSchema({
      *  fetcher skips sources whose `lastFetchedAt` is younger than this,
      *  so a 30-min cron tick doesn't waste fetches on slow-moving feeds. */
     pollIntervalMinutes: v.optional(v.number()),
+    /** Miami neighborhood slugs this source serves. Used by the admin
+     *  page to group sources by area and surface coverage gaps. Optional
+     *  — generic city-wide feeds (Eventbrite Miami, Refresh Miami) leave
+     *  it empty. Validated against lib/neighborhoods.ts at write time. */
+    neighborhoodSlugs: v.optional(v.array(v.string())),
   })
     .index("by_enabled", ["enabled"]),
 

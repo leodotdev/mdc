@@ -1847,6 +1847,8 @@ type ExpansionFeed = {
     | "sitemap-events"
   url: string
   sectionSlugs: ReadonlyArray<string>
+  /** Optional Miami neighborhood slugs this source serves. */
+  neighborhoodSlugs?: ReadonlyArray<string>
   pollMinutes?: number
 }
 
@@ -1882,6 +1884,10 @@ async function installExpansionSources(
       sectionIds,
       enabled: true,
       pollIntervalMinutes: feed.pollMinutes,
+      neighborhoodSlugs:
+        feed.neighborhoodSlugs && feed.neighborhoodSlugs.length > 0
+          ? Array.from(feed.neighborhoodSlugs)
+          : undefined,
     })
     inserted += 1
   }

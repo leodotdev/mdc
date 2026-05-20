@@ -3,10 +3,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute } from "@tanstack/react-router"
 import { useConvex } from "convex/react"
 import { Loader2, Power, RefreshCw } from "lucide-react"
-import { useMemo } from "react"
+import { useMemo, useState } from "react"
 
 import { api } from "../../../convex/_generated/api"
 import type { Id } from "../../../convex/_generated/dataModel"
+import { NEIGHBORHOODS } from "../../../convex/lib/neighborhoods"
 import { TableLoadingRows } from "@/components/editorial/story-card-skeleton"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -26,25 +27,38 @@ export const Route = createFileRoute("/_admin/admin/sources")({
   component: SourcesPage,
 })
 
-function StatusDot({ status }: { status: string | undefined }) {
-  if (!status) {
-    return (
-      <span
-        aria-label="Never fetched"
-        title="Never fetched"
-        className="inline-block size-2 shrink-0 rounded-full bg-muted-foreground/40"
-      />
-    )
-  }
-  const ok = status === "ok"
+// Visual classification — the data model has lastFetchStatus + item
+// counts; this collapses them to four buckets the editor can act on:
+//  - "working"   : healthy fetch AND at least one item came through
+//  - "silent"    : healthy fetch but ZERO items (page exists, no
+//                   structured event data → can't feed the pipeline)
+//  - "errored"   : last fetch threw
+//  - "untested"  : never fetched (just seeded)
+type SourceState = "working" | "silent" | "errored" | "untested"
+
+function classify(s: {
+  lastFetchStatus?: string
+  lastFetchItemCount?: number
+}): SourceState {
+  if (!s.lastFetchStatus) return "untested"
+  if (s.lastFetchStatus === "error") return "errored"
+  if ((s.lastFetchItemCount ?? 0) > 0) return "working"
+  return "silent"
+}
+
+function StatusDot({ state }: { state: SourceState }) {
+  const map = {
+    working: { bg: "var(--primary)", label: "Working — fetching events" },
+    silent: { bg: "#facc15", label: "Silent — fetch OK but 0 events" },
+    errored: { bg: "var(--destructive)", label: "Errored" },
+    untested: { bg: "color-mix(in oklab, var(--muted-foreground) 40%, transparent)", label: "Never fetched" },
+  } as const
   return (
     <span
-      aria-label={ok ? "Healthy" : `Error: ${status}`}
-      title={ok ? "Healthy" : status}
+      aria-label={map[state].label}
+      title={map[state].label}
       className="inline-block size-2 shrink-0 rounded-full"
-      style={{
-        background: ok ? "var(--primary)" : "var(--destructive)",
-      }}
+      style={{ background: map[state].bg }}
     />
   )
 }
@@ -53,10 +67,72 @@ function SourcesPage() {
   const convex = useConvex()
   const queryClient = useQueryClient()
   const sources = useQuery(convexQuery(api.sourcesData.list, {}))
+  const sectionsQuery = useQuery(convexQuery(api.sections.list, {}))
+
+  // Filters
+  const [statusFilter, setStatusFilter] =
+    useState<SourceState | "all">("all")
+  const [sectionFilter, setSectionFilter] = useState<string>("all")
+  const [hoodFilter, setHoodFilter] = useState<string>("all")
+
+  const sectionById = useMemo(() => {
+    const map = new Map<string, { slug: string; name: string }>()
+    for (const s of sectionsQuery.data ?? []) {
+      map.set(s._id as string, { slug: s.slug, name: s.name })
+    }
+    return map
+  }, [sectionsQuery.data])
+
+  // Apply filters
+  const filtered = useMemo(() => {
+    const rows = sources.data ?? []
+    return rows.filter((s) => {
+      const state = classify(s)
+      if (statusFilter !== "all" && state !== statusFilter) return false
+      if (sectionFilter !== "all") {
+        const primary = s.sectionIds[0] as unknown as string | undefined
+        if (sectionById.get(primary ?? "")?.slug !== sectionFilter) return false
+      }
+      if (hoodFilter !== "all") {
+        if (hoodFilter === "_none") {
+          if (s.neighborhoodSlugs && s.neighborhoodSlugs.length > 0) return false
+        } else if (!s.neighborhoodSlugs?.includes(hoodFilter)) return false
+      }
+      return true
+    })
+  }, [sources.data, statusFilter, sectionFilter, hoodFilter, sectionById])
+
+  // Group filtered rows by primary section, sorted alphabetically by
+  // section name. Sources with no primary section land under "Other".
+  const grouped = useMemo(() => {
+    const groups = new Map<string, { name: string; rows: typeof filtered }>()
+    for (const s of filtered) {
+      const primaryId = s.sectionIds[0] as unknown as string | undefined
+      const meta = primaryId ? sectionById.get(primaryId) : null
+      const key = meta?.slug ?? "_other"
+      const name = meta?.name ?? "Other"
+      if (!groups.has(key)) groups.set(key, { name, rows: [] })
+      groups.get(key)!.rows.push(s)
+    }
+    return Array.from(groups.entries()).sort((a, b) =>
+      a[1].name.localeCompare(b[1].name),
+    )
+  }, [filtered, sectionById])
+
+  // Coverage counts across the unfiltered dataset — what the row
+  // counts at the top of the page show.
+  const totals = useMemo(() => {
+    const buckets = { all: 0, working: 0, silent: 0, errored: 0, untested: 0 }
+    for (const s of sources.data ?? []) {
+      buckets.all += 1
+      buckets[classify(s)] += 1
+    }
+    return buckets
+  }, [sources.data])
 
   const visibleIds = useMemo(
-    () => (sources.data ?? []).map((s) => s._id as string),
-    [sources.data],
+    () => filtered.map((s) => s._id as string),
+    [filtered],
   )
   const { selected, allSelected, someSelected, toggleAll, toggleOne, clear } =
     useBulkSelection(visibleIds)
@@ -121,9 +197,18 @@ function SourcesPage() {
           <p className="meta mt-1">
             Defined in <code className="font-mono">convex/seed.ts</code> — run{" "}
             <code className="font-mono">npx convex run seed:run</code> after
-            editing. Use this page to verify each source fetches and to
-            enable/disable on the fly.
+            editing. Sources are grouped by primary section.
           </p>
+          {/* Quick counts strip */}
+          <div className="meta mt-2 flex flex-wrap items-center gap-x-3 text-xs">
+            <span>
+              {totals.all} total
+            </span>
+            <span className="text-primary">● {totals.working} working</span>
+            <span style={{ color: "#facc15" }}>● {totals.silent} silent</span>
+            <span className="text-destructive">● {totals.errored} errored</span>
+            <span className="text-muted-foreground">● {totals.untested} untested</span>
+          </div>
         </div>
         {someSelected ? (
           <div className="flex items-center gap-2 rounded-md border bg-card px-3 py-1.5 animate-in fade-in-0 slide-in-from-top-1 duration-200 ease-out">
@@ -164,146 +249,271 @@ function SourcesPage() {
         ) : null}
       </header>
 
-      {sources.data && sources.data.length === 0 ? (
-        <p className="meta">No sources yet.</p>
-      ) : (
+      {/* Filters */}
+      <div className="flex flex-wrap items-center gap-3 rounded-md border bg-card px-3 py-2">
+        <FilterSelect
+          label="Status"
+          value={statusFilter}
+          onChange={(v) => setStatusFilter(v as never)}
+          options={[
+            { value: "all", label: "All" },
+            { value: "working", label: `Working (${totals.working})` },
+            { value: "silent", label: `Silent (${totals.silent})` },
+            { value: "errored", label: `Errored (${totals.errored})` },
+            { value: "untested", label: `Untested (${totals.untested})` },
+          ]}
+        />
+        <FilterSelect
+          label="Section"
+          value={sectionFilter}
+          onChange={setSectionFilter}
+          options={[
+            { value: "all", label: "All sections" },
+            ...(sectionsQuery.data ?? [])
+              .filter((s) => !s.parentId)
+              .map((s) => ({ value: s.slug, label: s.name })),
+          ]}
+        />
+        <FilterSelect
+          label="Neighborhood"
+          value={hoodFilter}
+          onChange={setHoodFilter}
+          options={[
+            { value: "all", label: "All" },
+            { value: "_none", label: "(Untagged / citywide)" },
+            ...NEIGHBORHOODS.map((n) => ({ value: n.slug, label: n.name })),
+          ]}
+        />
+        <span className="meta ml-auto text-xs">
+          Showing {filtered.length} of {totals.all}
+        </span>
+      </div>
+
+      {sources.data === undefined ? (
         <div className="overflow-x-auto rounded-md border">
           <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-10">
-                  <Checkbox
-                    aria-label="Select all"
-                    checked={allSelected}
-                    onCheckedChange={() => toggleAll()}
-                  />
-                </TableHead>
-                <TableHead className="w-8" />
-                <TableHead>Source</TableHead>
-                <TableHead className="hidden md:table-cell">Type</TableHead>
-                <TableHead className="hidden md:table-cell">Status</TableHead>
-                <TableHead className="hidden lg:table-cell">Last fetch</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
             <TableBody>
-              {sources.data === undefined ? (
-                <TableLoadingRows rows={6} cols={7} />
-              ) : (
-                sources.data.map((s) => {
-                  const id = s._id as string
-                  const isSelected = selected.has(id)
-                  const isPending =
-                    testFetch.isPending && testFetch.variables === s._id
-                  const isToggling =
-                    setEnabled.isPending &&
-                    setEnabled.variables?.sourceId === s._id
-                  return (
-                    <TableRow
-                      key={s._id}
-                      data-state={isSelected ? "selected" : undefined}
-                      className="transition-colors duration-150 hover:bg-muted/50"
-                    >
-                      <TableCell>
-                        <Checkbox
-                          aria-label={`Select ${s.name}`}
-                          checked={isSelected}
-                          onCheckedChange={() => toggleOne(id)}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <StatusDot status={s.lastFetchStatus} />
-                      </TableCell>
-                      <TableCell className="max-w-md whitespace-normal">
-                        <div className="font-medium">{s.name}</div>
-                        <a
-                          href={s.url.startsWith("http") ? s.url : undefined}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="meta text-xs break-words hover:underline block"
-                        >
-                          {s.url}
-                        </a>
-                      </TableCell>
-                      <TableCell className="hidden md:table-cell">
-                        <Badge variant="outline" className="text-[0.65rem]">
-                          {s.type}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="hidden md:table-cell">
-                        {s.enabled ? (
-                          <Badge className="text-[0.65rem]">enabled</Badge>
-                        ) : (
-                          <Badge variant="secondary" className="text-[0.65rem]">
-                            disabled
-                          </Badge>
-                        )}
-                      </TableCell>
-                      <TableCell className="hidden lg:table-cell meta text-xs tabular-nums">
-                        {s.lastFetchedAt ? (
-                          <>
-                            {relativeTime(s.lastFetchedAt)}
-                            {s.lastFetchItemCount !== undefined ? (
-                              <span className="ml-1 text-muted-foreground">
-                                · {s.lastFetchItemCount}
-                                {s.lastFetchNewCount &&
-                                s.lastFetchNewCount > 0 ? (
-                                  <> ({s.lastFetchNewCount} new)</>
-                                ) : null}
-                              </span>
-                            ) : null}
-                            {s.lastFetchError ? (
-                              <span className="ml-1 text-destructive ">
-                                — {s.lastFetchError}
-                              </span>
-                            ) : null}
-                          </>
-                        ) : (
-                          <span className="meta">Never</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          <Button
-                            size="icon-sm"
-                            variant="ghost"
-                            aria-label="Test fetch"
-                            title="Test fetch"
-                            disabled={isPending}
-                            onClick={() => testFetch.mutate(s._id)}
-                          >
-                            {isPending ? (
-                              <Loader2 className="animate-spin" />
-                            ) : (
-                              <RefreshCw />
-                            )}
-                          </Button>
-                          <Button
-                            size="icon-sm"
-                            variant="ghost"
-                            aria-label={s.enabled ? "Disable" : "Enable"}
-                            title={s.enabled ? "Disable" : "Enable"}
-                            disabled={isToggling}
-                            onClick={() =>
-                              setEnabled.mutate({
-                                sourceId: s._id,
-                                enabled: !s.enabled,
-                              })
-                            }
-                          >
-                            <Power />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  )
-                })
-              )}
+              <TableLoadingRows rows={6} cols={6} />
             </TableBody>
           </Table>
         </div>
+      ) : grouped.length === 0 ? (
+        <p className="meta">No sources match these filters.</p>
+      ) : (
+        <div className="flex flex-col gap-4">
+          {grouped.map(([slug, group]) => (
+            <div key={slug} className="overflow-x-auto rounded-md border">
+              <div className="flex items-baseline justify-between bg-muted/50 px-3 py-2 border-b">
+                <h2 className="font-sans text-sm font-semibold">{group.name}</h2>
+                <span className="meta text-xs">{group.rows.length}</span>
+              </div>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-10">
+                      <Checkbox
+                        aria-label={`Select all ${group.name}`}
+                        checked={
+                          group.rows.length > 0 &&
+                          group.rows.every((s) => selected.has(s._id as string))
+                        }
+                        onCheckedChange={(v) => {
+                          for (const s of group.rows) {
+                            const id = s._id as string
+                            const isSel = selected.has(id)
+                            if (v && !isSel) toggleOne(id)
+                            if (!v && isSel) toggleOne(id)
+                          }
+                        }}
+                      />
+                    </TableHead>
+                    <TableHead className="w-8" />
+                    <TableHead>Source</TableHead>
+                    <TableHead className="hidden md:table-cell">Type</TableHead>
+                    <TableHead className="hidden lg:table-cell">
+                      Neighborhood
+                    </TableHead>
+                    <TableHead className="hidden md:table-cell">Last fetch</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {group.rows.map((s) => {
+                    const id = s._id as string
+                    const isSelected = selected.has(id)
+                    const isPending =
+                      testFetch.isPending && testFetch.variables === s._id
+                    const isToggling =
+                      setEnabled.isPending &&
+                      setEnabled.variables?.sourceId === s._id
+                    const state = classify(s)
+                    const hoods = s.neighborhoodSlugs ?? []
+                    return (
+                      <TableRow
+                        key={s._id}
+                        data-state={isSelected ? "selected" : undefined}
+                        className="transition-colors duration-150 hover:bg-muted/50"
+                      >
+                        <TableCell>
+                          <Checkbox
+                            aria-label={`Select ${s.name}`}
+                            checked={isSelected}
+                            onCheckedChange={() => toggleOne(id)}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <StatusDot state={state} />
+                        </TableCell>
+                        <TableCell className="max-w-md whitespace-normal">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium">{s.name}</span>
+                            {!s.enabled ? (
+                              <Badge
+                                variant="secondary"
+                                className="text-[0.6rem]"
+                              >
+                                disabled
+                              </Badge>
+                            ) : null}
+                          </div>
+                          <a
+                            href={s.url.startsWith("http") ? s.url : undefined}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="meta text-xs break-words hover:underline block"
+                          >
+                            {s.url}
+                          </a>
+                        </TableCell>
+                        <TableCell className="hidden md:table-cell">
+                          <Badge variant="outline" className="text-[0.65rem]">
+                            {s.type}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="hidden lg:table-cell">
+                          <div className="flex flex-wrap gap-1">
+                            {hoods.length === 0 ? (
+                              <span className="meta text-xs">—</span>
+                            ) : (
+                              hoods.map((h) => (
+                                <Badge
+                                  key={h}
+                                  variant="outline"
+                                  className="text-[0.6rem]"
+                                >
+                                  {NEIGHBORHOODS.find((n) => n.slug === h)
+                                    ?.name ?? h}
+                                </Badge>
+                              ))
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell className="hidden md:table-cell meta text-xs tabular-nums">
+                          {s.lastFetchedAt ? (
+                            <>
+                              {relativeTime(s.lastFetchedAt)}
+                              {s.lastFetchItemCount !== undefined ? (
+                                <span className="ml-1 text-muted-foreground">
+                                  · {s.lastFetchItemCount}
+                                  {s.lastFetchNewCount &&
+                                  s.lastFetchNewCount > 0 ? (
+                                    <> ({s.lastFetchNewCount} new)</>
+                                  ) : null}
+                                </span>
+                              ) : null}
+                              {s.lastFetchError ? (
+                                <span className="ml-1 text-destructive">
+                                  — {s.lastFetchError.slice(0, 80)}
+                                </span>
+                              ) : null}
+                            </>
+                          ) : (
+                            <span className="meta">Never</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            <Button
+                              size="icon-sm"
+                              variant="ghost"
+                              aria-label="Test fetch"
+                              title="Test fetch"
+                              disabled={isPending}
+                              onClick={() => testFetch.mutate(s._id)}
+                            >
+                              {isPending ? (
+                                <Loader2 className="animate-spin" />
+                              ) : (
+                                <RefreshCw />
+                              )}
+                            </Button>
+                            <Button
+                              size="icon-sm"
+                              variant="ghost"
+                              aria-label={s.enabled ? "Disable" : "Enable"}
+                              title={s.enabled ? "Disable" : "Enable"}
+                              disabled={isToggling}
+                              onClick={() =>
+                                setEnabled.mutate({
+                                  sourceId: s._id,
+                                  enabled: !s.enabled,
+                                })
+                              }
+                            >
+                              <Power />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
+                  {/* The first row's "select all" checkbox state is
+                      handled above; the header checkbox below is for
+                      keyboard tab order parity. */}
+                  {group.rows.length === 0 ? null : null}
+                </TableBody>
+              </Table>
+            </div>
+          ))}
+        </div>
       )}
+
+      {/* Hidden cross-group "select all" indicator — kept for the
+          parent allSelected accessor though we render per-group
+          headers now. */}
+      <span className="sr-only" aria-hidden>
+        {allSelected ? "all selected" : ""}
+      </span>
+      <span className="hidden">{toggleAll.name}</span>
     </div>
   )
 }
 
+function FilterSelect({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+  options: ReadonlyArray<{ value: string; label: string }>
+}) {
+  return (
+    <label className="flex items-center gap-2">
+      <span className="meta text-xs">{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="rounded-md border bg-background px-2 py-1 text-sm"
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
+}

@@ -1382,6 +1382,106 @@ export const backfillEventPrices = internalMutation({
   },
 })
 
+// Tags existing source rows with `neighborhoodSlugs` derived from
+// the source's URL + name. Conservative: only fires on patterns we
+// know correspond to a specific neighborhood. Sources without an
+// obvious hit are left untagged (they show up under "Citywide" in
+// the admin grouping).
+//
+// Run: `npx convex run migrations:tagSourceNeighborhoods`
+export const tagSourceNeighborhoods = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const RULES: ReadonlyArray<{
+      slug: string
+      patterns: ReadonlyArray<RegExp>
+    }> = [
+      { slug: "coral-gables", patterns: [/coral[\s-]?gables|coralgables|gablestage|bookleggers|booksandbooks|biltmore|cgaf|the\s?frost|fairchild/i] },
+      { slug: "wynwood-design-district", patterns: [/wynwood|design[\s-]?district|locustprojects|bacfl|bakehouse|spinello|gramps|thelabmiami|the[-\s]anderson/i] },
+      { slug: "miami-beach", patterns: [/miamibeach|miami[\s-]?beach|thebass|bass[\s-]?museum|nws\.edu|new\s?world\s?symphony|sweat[-\s]?records|wolfsonian|colony\s?theatre|miaminewdrama|holocaust|townofsurfsidefl|balharbourgov/i] },
+      { slug: "downtown", patterns: [/miamigov|miamidda|downtown[\s-]?miami|olympiatheater|pamm|frostscience|miamidadeauditorium/i] },
+      { slug: "brickell", patterns: [/brickell/i] },
+      { slug: "coconut-grove", patterns: [/coconut[\s-]?grove|coconutgrove|vizcaya|deeringestate/i] },
+      { slug: "key-biscayne", patterns: [/keybiscayne|key[\s-]?biscayne/i] },
+      { slug: "little-haiti", patterns: [/little[\s-]?haiti|haitian/i] },
+      { slug: "little-havana", patterns: [/little[\s-]?havana|ballandchain|calleocho|cubanmuseum/i] },
+      { slug: "doral", patterns: [/cityofdoral|\bdoral\b/i] },
+      { slug: "aventura", patterns: [/cityofaventura|\baventura\b/i] },
+      { slug: "north-miami", patterns: [/northmiamifl|northmiami(?!beach)/i] },
+      { slug: "north-miami-beach", patterns: [/citynmb|north\s?miami\s?beach/i] },
+      { slug: "south-miami", patterns: [/southmiami|\bsouth[\s-]?miami\b/i] },
+      { slug: "miami-shores", patterns: [/miamishoresvillage|miami[\s-]?shores/i] },
+      { slug: "miami-springs", patterns: [/miamisprings|miami[\s-]?springs/i] },
+      { slug: "pinecrest", patterns: [/pinecrest/i] },
+      { slug: "sunny-isles-beach", patterns: [/sibfl|sunny[\s-]?isles/i] },
+      { slug: "bal-harbour", patterns: [/balharbour|bal[\s-]?harbour/i] },
+      { slug: "surfside", patterns: [/townofsurfsidefl|\bsurfside\b/i] },
+      { slug: "hialeah", patterns: [/hialeah/i] },
+      { slug: "homestead", patterns: [/homestead/i] },
+    ]
+    const sources = await ctx.db.query("sources").collect()
+    let patched = 0
+    for (const s of sources) {
+      if (s.neighborhoodSlugs && s.neighborhoodSlugs.length > 0) continue
+      const haystack = `${s.name} ${s.url}`
+      const hits: Array<string> = []
+      for (const rule of RULES) {
+        if (rule.patterns.some((re) => re.test(haystack))) {
+          hits.push(rule.slug)
+        }
+      }
+      if (hits.length === 0) continue
+      await ctx.db.patch(s._id, { neighborhoodSlugs: hits })
+      patched += 1
+    }
+    return { scanned: sources.length, patched }
+  },
+})
+
+// Hard-deletes sources whose last fetch hit a permanent-failure
+// pattern: 404 / 410 / connection refused / SSL cert mismatch. These
+// URLs will never come back; keeping them around just clutters the
+// admin page and wastes fetch ticks. Also nukes the source's
+// ingestedItems so the table doesn't carry dead links forever.
+//
+// Run: `npx convex run migrations:deleteDeadSources`
+export const deleteDeadSources = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const PERMANENT_PATTERNS = [
+      /→ 40[34]\b/,
+      /\b410\b/,
+      /\b520\b/,
+      /SSL routines:OPENSSL_internal:CERTIFICATE_VERIFY_FAILED/i,
+      /Hostname mismatch/i,
+      /name resolution|dns error|getaddrinfo/i,
+      /connection refused|ECONNREFUSED/i,
+    ]
+    const sources = await ctx.db.query("sources").collect()
+    let deletedSources = 0
+    let deletedItems = 0
+    for (const s of sources) {
+      const err = s.lastFetchError ?? ""
+      const isDead = PERMANENT_PATTERNS.some((re) => re.test(err))
+      if (!isDead) continue
+      // Drain ingestedItems first — capped per pass so a huge source
+      // doesn't blow the transaction. The migration can be re-run if it
+      // truncates here; the source row stays in place until empty.
+      const items = await ctx.db
+        .query("ingestedItems")
+        .withIndex("by_source_external", (q) => q.eq("sourceId", s._id))
+        .take(500)
+      for (const it of items) await ctx.db.delete(it._id)
+      deletedItems += items.length
+      if (items.length < 500) {
+        await ctx.db.delete(s._id)
+        deletedSources += 1
+      }
+    }
+    return { deletedSources, deletedItems }
+  },
+})
+
 // Re-points source rows by URL when seed.ts sectionSlugs change.
 // installExpansionSources is URL-idempotent (skips inserts when the
 // URL already exists), so the only way to fix a wrong sectionIds[]
