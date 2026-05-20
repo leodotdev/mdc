@@ -215,29 +215,12 @@ function SourcesPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <header className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="font-sans text-3xl font-semibold tracking-[-0.02em]">
-            Sources
-          </h1>
-          <p className="meta mt-1">
-            Defined in <code className="font-mono">convex/seed.ts</code> — run{" "}
-            <code className="font-mono">npx convex run seed:run</code> after
-            editing. Sources are grouped by primary section.
-          </p>
-          {/* Quick counts strip */}
-          <div className="meta mt-2 flex flex-wrap items-center gap-x-3 text-xs">
-            <span>
-              {totals.all} total
-            </span>
-            <span className="text-primary">● {totals.working} working</span>
-            <span style={{ color: "#facc15" }}>● {totals.silent} silent</span>
-            <span className="text-destructive">● {totals.errored} errored</span>
-            <span className="text-muted-foreground">● {totals.untested} untested</span>
-          </div>
-        </div>
-        {someSelected ? (
-          <div className="flex items-center gap-2 rounded-md border bg-card px-3 py-1.5 animate-in fade-in-0 slide-in-from-top-1 duration-200 ease-out">
+      {/* Floating bulk-action bar — sticky at the top of the viewport
+          when any rows are selected. Pinned z-40 with a backdrop blur
+          so it sits cleanly over content the user is scrolling past. */}
+      {someSelected ? (
+        <div className="sticky top-0 z-40 -mx-4 sm:-mx-6 lg:-mx-8 xl:-mx-12 border-b border-foreground/10 bg-background/85 px-4 py-2 backdrop-blur supports-[backdrop-filter]:bg-background/65 sm:px-6 lg:px-8 xl:px-12">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="meta text-xs">{selected.size} selected</span>
             <Button
               size="sm"
@@ -272,7 +255,30 @@ function SourcesPage() {
               Clear
             </Button>
           </div>
-        ) : null}
+        </div>
+      ) : null}
+
+      <header className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="font-sans text-3xl font-semibold tracking-[-0.02em]">
+            Sources
+          </h1>
+          <p className="meta mt-1">
+            Defined in <code className="font-mono">convex/seed.ts</code> — run{" "}
+            <code className="font-mono">npx convex run seed:run</code> after
+            editing. Sources are grouped by primary section.
+          </p>
+          {/* Quick counts strip */}
+          <div className="meta mt-2 flex flex-wrap items-center gap-x-3 text-xs">
+            <span>
+              {totals.all} total
+            </span>
+            <span className="text-primary">● {totals.working} working</span>
+            <span style={{ color: "#facc15" }}>● {totals.silent} silent</span>
+            <span className="text-destructive">● {totals.errored} errored</span>
+            <span className="text-muted-foreground">● {totals.untested} untested</span>
+          </div>
+        </div>
       </header>
 
       {/* Filters */}

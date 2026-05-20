@@ -138,52 +138,65 @@ export function EventsMap({
   }, [placed, visibleIds])
 
   return (
-    <div className="flex flex-col gap-6">
-      <div
-        ref={mapRef}
-        className="h-[60vh] w-full overflow-hidden rounded-md border border-foreground/15"
-      />
+    // Full-bleed map view: list anchors to the left at normal page
+    // width; the map breaks out to the right viewport edge. Stacks
+    // vertically on mobile (map first, then list) since side-by-side
+    // doesn't fit narrow screens.
+    <div className="full-bleed !px-0">
+      <div className="flex flex-col gap-0 md:flex-row md:gap-0">
+        {/* List column — fixed width on desktop so the map gets the
+            rest of the viewport. Lives in the page padding for
+            readability. */}
+        {placed.length === 0 ? null : (
+          <aside className="px-4 md:w-80 md:shrink-0 md:overflow-y-auto md:px-6 md:py-4">
+            <h3 className="kicker mb-3 text-foreground">
+              {visibleEvents.length} of {placed.length} on the map
+            </h3>
+            <ul className="flex flex-col divide-y divide-foreground/15">
+              {visibleEvents.slice(0, 40).map((e) => (
+                <li key={e._id}>
+                  <Link
+                    to="/event/$slug"
+                    params={{ slug: e.slug ?? "" }}
+                    onClick={(ev) => openInDrawer(e.slug ?? "", ev)}
+                    className={cn(
+                      "group/event-row block py-3 transition-colors hover:bg-muted/30",
+                    )}
+                  >
+                    <div className="font-heading text-sm font-semibold tracking-tight md:text-base">
+                      {e.title}
+                    </div>
+                    <div className="font-sans mt-0.5 flex flex-wrap gap-x-2 text-xs text-muted-foreground">
+                      {e.section ? <span>{e.section.name}</span> : null}
+                      {e.locationName ? <span>· {e.locationName}</span> : null}
+                      <span>
+                        ·{" "}
+                        {new Intl.DateTimeFormat("en-US", {
+                          month: "short",
+                          day: "numeric",
+                        }).format(e.startsAt)}
+                      </span>
+                    </div>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </aside>
+        )}
+        {/* Map column — fills the remaining viewport width. Tall: 80vh
+            so the user can pan within the visible scroll viewport
+            without losing the page chrome. */}
+        <div
+          ref={mapRef}
+          className="order-first h-[60vh] w-full overflow-hidden border-y border-foreground/15 md:order-none md:h-[80vh] md:flex-1 md:border-l md:border-y-0"
+        />
+      </div>
       {placed.length === 0 ? (
-        <div className="font-editorial mx-auto mt-2 max-w-2xl text-center text-base text-muted-foreground">
+        <div className="font-editorial mx-auto mt-6 max-w-2xl text-center text-base text-muted-foreground">
           No events with locations yet. As more iCal sources flow in,
           pins fill out.
         </div>
-      ) : (
-        <div>
-          <h3 className="kicker mb-3 text-foreground">
-            {visibleEvents.length} of {placed.length} on the map
-          </h3>
-          <ul className="flex flex-col divide-y divide-foreground/15">
-            {visibleEvents.slice(0, 40).map((e) => (
-              <li key={e._id}>
-                <Link
-                  to="/event/$slug"
-                  params={{ slug: e.slug ?? "" }}
-                  onClick={(ev) => openInDrawer(e.slug ?? "", ev)}
-                  className={cn(
-                    "group/event-row block py-3 transition-colors hover:bg-muted/30",
-                  )}
-                >
-                  <div className="font-heading text-sm font-semibold tracking-tight md:text-base">
-                    {e.title}
-                  </div>
-                  <div className="font-sans mt-0.5 flex flex-wrap gap-x-2 text-xs text-muted-foreground">
-                    {e.section ? <span>{e.section.name}</span> : null}
-                    {e.locationName ? <span>· {e.locationName}</span> : null}
-                    <span>
-                      ·{" "}
-                      {new Intl.DateTimeFormat("en-US", {
-                        month: "short",
-                        day: "numeric",
-                      }).format(e.startsAt)}
-                    </span>
-                  </div>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      ) : null}
     </div>
   )
 }

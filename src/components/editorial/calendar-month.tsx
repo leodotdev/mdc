@@ -112,13 +112,10 @@ export function CalendarMonth({ events, yearMonth }: Props) {
   const todayKey = dayKey(Date.now())
 
   return (
-    // Full-bleed wrapper: break out of the route's container-page
-    // padding so the grid spans edge-to-edge. The negative margins
-    // match the container's responsive paddings.
-    <div className="-mx-4 sm:-mx-6 lg:-mx-8 xl:-mx-12">
+    <div>
       {/* Header band — month title + prev/next/today. Stays inside
           the page padding so the controls don't fly off-screen. */}
-      <div className="mx-4 sm:mx-6 lg:mx-8 xl:mx-12 mb-3 flex items-center justify-between">
+      <div className="mb-3 flex items-center justify-between">
         <h2 className="font-heading text-2xl font-semibold tracking-tight md:text-3xl">
           {title}
         </h2>
@@ -149,6 +146,10 @@ export function CalendarMonth({ events, yearMonth }: Props) {
         </div>
       </div>
 
+      {/* Full-bleed wrapper — only the grid itself spans the viewport.
+          Header above stays inside container-page so the prev/next
+          controls don't fly off-screen. */}
+      <div className="full-bleed !px-0">
       {/* Weekday header — sticky band that pins to the viewport top
           as the user scrolls through the calendar. */}
       <div className="sticky top-0 z-20 grid grid-cols-7 border-y border-foreground/15 bg-background [&>*:not(:nth-child(7n))]:border-r [&>*]:border-foreground/15">
@@ -215,6 +216,7 @@ export function CalendarMonth({ events, yearMonth }: Props) {
           </div>
         </div>
       ))}
+      </div>
     </div>
   )
 }
