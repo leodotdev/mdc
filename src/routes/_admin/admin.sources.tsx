@@ -83,6 +83,32 @@ function SourcesPage() {
     return map
   }, [sectionsQuery.data])
 
+  // Build the neighborhood filter options as the UNION of the canonical
+  // NEIGHBORHOODS list AND every slug actually tagged on a source. The
+  // migration uses Miami-Dade municipality slugs (doral, hialeah,
+  // aventura, little-havana, allapattah, overtown...) that aren't in
+  // the canonical 10-item list — without this union, filtering by
+  // those tags is impossible because they never appear in the dropdown.
+  const hoodOptions = useMemo(() => {
+    const seen = new Map<string, string>() // slug → display
+    for (const n of NEIGHBORHOODS) seen.set(n.slug, n.name)
+    for (const s of sources.data ?? []) {
+      for (const slug of s.neighborhoodSlugs ?? []) {
+        if (!seen.has(slug)) {
+          // Title-case the slug for display ("little-havana" → "Little Havana").
+          const display = slug
+            .split("-")
+            .map((w) => w[0].toUpperCase() + w.slice(1))
+            .join(" ")
+          seen.set(slug, display)
+        }
+      }
+    }
+    return Array.from(seen.entries())
+      .map(([slug, name]) => ({ slug, name }))
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }, [sources.data])
+
   // Apply filters
   const filtered = useMemo(() => {
     const rows = sources.data ?? []
@@ -281,7 +307,7 @@ function SourcesPage() {
           options={[
             { value: "all", label: "All" },
             { value: "_none", label: "(Untagged / citywide)" },
-            ...NEIGHBORHOODS.map((n) => ({ value: n.slug, label: n.name })),
+            ...hoodOptions.map((n) => ({ value: n.slug, label: n.name })),
           ]}
         />
         <span className="meta ml-auto text-xs">
@@ -401,7 +427,7 @@ function SourcesPage() {
                                   variant="outline"
                                   className="text-[0.6rem]"
                                 >
-                                  {NEIGHBORHOODS.find((n) => n.slug === h)
+                                  {hoodOptions.find((n) => n.slug === h)
                                     ?.name ?? h}
                                 </Badge>
                               ))
