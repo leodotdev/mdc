@@ -6,7 +6,25 @@ import type { Map as MapLibreMap } from "maplibre-gl"
 import "maplibre-gl/dist/maplibre-gl.css"
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN as string | undefined
-const MAP_STYLE = `https://api.mapbox.com/styles/v1/mapbox/light-v11?access_token=${MAPBOX_TOKEN ?? ""}`
+// Mapbox light style as RASTER tiles — maplibre-gl can't parse
+// Mapbox's vector style JSON (it uses Mapbox-only spec extensions),
+// so we let Mapbox rasterize server-side. See events-map.tsx for
+// the longer note.
+const MAP_STYLE: maplibregl.StyleSpecification = {
+  version: 8 as const,
+  sources: {
+    mapbox: {
+      type: "raster" as const,
+      tiles: [
+        `https://api.mapbox.com/styles/v1/mapbox/light-v11/tiles/{z}/{x}/{y}@2x?access_token=${MAPBOX_TOKEN ?? ""}`,
+      ],
+      tileSize: 512,
+      attribution:
+        '© <a href="https://www.mapbox.com/about/maps/">Mapbox</a> © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    },
+  },
+  layers: [{ id: "mapbox", type: "raster" as const, source: "mapbox" }],
+}
 
 // Single-pin map for one event's location. Drops a section-accent dot
 // at (lng, lat), centers the viewport on it at a venue-scale zoom, and

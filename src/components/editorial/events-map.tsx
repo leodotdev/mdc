@@ -14,11 +14,28 @@ const DEFAULT_CENTER: [number, number] = [-80.1918, 25.7617]
 const DEFAULT_ZOOM = 11
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN as string | undefined
-// Mapbox light style — clean, low-contrast basemap that lets the
-// section-tinted accent dots carry the visual weight. Token is a
-// public pk.* (URL-allowlisted in the Mapbox dashboard), so it's
-// safe to bundle into the client.
-const MAP_STYLE = `https://api.mapbox.com/styles/v1/mapbox/light-v11?access_token=${MAPBOX_TOKEN ?? ""}`
+// Mapbox light style — but served as RASTER tiles via Mapbox's
+// static-tile endpoint, not the vector style JSON. maplibre-gl can't
+// parse Mapbox's modern vector style spec (it uses Mapbox-only
+// properties like `terrain`, custom `light` blocks, etc.), so we let
+// Mapbox rasterize the style server-side and just stream the resulting
+// PNGs. Token is a public pk.* (URL-allowlisted in the Mapbox
+// dashboard), so it's safe to bundle.
+const MAP_STYLE: maplibregl.StyleSpecification = {
+  version: 8 as const,
+  sources: {
+    mapbox: {
+      type: "raster" as const,
+      tiles: [
+        `https://api.mapbox.com/styles/v1/mapbox/light-v11/tiles/{z}/{x}/{y}@2x?access_token=${MAPBOX_TOKEN ?? ""}`,
+      ],
+      tileSize: 512,
+      attribution:
+        '© <a href="https://www.mapbox.com/about/maps/">Mapbox</a> © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    },
+  },
+  layers: [{ id: "mapbox", type: "raster" as const, source: "mapbox" }],
+}
 
 // Map view for the View Mode pivot. Takes the hydrated event shape
 // (EventWithRelations) and pins each event with lat/lng populated. The
