@@ -1,6 +1,7 @@
 import { fetchBluesky } from "./bluesky"
 import { fetchEventsHtml } from "./eventsHtml"
 import { fetchIcs } from "./ics"
+import { fetchMiamiNewTimes } from "./miamiNewTimes"
 import { fetchReddit } from "./reddit"
 import { fetchRss } from "./rss"
 import { fetchSitemapEvents } from "./sitemapEvents"
@@ -36,6 +37,8 @@ export async function fetchItems(
       return await fetchEventsHtml(source)
     case "sitemap-events":
       return await fetchSitemapEvents(source)
+    case "miami-new-times":
+      return await fetchMiamiNewTimes(source)
     case "data":
       // `data` source rows are vestigial — they used to drive the
       // Miami in Numbers metrics catalog (deleted with the

@@ -179,6 +179,7 @@ export default defineSchema({
       v.literal("ics"),
       v.literal("events-html"),
       v.literal("sitemap-events"),
+      v.literal("miami-new-times"),
       v.literal("data"),
     ),
     url: v.string(),

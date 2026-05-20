@@ -1845,6 +1845,7 @@ type ExpansionFeed = {
     | "ics"
     | "events-html"
     | "sitemap-events"
+    | "miami-new-times"
   url: string
   sectionSlugs: ReadonlyArray<string>
   /** Optional Miami neighborhood slugs this source serves. */
@@ -4528,6 +4529,32 @@ const EXPANSION_FEEDS_V9: ReadonlyArray<ExpansionFeed> = [
 export const seedExpansionSourcesV9 = internalMutation({
   args: {},
   handler: async (ctx) => installExpansionSources(ctx, EXPANSION_FEEDS_V9),
+})
+
+// =====================================================================
+// Phase-10 — Miami New Times event-search scraper.
+//
+// MNT publishes a hand-curated event roster at /eventsearch/ but
+// doesn't expose JSON-LD anywhere. Custom adapter `miami-new-times`
+// parses their CSS-classed cards directly. See
+// convex/lib/adapters/miamiNewTimes.ts for the scraping detail.
+//
+// Run: `npx convex run seed:seedExpansionSourcesV10`
+// =====================================================================
+const EXPANSION_FEEDS_V10: ReadonlyArray<ExpansionFeed> = [
+  {
+    name: "Miami New Times — event search",
+    type: "miami-new-times",
+    url: "https://www.miaminewtimes.com/eventsearch/",
+    // Citywide curator — events span every neighborhood.
+    sectionSlugs: ["arts", "music", "food"],
+    pollMinutes: 240,
+  },
+]
+
+export const seedExpansionSourcesV10 = internalMutation({
+  args: {},
+  handler: async (ctx) => installExpansionSources(ctx, EXPANSION_FEEDS_V10),
 })
 
 // One-shot pruner — flips `enabled: false` on sources whose coverage

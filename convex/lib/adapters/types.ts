@@ -41,6 +41,7 @@ export type SourceForAdapter = {
     | "ics"
     | "events-html"
     | "sitemap-events"
+    | "miami-new-times"
     | "data"
   url: string
   config?: unknown
