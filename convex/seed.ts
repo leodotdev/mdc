@@ -4309,6 +4309,227 @@ export const seedExpansionSourcesV8 = internalMutation({
   handler: async (ctx) => installExpansionSources(ctx, EXPANSION_FEEDS_V8),
 })
 
+// =====================================================================
+// Phase-9 expansion seed — neighborhood-targeted depth.
+//
+// Coverage check showed the working source pool was clustered in
+// Coral Gables + Miami Beach + South Miami; Wynwood, Brickell,
+// Downtown, Little Havana, Doral, Hialeah, Overtown, Allapattah were
+// near-empty. This batch adds calendars in those zones and tags every
+// entry with neighborhoodSlugs so the admin grouping reflects coverage.
+//
+// Every URL uses an event-rich pattern (?ical=1, /events/, /calendar/)
+// so the source-pruning allowlist passes. The deterministic ingest
+// pipeline will pick up whatever exposes structured event data; the
+// "silent" admin badge will flag the rest for follow-up.
+//
+// Run: `npx convex run seed:seedExpansionSourcesV9`
+// =====================================================================
+const EXPANSION_FEEDS_V9: ReadonlyArray<ExpansionFeed> = [
+  // ─── Brickell + Downtown ───
+  {
+    name: "The Underline — events (iCal)",
+    type: "ics",
+    url: "https://www.theunderline.org/?ical=1",
+    sectionSlugs: ["local", "arts"],
+    neighborhoodSlugs: ["brickell", "downtown", "coconut-grove"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Bayfront Park — events (iCal)",
+    type: "ics",
+    url: "https://www.bayfrontparkmiami.com/events/?ical=1",
+    sectionSlugs: ["music", "arts", "local"],
+    neighborhoodSlugs: ["downtown"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Olympia Theater — events (iCal)",
+    type: "ics",
+    url: "https://www.olympiatheater.org/?ical=1",
+    sectionSlugs: ["theater", "music"],
+    neighborhoodSlugs: ["downtown"],
+    pollMinutes: 360,
+  },
+  {
+    name: "James L. Knight Center — events page",
+    type: "events-html",
+    url: "https://www.jlkc.com/events",
+    sectionSlugs: ["music", "theater"],
+    neighborhoodSlugs: ["downtown"],
+    pollMinutes: 360,
+  },
+
+  // ─── Wynwood + Design District ───
+  {
+    name: "Mana Wynwood — events (iCal)",
+    type: "ics",
+    url: "https://manawynwood.com/?ical=1",
+    sectionSlugs: ["arts", "music"],
+    neighborhoodSlugs: ["wynwood-design-district"],
+    pollMinutes: 360,
+  },
+  {
+    name: "The Citadel Miami — events (iCal)",
+    type: "ics",
+    url: "https://thecitadelmiami.com/?ical=1",
+    sectionSlugs: ["food", "local"],
+    neighborhoodSlugs: ["wynwood-design-district"],
+    pollMinutes: 360,
+  },
+  {
+    name: "O Cinema (Wynwood) — events (iCal)",
+    type: "ics",
+    url: "https://ocinema.org/?ical=1",
+    sectionSlugs: ["film", "arts"],
+    neighborhoodSlugs: ["wynwood-design-district"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Rubell Museum (Allapattah) — events page",
+    type: "events-html",
+    url: "https://rubellmuseum.org/events",
+    sectionSlugs: ["museums", "arts"],
+    neighborhoodSlugs: ["allapattah"],
+    pollMinutes: 360,
+  },
+  {
+    name: "El Espacio 23 — events page",
+    type: "events-html",
+    url: "https://elespacio23.com/events",
+    sectionSlugs: ["museums", "arts"],
+    neighborhoodSlugs: ["allapattah"],
+    pollMinutes: 360,
+  },
+
+  // ─── Little Havana / Overtown ───
+  {
+    name: "Tower Theater Miami — events (iCal)",
+    type: "ics",
+    url: "https://towertheatermiami.org/?ical=1",
+    sectionSlugs: ["film", "arts"],
+    neighborhoodSlugs: ["little-havana"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Cubaocho Museum & Performing Arts — events page",
+    type: "events-html",
+    url: "https://www.cubaocho.com/events",
+    sectionSlugs: ["music", "arts", "museums"],
+    neighborhoodSlugs: ["little-havana"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Calle Ocho — events page",
+    type: "events-html",
+    url: "https://carnavalmiami.com/events/",
+    sectionSlugs: ["music", "local"],
+    neighborhoodSlugs: ["little-havana"],
+    pollMinutes: 720,
+  },
+  {
+    name: "Lyric Theater (Overtown) — events page",
+    type: "events-html",
+    url: "https://lyrictheatermiami.com/events",
+    sectionSlugs: ["theater", "music", "history"],
+    neighborhoodSlugs: ["overtown"],
+    pollMinutes: 360,
+  },
+
+  // ─── Coconut Grove ───
+  {
+    name: "Coconut Grove Sailing Club — events (iCal)",
+    type: "ics",
+    url: "https://cgsc.org/?ical=1",
+    sectionSlugs: ["local"],
+    neighborhoodSlugs: ["coconut-grove"],
+    pollMinutes: 720,
+  },
+
+  // ─── Doral / Hialeah / Outlying cities ───
+  {
+    name: "CityPlace Doral — events page",
+    type: "events-html",
+    url: "https://cityplacedoral.com/events/",
+    sectionSlugs: ["local", "food"],
+    neighborhoodSlugs: ["doral"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Doral Botanico — events page",
+    type: "events-html",
+    url: "https://www.doralbotanicalpark.com/events",
+    sectionSlugs: ["nature", "local"],
+    neighborhoodSlugs: ["doral"],
+    pollMinutes: 720,
+  },
+  {
+    name: "Hialeah Park Racing — events page",
+    type: "events-html",
+    url: "https://hialeahparkracing.com/events",
+    sectionSlugs: ["sports", "local"],
+    neighborhoodSlugs: ["hialeah"],
+    pollMinutes: 720,
+  },
+  {
+    name: "Pinecrest Gardens — events (iCal)",
+    type: "ics",
+    url: "https://www.pinecrestgardens.org/?ical=1",
+    sectionSlugs: ["nature", "music", "arts"],
+    neighborhoodSlugs: ["pinecrest"],
+    pollMinutes: 240,
+  },
+
+  // ─── Citywide / civic + cultural ───
+  {
+    name: "The Miami Foundation — events (iCal)",
+    type: "ics",
+    url: "https://miamifoundation.org/?ical=1",
+    sectionSlugs: ["business", "local"],
+    pollMinutes: 720,
+  },
+  {
+    name: "O, Miami Poetry Festival — events page",
+    type: "events-html",
+    url: "https://omiami.org/events/",
+    sectionSlugs: ["books", "arts"],
+    pollMinutes: 720,
+  },
+  {
+    name: "Soul of Miami — events page",
+    type: "events-html",
+    url: "https://www.soulofmiami.org/events/",
+    sectionSlugs: ["arts", "music", "local"],
+    pollMinutes: 240,
+  },
+  {
+    name: "Miami New Times — calendar",
+    type: "events-html",
+    url: "https://www.miaminewtimes.com/calendar",
+    sectionSlugs: ["arts", "music", "food"],
+    pollMinutes: 360,
+  },
+  {
+    name: "Time Out Miami — things to do",
+    type: "events-html",
+    url: "https://www.timeout.com/miami/things-to-do",
+    sectionSlugs: ["arts", "local"],
+    pollMinutes: 720,
+  },
+  {
+    name: "Bandsintown — Miami events",
+    type: "events-html",
+    url: "https://www.bandsintown.com/c/miami-fl",
+    sectionSlugs: ["music"],
+    pollMinutes: 360,
+  },
+]
+
+export const seedExpansionSourcesV9 = internalMutation({
+  args: {},
+  handler: async (ctx) => installExpansionSources(ctx, EXPANSION_FEEDS_V9),
+})
+
 // One-shot pruner — flips `enabled: false` on sources whose coverage
 // is statewide or national, not Miami-specific. The LLM was already
 // filtering them out at draft time but they still cost input tokens
