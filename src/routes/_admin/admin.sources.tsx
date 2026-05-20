@@ -2,7 +2,7 @@ import { convexQuery } from "@convex-dev/react-query"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute } from "@tanstack/react-router"
 import { useConvex } from "convex/react"
-import { Loader2, Power, RefreshCw } from "lucide-react"
+import { ExternalLink, Loader2, Power, RefreshCw } from "lucide-react"
 import { useMemo, useState } from "react"
 
 import { api } from "../../../convex/_generated/api"
@@ -465,6 +465,23 @@ function SourcesPage() {
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="flex items-center justify-end gap-1">
+                            {s.url.startsWith("http") ? (
+                              <Button
+                                size="icon-sm"
+                                variant="ghost"
+                                aria-label="Open source in new tab"
+                                title="Open source"
+                                render={
+                                  <a
+                                    href={s.url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                  />
+                                }
+                              >
+                                <ExternalLink />
+                              </Button>
+                            ) : null}
                             <Button
                               size="icon-sm"
                               variant="ghost"
