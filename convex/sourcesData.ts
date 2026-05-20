@@ -105,7 +105,6 @@ export const create = mutation({
     sectionIds: v.array(v.id("sections")),
     enabled: v.boolean(),
     config: v.optional(v.any()),
-    neighborhoodSlugs: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     await requireEditor(ctx)

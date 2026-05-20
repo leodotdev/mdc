@@ -14,7 +14,6 @@ import { useMemo, useState } from "react"
 
 import { api } from "../../../convex/_generated/api"
 import type { Id } from "../../../convex/_generated/dataModel"
-import { NEIGHBORHOODS } from "../../../convex/lib/neighborhoods"
 import { TableLoadingRows } from "@/components/editorial/story-card-skeleton"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -80,7 +79,6 @@ function SourcesPage() {
   const [statusFilter, setStatusFilter] =
     useState<SourceState | "all">("all")
   const [sectionFilter, setSectionFilter] = useState<string>("all")
-  const [hoodFilter, setHoodFilter] = useState<string>("all")
   const [search, setSearch] = useState("")
 
   const sectionById = useMemo(() => {
@@ -90,32 +88,6 @@ function SourcesPage() {
     }
     return map
   }, [sectionsQuery.data])
-
-  // Build the neighborhood filter options as the UNION of the canonical
-  // NEIGHBORHOODS list AND every slug actually tagged on a source. The
-  // migration uses Miami-Dade municipality slugs (doral, hialeah,
-  // aventura, little-havana, allapattah, overtown...) that aren't in
-  // the canonical 10-item list — without this union, filtering by
-  // those tags is impossible because they never appear in the dropdown.
-  const hoodOptions = useMemo(() => {
-    const seen = new Map<string, string>() // slug → display
-    for (const n of NEIGHBORHOODS) seen.set(n.slug, n.name)
-    for (const s of sources.data ?? []) {
-      for (const slug of s.neighborhoodSlugs ?? []) {
-        if (!seen.has(slug)) {
-          // Title-case the slug for display ("little-havana" → "Little Havana").
-          const display = slug
-            .split("-")
-            .map((w) => w[0].toUpperCase() + w.slice(1))
-            .join(" ")
-          seen.set(slug, display)
-        }
-      }
-    }
-    return Array.from(seen.entries())
-      .map(([slug, name]) => ({ slug, name }))
-      .sort((a, b) => a.name.localeCompare(b.name))
-  }, [sources.data])
 
   // Apply filters
   const filtered = useMemo(() => {
@@ -128,18 +100,13 @@ function SourcesPage() {
         const primary = s.sectionIds[0] as unknown as string | undefined
         if (sectionById.get(primary ?? "")?.slug !== sectionFilter) return false
       }
-      if (hoodFilter !== "all") {
-        if (hoodFilter === "_none") {
-          if (s.neighborhoodSlugs && s.neighborhoodSlugs.length > 0) return false
-        } else if (!s.neighborhoodSlugs?.includes(hoodFilter)) return false
-      }
       if (needle) {
         const hay = `${s.name} ${s.url}`.toLowerCase()
         if (!hay.includes(needle)) return false
       }
       return true
     })
-  }, [sources.data, statusFilter, sectionFilter, hoodFilter, search, sectionById])
+  }, [sources.data, statusFilter, sectionFilter, search, sectionById])
 
   // Group filtered rows by primary section, sorted alphabetically by
   // section name. Sources with no primary section land under "Other".
@@ -348,16 +315,6 @@ function SourcesPage() {
               .map((s) => ({ value: s.slug, label: s.name })),
           ]}
         />
-        <FilterSelect
-          label="Neighborhood"
-          value={hoodFilter}
-          onChange={setHoodFilter}
-          options={[
-            { value: "all", label: "All" },
-            { value: "_none", label: "(Untagged / citywide)" },
-            ...hoodOptions.map((n) => ({ value: n.slug, label: n.name })),
-          ]}
-        />
         <span className="meta ml-auto text-xs">
           Showing {filtered.length} of {totals.all}
         </span>
@@ -404,9 +361,6 @@ function SourcesPage() {
                     <TableHead className="w-8" />
                     <TableHead>Source</TableHead>
                     <TableHead className="hidden md:table-cell">Type</TableHead>
-                    <TableHead className="hidden lg:table-cell">
-                      Neighborhood
-                    </TableHead>
                     <TableHead className="hidden md:table-cell">Last fetch</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
@@ -421,7 +375,6 @@ function SourcesPage() {
                       setEnabled.isPending &&
                       setEnabled.variables?.sourceId === s._id
                     const state = classify(s)
-                    const hoods = s.neighborhoodSlugs ?? []
                     return (
                       <TableRow
                         key={s._id}
@@ -463,24 +416,6 @@ function SourcesPage() {
                           <Badge variant="outline" className="text-[0.65rem]">
                             {s.type}
                           </Badge>
-                        </TableCell>
-                        <TableCell className="hidden lg:table-cell">
-                          <div className="flex flex-wrap gap-1">
-                            {hoods.length === 0 ? (
-                              <span className="meta text-xs">—</span>
-                            ) : (
-                              hoods.map((h) => (
-                                <Badge
-                                  key={h}
-                                  variant="outline"
-                                  className="text-[0.6rem]"
-                                >
-                                  {hoodOptions.find((n) => n.slug === h)
-                                    ?.name ?? h}
-                                </Badge>
-                              ))
-                            )}
-                          </div>
                         </TableCell>
                         <TableCell className="hidden md:table-cell meta text-xs tabular-nums">
                           {s.lastFetchedAt ? (
@@ -650,45 +585,6 @@ function inferAdapterType(url: string): AdapterType {
   return "events-html"
 }
 
-// URL → most-likely Miami neighborhood. Mirrors the rules in the
-// `forceCategorizeSources` migration so the form's default matches
-// what we'd backfill. Returns "" when no obvious hit; editor can
-// pick from the dropdown manually.
-const NEIGHBORHOOD_HINTS: ReadonlyArray<{
-  match: RegExp
-  slug: string
-}> = [
-  { match: /miamifoundation|arshtcenter|olympiatheater|bayfrontpark|jlkc|frostscience|miamidda|miamigov\b/i, slug: "downtown" },
-  { match: /theunderline|brickell/i, slug: "brickell" },
-  { match: /icamiami|ocinema|thecitadel|manawynwood|wynwoodwalls|wynwoodmiami|\bgramps\b|thelabmiami|bacfl|lagniappemia|endeavormiami/i, slug: "wynwood-design-district" },
-  { match: /rubellmuseum|elespacio23/i, slug: "allapattah" },
-  { match: /youngarts/i, slug: "edgewater" },
-  { match: /towertheater|carnavalmiami|cubaocho|ballandchain/i, slug: "little-havana" },
-  { match: /lyrictheater/i, slug: "overtown" },
-  { match: /thebass|nws\.edu|miaminewdrama|northbeachbandshell|wolfsonian|miamibeachfl|emergeamericas|timeoutmarket/i, slug: "miami-beach" },
-  { match: /balharbour/i, slug: "bal-harbour" },
-  { match: /townofsurfsidefl|\bsurfside\b/i, slug: "surfside" },
-  { match: /sibfl|sunny.?isles/i, slug: "sunny-isles-beach" },
-  { match: /biltmorehotel|coralgablesmuseum|gablestage|actorsplayhouse|booksandbooks|gablescinema|fairchildgarden|lowe\.miami\.edu|miamihurricanes|events\.miami\.edu|coralgables\.com/i, slug: "coral-gables" },
-  { match: /vizcaya|deeringestate|cgsc|coconutgrove/i, slug: "coconut-grove" },
-  { match: /keybiscayne/i, slug: "key-biscayne" },
-  { match: /smdcac|southmiamifl/i, slug: "south-miami" },
-  { match: /pinecrestgardens|pinecrest-fl/i, slug: "pinecrest" },
-  { match: /miamishoresvillage|barry\.edu|mtcmiami/i, slug: "miami-shores" },
-  { match: /cityofaventura/i, slug: "aventura" },
-  { match: /cityofhomestead/i, slug: "homestead" },
-  { match: /cityplacedoral|doralbotanical|cityofdoral/i, slug: "doral" },
-  { match: /hialeahpark/i, slug: "hialeah" },
-  { match: /northmiamifl/i, slug: "north-miami" },
-  { match: /citynmb/i, slug: "north-miami-beach" },
-  { match: /miamisprings-fl/i, slug: "miami-springs" },
-]
-function inferNeighborhood(url: string): string {
-  for (const rule of NEIGHBORHOOD_HINTS) {
-    if (rule.match.test(url)) return rule.slug
-  }
-  return ""
-}
 
 function AddSourceForm({
   sections,
@@ -708,18 +604,14 @@ function AddSourceForm({
   const [name, setName] = useState("")
   const [type, setType] = useState<AdapterType>("events-html")
   const [sectionId, setSectionId] = useState<string>("")
-  const [hood, setHood] = useState<string>("")
   const [typeOverridden, setTypeOverridden] = useState(false)
-  const [hoodOverridden, setHoodOverridden] = useState(false)
 
   // Top-level sections only (subsections inherit a parent's adapter
   // logic; routing to a sub-section is the desk's job at ingest time).
   const topLevel = sections.filter((s) => !s.parentId)
 
-  // Default section once sections load.
-  if (!sectionId && topLevel.length > 0) {
-    setSectionId(topLevel[0]._id)
-  }
+  // (no default — empty `sectionId` means "any section / auto-route".
+  // Editor explicitly picks a section to pin.)
 
   const add = useMutation({
     mutationFn: async () => {
@@ -727,17 +619,18 @@ function AddSourceForm({
         name: name.trim() || url,
         type,
         url: url.trim(),
-        sectionIds: [sectionId as Id<"sections">],
+        // Empty `sectionId` ⇒ no source-level section pin. Each
+        // event's section gets picked at enrichment time by Haiku
+        // based on its content. Useful for citywide aggregators
+        // (Soul of Miami, MNT, Eventbrite-ish feeds).
+        sectionIds: sectionId ? [sectionId as Id<"sections">] : [],
         enabled: true,
-        neighborhoodSlugs: hood ? [hood] : undefined,
       })
     },
     onSuccess: () => {
       setUrl("")
       setName("")
-      setHood("")
       setTypeOverridden(false)
-      setHoodOverridden(false)
       onAdded()
     },
   })
@@ -773,7 +666,6 @@ function AddSourceForm({
             const v = e.target.value
             setUrl(v)
             if (!typeOverridden) setType(inferAdapterType(v))
-            if (!hoodOverridden) setHood(inferNeighborhood(v))
           }}
           className="rounded-md border bg-background px-2 py-1.5 text-sm"
         />
@@ -811,27 +703,10 @@ function AddSourceForm({
           onChange={(e) => setSectionId(e.target.value)}
           className="rounded-md border bg-background px-2 py-1.5 text-sm"
         >
+          <option value="">(any — auto-route)</option>
           {topLevel.map((s) => (
             <option key={s._id} value={s._id}>
               {s.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="flex flex-col gap-1">
-        <span className="meta text-xs">Neighborhood</span>
-        <select
-          value={hood}
-          onChange={(e) => {
-            setHood(e.target.value)
-            setHoodOverridden(true)
-          }}
-          className="rounded-md border bg-background px-2 py-1.5 text-sm"
-        >
-          <option value="">(citywide)</option>
-          {NEIGHBORHOODS.map((n) => (
-            <option key={n.slug} value={n.slug}>
-              {n.name}
             </option>
           ))}
         </select>
