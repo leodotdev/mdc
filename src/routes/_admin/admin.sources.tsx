@@ -81,6 +81,7 @@ function SourcesPage() {
     useState<SourceState | "all">("all")
   const [sectionFilter, setSectionFilter] = useState<string>("all")
   const [hoodFilter, setHoodFilter] = useState<string>("all")
+  const [search, setSearch] = useState("")
 
   const sectionById = useMemo(() => {
     const map = new Map<string, { slug: string; name: string }>()
@@ -119,6 +120,7 @@ function SourcesPage() {
   // Apply filters
   const filtered = useMemo(() => {
     const rows = sources.data ?? []
+    const needle = search.trim().toLowerCase()
     return rows.filter((s) => {
       const state = classify(s)
       if (statusFilter !== "all" && state !== statusFilter) return false
@@ -131,9 +133,13 @@ function SourcesPage() {
           if (s.neighborhoodSlugs && s.neighborhoodSlugs.length > 0) return false
         } else if (!s.neighborhoodSlugs?.includes(hoodFilter)) return false
       }
+      if (needle) {
+        const hay = `${s.name} ${s.url}`.toLowerCase()
+        if (!hay.includes(needle)) return false
+      }
       return true
     })
-  }, [sources.data, statusFilter, sectionFilter, hoodFilter, sectionById])
+  }, [sources.data, statusFilter, sectionFilter, hoodFilter, search, sectionById])
 
   // Group filtered rows by primary section, sorted alphabetically by
   // section name. Sources with no primary section land under "Other".
@@ -309,6 +315,16 @@ function SourcesPage() {
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3 rounded-md border bg-card px-3 py-2">
+        <label className="flex flex-1 min-w-[14rem] items-center gap-2">
+          <span className="meta text-xs">Search</span>
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Name or URL…"
+            className="flex-1 rounded-md border bg-background px-2 py-1 text-sm"
+          />
+        </label>
         <FilterSelect
           label="Status"
           value={statusFilter}
