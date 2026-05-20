@@ -1,7 +1,8 @@
 import { convexQuery } from "@convex-dev/react-query"
 import { useQuery } from "@tanstack/react-query"
-import { Link, useLocation } from "@tanstack/react-router"
+import { Link, useLocation, useNavigate } from "@tanstack/react-router"
 import { Check, ChevronDown, X } from "lucide-react"
+import { useLayoutEffect, useMemo, useRef, useState } from "react"
 
 import { api } from "../../../convex/_generated/api"
 import { NEIGHBORHOODS } from "../../../convex/lib/neighborhoods"
@@ -64,48 +65,162 @@ export function MainNav() {
     : null
   const activeAccent = activeSection?.accentColor ?? null
 
+  // Single flat array used by the priority+ overflow logic — section
+  // pills render in the same order they did before (regular first,
+  // then specialty), with the trailing items folding into a "More"
+  // dropdown when the row would otherwise wrap.
+  const items = useMemo(() => [...regular, ...specialty], [regular, specialty])
+
   return (
     <nav aria-label={t("drawer.sections")} className="py-2.5">
-      {/* Hovering an inactive item dims its inactive siblings to 70%
-          opacity (active items never dim, hovered item stays solid).
-          Using `:has()` on the row avoids React mouse handlers — pure
-          CSS, in sync with the browser's hover state. */}
-      <ul className="flex flex-wrap items-center justify-center gap-x-1 gap-y-1 [&:has([data-nav-state=inactive]:hover)_[data-nav-state=inactive]:not(:hover)]:opacity-70">
+      <NavRow
+        items={items}
+        trunkSlug={trunkSlug}
+        activeAccent={activeAccent}
+        lang={lang}
+      />
+    </nav>
+  )
+}
+
+// Priority+ overflow row. Measures every section's natural width in a
+// hidden off-screen strip (so widths stay stable even when items
+// migrate to the More dropdown), then a ResizeObserver on the visible
+// row recomputes how many fit at the current viewport.
+function NavRow({
+  items,
+  trunkSlug,
+  activeAccent,
+  lang,
+}: {
+  items: ReadonlyArray<{
+    _id: string
+    slug: string
+    accentColor: string
+  } & Record<string, unknown>>
+  trunkSlug: string | null
+  activeAccent: string | null
+  lang: "en" | "es"
+}) {
+  const rowRef = useRef<HTMLUListElement>(null)
+  const headRef = useRef<HTMLLIElement>(null)
+  const moreRef = useRef<HTMLLIElement>(null)
+  const measureRef = useRef<HTMLUListElement>(null)
+
+  // Measured natural widths of every section pill — captured once
+  // from the hidden strip. Indexed parallel to `items`.
+  const [widths, setWidths] = useState<Array<number>>([])
+  const [containerWidth, setContainerWidth] = useState(0)
+  const [headWidth, setHeadWidth] = useState(0)
+  const [moreWidth, setMoreWidth] = useState(80)
+
+  useLayoutEffect(() => {
+    const measure = measureRef.current
+    if (!measure) return
+    const next = Array.from(measure.children).map(
+      (c) => (c as HTMLElement).offsetWidth,
+    )
+    setWidths(next)
+  }, [items.length])
+
+  useLayoutEffect(() => {
+    if (!rowRef.current) return
+    const update = () => {
+      setContainerWidth(rowRef.current?.clientWidth ?? 0)
+      setHeadWidth(headRef.current?.offsetWidth ?? 0)
+      if (moreRef.current) setMoreWidth(moreRef.current.offsetWidth)
+    }
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(rowRef.current)
+    if (headRef.current) ro.observe(headRef.current)
+    return () => ro.disconnect()
+  }, [])
+
+  // How many items fit on this row, given the measured widths and the
+  // current container width. Reserves the More button's width when
+  // there will be overflow.
+  const visibleCount = useMemo(() => {
+    if (containerWidth === 0 || widths.length === 0) return items.length
+    const dividerWidth = 12 // px estimate for the vertical hairline + gaps
+    const gap = 4
+    const available =
+      containerWidth - headWidth - dividerWidth - gap * (items.length + 2)
+    let used = 0
+    for (let i = 0; i < widths.length; i++) {
+      const reserve = i < widths.length - 1 ? moreWidth + gap : 0
+      if (used + widths[i] + reserve > available) {
+        return i
+      }
+      used += widths[i] + gap
+    }
+    return items.length
+  }, [containerWidth, widths, headWidth, moreWidth, items.length])
+
+  const visible = items.slice(0, visibleCount)
+  const overflow = items.slice(visibleCount)
+
+  return (
+    <>
+      <ul
+        ref={rowRef}
+        className="flex items-center justify-center gap-x-1 [&:has([data-nav-state=inactive]:hover)_[data-nav-state=inactive]:not(:hover)]:opacity-70"
+      >
         {/* Site-wide neighborhood filter — lives BEFORE the section
             beats so it reads as the room-selector for the whole page,
-            not a peer of the topical beats. Default "All Neighborhoods" =
-            no filter active. */}
-        <li>
+            not a peer of the topical beats. */}
+        <li ref={headRef}>
           <NeighborhoodFilterMenu activeAccent={activeAccent} />
         </li>
         {/* Vertical divider between the filter and the section beats. */}
         <li aria-hidden className="px-1">
           <span className="block h-5 w-px bg-foreground/20" />
         </li>
-        {regular.map((s) => (
+        {visible.map((s) => (
           <li key={s._id}>
             <SectionLink
               slug={s.slug}
-              name={localizeSectionName(s, lang)}
+              name={localizeSectionName(s as never, lang)}
               accent={s.accentColor}
               active={trunkSlug === s.slug}
               activeAccent={activeAccent}
             />
           </li>
         ))}
-        {specialty.map((s) => (
+        {overflow.length > 0 ? (
+          <li ref={moreRef}>
+            <MoreSectionsMenu
+              items={overflow}
+              activeAccent={activeAccent}
+              trunkSlug={trunkSlug}
+              lang={lang}
+            />
+          </li>
+        ) : null}
+      </ul>
+
+      {/* Hidden measurement strip — renders every section pill once
+          in their natural size so widths stay stable across renders.
+          Visibility:hidden + absolute keeps them out of layout flow
+          but still rendered + measurable. */}
+      <ul
+        ref={measureRef}
+        aria-hidden
+        className="pointer-events-none invisible absolute -left-[9999px] top-0 flex items-center gap-x-1"
+      >
+        {items.map((s) => (
           <li key={s._id}>
             <SectionLink
               slug={s.slug}
-              name={localizeSectionName(s, lang)}
+              name={localizeSectionName(s as never, lang)}
               accent={s.accentColor}
-              active={trunkSlug === s.slug}
-              activeAccent={activeAccent}
+              active={false}
+              activeAccent={null}
             />
           </li>
         ))}
       </ul>
-    </nav>
+    </>
   )
 }
 
@@ -312,5 +427,67 @@ function NeighborhoodFilterMenu({
       </button>
     ) : null}
     </span>
+  )
+}
+
+// Priority+ overflow dropdown. Trailing section pills that don't fit
+// the nav row get folded into here. Trigger is "More" with the chevron;
+// items are simple links into /section/$slug.
+function MoreSectionsMenu({
+  items,
+  activeAccent,
+  trunkSlug,
+  lang,
+}: {
+  items: ReadonlyArray<{
+    _id: string
+    slug: string
+    accentColor: string
+  } & Record<string, unknown>>
+  activeAccent: string | null
+  trunkSlug: string | null
+  lang: "en" | "es"
+}) {
+  const navigate = useNavigate()
+  // The More trigger lights up when one of the overflow items owns the
+  // current page — same active-pill treatment as the visible row.
+  const containsActive = items.some((s) => s.slug === trunkSlug)
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        className={`${linkClass} inline-flex items-center gap-1`}
+        data-nav-state={containsActive ? "active" : "inactive"}
+        style={
+          activeAccent ? accentVars(activeAccent, activeAccent) : brandVars(activeAccent)
+        }
+      >
+        More
+        <ChevronDown className="size-4 shrink-0" aria-hidden />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        sideOffset={6}
+        className="w-48 [&:has([data-nav-state=inactive]:hover)_[data-nav-state=inactive]:not(:hover)]:opacity-70"
+      >
+        {items.map((s) => {
+          const itemActive = trunkSlug === s.slug
+          return (
+            <DropdownMenuItem
+              key={s._id}
+              className="cursor-pointer transition"
+              data-nav-state={itemActive ? "active" : "inactive"}
+              onClick={() =>
+                void navigate({
+                  to: "/section/$slug",
+                  params: { slug: s.slug },
+                })
+              }
+            >
+              {localizeSectionName(s as never, lang)}
+            </DropdownMenuItem>
+          )
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
