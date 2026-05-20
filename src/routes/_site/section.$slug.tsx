@@ -123,7 +123,8 @@ function SectionPage() {
 
   // Site-wide neighborhood filter — applied after query results so
   // section pages respect the dropdown selection too.
-  const { matches } = useNeighborhoodFilter()
+  const { matches, selected, clear } = useNeighborhoodFilter()
+  const filterActive = selected.length > 0
   const top = topRaw.filter(matches)
   const list = {
     ...listRaw,
@@ -133,17 +134,40 @@ function SectionPage() {
   const sectionName = localizeSectionName(section, lang)
 
   if (list.page.length === 0) {
+    // Filter-aware empty state: when the section has zero matches
+    // because the active neighborhood filter excludes everything,
+    // surface a one-click "Show all neighborhoods" reset. Otherwise
+    // stick with the standard "no events yet" copy.
     return (
       <div className="flex flex-col gap-10">
         <PageHeader title={sectionName} ruleBottom={false} className="pb-2" />
         <div className="font-editorial mt-12 max-w-2xl text-lg text-muted-foreground">
-          <p>No published events in {sectionName} yet.</p>
-          <p className="mt-4 text-base">
-            <Link to="/" className="underline">
-              Browse the front page
-            </Link>
-            .
-          </p>
+          {filterActive && listRaw.page.length > 0 ? (
+            <>
+              <p>
+                No {sectionName} events match the neighborhoods you picked.
+              </p>
+              <p className="mt-6 text-base">
+                <button
+                  type="button"
+                  onClick={() => clear()}
+                  className="inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/85"
+                >
+                  Show all neighborhoods
+                </button>
+              </p>
+            </>
+          ) : (
+            <>
+              <p>No published events in {sectionName} yet.</p>
+              <p className="mt-4 text-base">
+                <Link to="/" className="underline">
+                  Browse the front page
+                </Link>
+                .
+              </p>
+            </>
+          )}
         </div>
       </div>
     )

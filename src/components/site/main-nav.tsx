@@ -1,7 +1,7 @@
 import { convexQuery } from "@convex-dev/react-query"
 import { useQuery } from "@tanstack/react-query"
 import { Link, useLocation } from "@tanstack/react-router"
-import { Check, ChevronDown } from "lucide-react"
+import { Check, ChevronDown, X } from "lucide-react"
 
 import { api } from "../../../convex/_generated/api"
 import { NEIGHBORHOODS } from "../../../convex/lib/neighborhoods"
@@ -238,21 +238,44 @@ function NeighborhoodFilterMenu({
   })()
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        className={`${linkClass} inline-flex items-center gap-1`}
-        data-nav-state={active ? "active" : "inactive"}
-        // When the reader is on a section page, tint hover/active with
-        // that section's accent so the filter pill reads as part of
-        // the section's chrome instead of breaking out to the brand
-        // brown. Off-section, fall back to the brand pair.
-        style={
-          activeAccent ? accentVars(activeAccent, activeAccent) : brandVars(activeAccent)
-        }
-      >
-        {triggerLabel}
-        <ChevronDown className="size-4 shrink-0" aria-hidden />
-      </DropdownMenuTrigger>
+    <span className="relative inline-flex items-center">
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          className={`${linkClass} inline-flex items-center gap-1 ${active ? "pr-9" : ""}`}
+          data-nav-state={active ? "active" : "inactive"}
+          // When the reader is on a section page, tint hover/active with
+          // that section's accent so the filter pill reads as part of
+          // the section's chrome instead of breaking out to the brand
+          // brown. Off-section, fall back to the brand pair.
+          style={
+            activeAccent ? accentVars(activeAccent, activeAccent) : brandVars(activeAccent)
+          }
+        >
+          {triggerLabel}
+          <ChevronDown className="size-4 shrink-0" aria-hidden />
+        </DropdownMenuTrigger>
+        {/* X-to-clear button — only renders when a filter is active.
+            Sits absolutely on top of the trigger's right-padding gap
+            so it reads as part of the pill but has its own click
+            target that bypasses the dropdown open. */}
+        {active ? (
+          <button
+            type="button"
+            aria-label="Clear neighborhood filter"
+            title="Clear neighborhood filter"
+            onClick={(e) => {
+              e.stopPropagation()
+              clear()
+            }}
+            // Base UI's Menu.Trigger handles open on pointerdown, so
+            // intercept that too — without this, the dropdown pops
+            // open on the way to the click handler.
+            onPointerDown={(e) => e.stopPropagation()}
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 inline-flex size-5 items-center justify-center rounded-sm text-current opacity-70 hover:opacity-100 hover:bg-foreground/10"
+          >
+            <X className="size-3.5" aria-hidden />
+          </button>
+        ) : null}
       <DropdownMenuContent
         align="start"
         sideOffset={6}
@@ -297,5 +320,6 @@ function NeighborhoodFilterMenu({
         })}
       </DropdownMenuContent>
     </DropdownMenu>
+    </span>
   )
 }

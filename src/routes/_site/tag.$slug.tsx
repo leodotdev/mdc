@@ -44,7 +44,8 @@ function TagPage() {
   const { data: dataRaw } = useSuspenseQuery(
     convexSuspenseQuery(api.events.listByTag, { tag: slug, limit: 60 }),
   )
-  const { matches } = useNeighborhoodFilter()
+  const { matches, selected, clear } = useNeighborhoodFilter()
+  const filterActive = selected.length > 0
   const data = dataRaw.filter(matches)
 
   // Same wave layout as section pages: hero split → xl rows → long
@@ -120,12 +121,31 @@ function TagPage() {
 
       {data.length === 0 ? (
         <div className="font-editorial mt-12 text-lg text-muted-foreground">
-          <p>Nothing tagged "{slug}" yet.</p>
-          <p className="mt-3">
-            <Link to="/" className="underline">
-              Back to the front page
-            </Link>
-          </p>
+          {filterActive && dataRaw.length > 0 ? (
+            <>
+              <p>
+                No #{slug} events match the neighborhoods you picked.
+              </p>
+              <p className="mt-6">
+                <button
+                  type="button"
+                  onClick={() => clear()}
+                  className="inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/85"
+                >
+                  Show all neighborhoods
+                </button>
+              </p>
+            </>
+          ) : (
+            <>
+              <p>Nothing tagged "{slug}" yet.</p>
+              <p className="mt-3">
+                <Link to="/" className="underline">
+                  Back to the front page
+                </Link>
+              </p>
+            </>
+          )}
         </div>
       ) : (
         <section className="grid grid-cols-1 gap-y-8 lg:grid-cols-12 lg:gap-x-6">
