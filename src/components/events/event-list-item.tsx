@@ -77,6 +77,23 @@ export function EventListItem({ event: rawEvent }: { event: EventWithSection }) 
           {event.dek || event.description}
         </p>
       ) : null}
+      {(() => {
+        // Primary CTA on the card: link straight to the source / venue
+        // page. Falls through to the first citation URL when the event
+        // itself has no `url` so most rows still get a way out.
+        const sourceUrl = event.url ?? event.citations?.[0]?.url
+        return sourceUrl ? (
+          <a
+            href={sourceUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="meta inline-flex items-center gap-1 text-xs font-medium text-foreground transition-colors hover:text-primary hover:underline"
+          >
+            Get full details
+            <ExternalLink className="size-3" aria-hidden />
+          </a>
+        ) : null
+      })()}
       {event.article ? (
         <Link
           to="/article/$slug"

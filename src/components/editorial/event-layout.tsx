@@ -181,37 +181,47 @@ export function EventLayout({ rawEvent }: { rawEvent: EventDoc }) {
             </div>
           ) : null}
 
-          {/* Line 3 — Share · Add to calendar · View event page. The
-              external "View event page" button sits last so reader actions
-              flow left-to-right: share-it, save-it, leave-for-the-source.
+          {/* Line 3 — primary CTA (source page) leads; secondary
+              actions (share, add to calendar) follow. Falls back to
+              the first cited URL when the event itself has no direct
+              `url`, so readers always have a way out to the venue.
               Hairline above lifts the action row off the meta strip. */}
-          <div className="mx-auto mt-3 flex w-fit flex-wrap items-center justify-center gap-2 border-t border-foreground/10 pt-3">
-            <ShareWidget title={event.title} />
-            <AddToCalendar
-              event={{
-                id: event._id,
-                title: event.title,
-                description: event.description,
-                startsAt: event.startsAt,
-                endsAt: event.endsAt,
-                allDay: event.allDay,
-                locationName: event.locationName,
-                locationAddress: event.locationAddress,
-                url: event.url,
-              }}
-            />
-            {event.url ? (
-              <Button
-                size="sm"
-                render={
-                  <a href={event.url} target="_blank" rel="noreferrer" />
-                }
-              >
-                <ExternalLink className="size-4" />
-                View event page
-              </Button>
-            ) : null}
-          </div>
+          {(() => {
+            const sourceUrl = event.url ?? event.citations?.[0]?.url
+            return (
+              <div className="mx-auto mt-3 flex w-fit flex-wrap items-center justify-center gap-2 border-t border-foreground/10 pt-3">
+                {sourceUrl ? (
+                  <Button
+                    size="default"
+                    render={
+                      <a
+                        href={sourceUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                      />
+                    }
+                  >
+                    Get full details
+                    <ExternalLink className="size-4" />
+                  </Button>
+                ) : null}
+                <ShareWidget title={event.title} />
+                <AddToCalendar
+                  event={{
+                    id: event._id,
+                    title: event.title,
+                    description: event.description,
+                    startsAt: event.startsAt,
+                    endsAt: event.endsAt,
+                    allDay: event.allDay,
+                    locationName: event.locationName,
+                    locationAddress: event.locationAddress,
+                    url: event.url,
+                  }}
+                />
+              </div>
+            )
+          })()}
 
         </div>
 
