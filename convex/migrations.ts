@@ -1438,6 +1438,171 @@ export const tagSourceNeighborhoods = internalMutation({
   },
 })
 
+// Force-categorizes every source by its implied neighborhood, using
+// hardcoded venue-by-venue knowledge instead of regex matching. Run
+// AFTER the schema is widened with neighborhoodSlugs. Overrides
+// whatever the auto-tagger did — manual knowledge wins.
+//
+// Sources not in the table below get cleared (treated as citywide,
+// neighborhoodSlugs left undefined) so the page-wide aggregators
+// (Soul of Miami, Time Out, etc.) don't bias the per-neighborhood
+// view.
+//
+// Run: `npx convex run migrations:forceCategorizeSources`
+export const forceCategorizeSources = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    // URL substring → neighborhoodSlugs[]. Order doesn't matter for
+    // the lookup (longest match isn't needed); each source row matches
+    // at most one entry because URLs are distinct domains.
+    const URL_RULES: ReadonlyArray<{
+      match: string
+      slugs: ReadonlyArray<string>
+    }> = [
+      // ─── Downtown / Park West / Brickell ───
+      { match: "miamifoundation.org", slugs: ["downtown"] },
+      { match: "miamibookfair.com", slugs: ["downtown"] },
+      { match: "arshtcenter.org", slugs: ["downtown"] },
+      { match: "olympiatheater.org", slugs: ["downtown"] },
+      { match: "bayfrontparkmiami.com", slugs: ["downtown"] },
+      { match: "jlkc.com", slugs: ["downtown"] },
+      { match: "frostscience.org", slugs: ["downtown"] },
+      { match: "miamidda.com", slugs: ["downtown"] },
+      { match: "miamigov.com", slugs: ["downtown"] },
+      { match: "theunderline.org", slugs: ["brickell", "downtown"] },
+      { match: "brickellhomeownersassociation.com", slugs: ["brickell"] },
+
+      // ─── Wynwood + Design District ───
+      { match: "icamiami.org", slugs: ["wynwood-design-district"] },
+      { match: "ocinema.org", slugs: ["wynwood-design-district"] },
+      { match: "thecitadelmiami.com", slugs: ["wynwood-design-district"] },
+      { match: "manawynwood.com", slugs: ["wynwood-design-district"] },
+      { match: "thewynwoodwalls.com", slugs: ["wynwood-design-district"] },
+      { match: "wynwoodmiami.com", slugs: ["wynwood-design-district"] },
+      { match: "gramps.com", slugs: ["wynwood-design-district"] },
+      { match: "thelabmiami.com", slugs: ["wynwood-design-district"] },
+      { match: "bacfl.org", slugs: ["wynwood-design-district"] },
+      { match: "lagniappemia.com", slugs: ["wynwood-design-district"] },
+      { match: "endeavormiami.org", slugs: ["wynwood-design-district"] },
+
+      // ─── Allapattah ───
+      { match: "rubellmuseum.org", slugs: ["allapattah"] },
+      { match: "elespacio23.com", slugs: ["allapattah"] },
+
+      // ─── Edgewater ───
+      { match: "youngarts.org", slugs: ["edgewater"] },
+
+      // ─── Little Havana ───
+      { match: "towertheatermiami.org", slugs: ["little-havana"] },
+      { match: "carnavalmiami.com", slugs: ["little-havana"] },
+      { match: "cubaocho.com", slugs: ["little-havana"] },
+      { match: "ballandchainmiami.com", slugs: ["little-havana"] },
+
+      // ─── Overtown ───
+      { match: "lyrictheatermiami.com", slugs: ["overtown"] },
+
+      // ─── Miami Beach (incl. North Beach, Mid-Beach) ───
+      { match: "thebass.org", slugs: ["miami-beach"] },
+      { match: "nws.edu", slugs: ["miami-beach"] },
+      { match: "miaminewdrama.org", slugs: ["miami-beach"] },
+      { match: "northbeachbandshell.com", slugs: ["miami-beach"] },
+      { match: "wolfsonian.org", slugs: ["miami-beach"] },
+      { match: "miamibeachfl.gov", slugs: ["miami-beach"] },
+      { match: "emergeamericas.com", slugs: ["miami-beach"] },
+      { match: "timeoutmarket.com", slugs: ["miami-beach"] },
+      { match: "balharbourgov.com", slugs: ["bal-harbour"] },
+      { match: "townofsurfsidefl.gov", slugs: ["surfside"] },
+      { match: "sibfl.net", slugs: ["sunny-isles-beach"] },
+
+      // ─── Coral Gables ───
+      { match: "biltmorehotel.com", slugs: ["coral-gables"] },
+      { match: "coralgablesmuseum.org", slugs: ["coral-gables"] },
+      { match: "gablestage.org", slugs: ["coral-gables"] },
+      { match: "actorsplayhouse.org", slugs: ["coral-gables"] },
+      { match: "booksandbooks.com", slugs: ["coral-gables"] },
+      { match: "gablescinema.com", slugs: ["coral-gables"] },
+      { match: "fairchildgarden.org", slugs: ["coral-gables"] },
+      { match: "lowe.miami.edu", slugs: ["coral-gables"] },
+      { match: "miamihurricanes.com", slugs: ["coral-gables"] },
+      { match: "events.miami.edu", slugs: ["coral-gables"] },
+      { match: "coralgables.com", slugs: ["coral-gables"] },
+
+      // ─── Coconut Grove ───
+      { match: "vizcaya.org", slugs: ["coconut-grove"] },
+      { match: "deeringestate.org", slugs: ["coconut-grove"] },
+      { match: "cgsc.org", slugs: ["coconut-grove"] },
+      { match: "coconutgrove.com", slugs: ["coconut-grove"] },
+
+      // ─── Key Biscayne ───
+      { match: "keybiscayne.fl.gov", slugs: ["key-biscayne"] },
+
+      // ─── South Miami / Pinecrest / Palmetto / Kendall ───
+      { match: "smdcac.org", slugs: ["south-miami"] },
+      { match: "southmiamifl.gov", slugs: ["south-miami"] },
+      { match: "pinecrestgardens.org", slugs: ["pinecrest"] },
+      { match: "pinecrest-fl.gov", slugs: ["pinecrest"] },
+
+      // ─── Little Haiti ───
+      { match: "mocanomi.org", slugs: ["little-haiti"] },
+
+      // ─── Miami Shores ───
+      { match: "miamishoresvillage.com", slugs: ["miami-shores"] },
+      { match: "barry.edu", slugs: ["miami-shores"] },
+      { match: "mtcmiami.org", slugs: ["miami-shores"] },
+
+      // ─── Outlying municipalities ───
+      { match: "cityofaventura.com", slugs: ["aventura"] },
+      { match: "cityofhomestead.com", slugs: ["homestead"] },
+      { match: "cityplacedoral.com", slugs: ["doral"] },
+      { match: "doralbotanicalpark.com", slugs: ["doral"] },
+      { match: "cityofdoral.com", slugs: ["doral"] },
+      { match: "hialeahparkracing.com", slugs: ["hialeah"] },
+      { match: "northmiamifl.gov", slugs: ["north-miami"] },
+      { match: "citynmb.com", slugs: ["north-miami-beach"] },
+      { match: "miamisprings-fl.gov", slugs: ["miami-springs"] },
+
+      // Citywide aggregators — explicitly clear any prior tag so they
+      // don't bias the per-neighborhood view.
+      { match: "soulofmiami.org", slugs: [] },
+      { match: "miaminewtimes.com", slugs: [] },
+      { match: "timeout.com", slugs: [] },
+      { match: "bandsintown.com", slugs: [] },
+      { match: "omiami.org", slugs: [] },
+      { match: "dadeschools.net", slugs: [] },
+      { match: "miamidade.gov", slugs: [] },
+      { match: "miamidadecountyauditorium.org", slugs: [] },
+      { match: "thefrost.fiu.edu", slugs: [] },
+      { match: "calendar.fiu.edu", slugs: [] },
+      { match: "fiusports.com", slugs: [] },
+    ]
+
+    const sources = await ctx.db.query("sources").collect()
+    let patched = 0
+    let cleared = 0
+    for (const s of sources) {
+      const url = s.url.toLowerCase()
+      const rule = URL_RULES.find((r) => url.includes(r.match))
+      if (!rule) continue
+      if (rule.slugs.length === 0) {
+        if (s.neighborhoodSlugs && s.neighborhoodSlugs.length > 0) {
+          await ctx.db.patch(s._id, { neighborhoodSlugs: undefined })
+          cleared += 1
+        }
+      } else {
+        const next = Array.from(rule.slugs)
+        const prev = s.neighborhoodSlugs ?? []
+        const sameLen = prev.length === next.length
+        const sameAll = sameLen && prev.every((p, i) => p === next[i])
+        if (!sameAll) {
+          await ctx.db.patch(s._id, { neighborhoodSlugs: next })
+          patched += 1
+        }
+      }
+    }
+    return { scanned: sources.length, patched, cleared }
+  },
+})
+
 // Hard-deletes sources whose `type` isn't calendar-shaped — RSS,
 // Bluesky, Reddit, YouTube, X, wikipedia-otd, web. The deterministic
 // ingest pipeline drops items without startsAt + locationName, and
