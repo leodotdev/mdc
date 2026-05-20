@@ -1438,6 +1438,47 @@ export const tagSourceNeighborhoods = internalMutation({
   },
 })
 
+// Hard-deletes sources whose `type` isn't calendar-shaped — RSS,
+// Bluesky, Reddit, YouTube, X, wikipedia-otd, web. The deterministic
+// ingest pipeline drops items without startsAt + locationName, and
+// these source types don't carry those fields. Keeping them around
+// just wastes fetch cycles + clutters the admin page.
+//
+// Also drains each source's ingestedItems before deleting the row.
+//
+// Run: `npx convex run migrations:deleteNonCalendarSources`
+export const deleteNonCalendarSources = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const CALENDAR_TYPES = new Set([
+      "ics",
+      "events-html",
+      "sitemap-events",
+      "data",
+    ])
+    const sources = await ctx.db.query("sources").collect()
+    let deletedSources = 0
+    let deletedItems = 0
+    for (const s of sources) {
+      if (CALENDAR_TYPES.has(s.type)) continue
+      // Drain ingestedItems first (capped per pass so a busy source
+      // doesn't blow the transaction). Re-run the migration to keep
+      // draining if a source has > 500 items.
+      const items = await ctx.db
+        .query("ingestedItems")
+        .withIndex("by_source_external", (q) => q.eq("sourceId", s._id))
+        .take(500)
+      for (const it of items) await ctx.db.delete(it._id)
+      deletedItems += items.length
+      if (items.length < 500) {
+        await ctx.db.delete(s._id)
+        deletedSources += 1
+      }
+    }
+    return { deletedSources, deletedItems }
+  },
+})
+
 // Hard-deletes sources whose last fetch hit a permanent-failure
 // pattern: 404 / 410 / connection refused / SSL cert mismatch. These
 // URLs will never come back; keeping them around just clutters the
