@@ -2,7 +2,14 @@ import { convexQuery } from "@convex-dev/react-query"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute } from "@tanstack/react-router"
 import { useConvex } from "convex/react"
-import { ExternalLink, Loader2, Power, RefreshCw } from "lucide-react"
+import {
+  ExternalLink,
+  Loader2,
+  Plus,
+  Power,
+  RefreshCw,
+  Trash2,
+} from "lucide-react"
 import { useMemo, useState } from "react"
 
 import { api } from "../../../convex/_generated/api"
@@ -174,6 +181,13 @@ function SourcesPage() {
     onSuccess: () => refetch(),
   })
 
+  const removeSource = useMutation({
+    mutationFn: async (sourceId: Id<"sources">) => {
+      await convex.mutation(api.sourcesData.remove, { sourceId })
+    },
+    onSuccess: () => refetch(),
+  })
+
   const setEnabled = useMutation({
     mutationFn: async ({
       sourceId,
@@ -280,6 +294,18 @@ function SourcesPage() {
           </div>
         </div>
       </header>
+
+      {/* Quick-add form — paste any event-rich URL and we auto-pick
+          the right adapter type. Source is saved enabled so the next
+          ingest tick fetches it. */}
+      <AddSourceForm
+        sections={sectionsQuery.data ?? []}
+        onAdded={() =>
+          queryClient.invalidateQueries({
+            queryKey: convexQuery(api.sourcesData.list, {}).queryKey,
+          })
+        }
+      />
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3 rounded-md border bg-card px-3 py-2">
@@ -511,6 +537,25 @@ function SourcesPage() {
                             >
                               <Power />
                             </Button>
+                            <Button
+                              size="icon-sm"
+                              variant="ghost"
+                              aria-label="Delete source"
+                              title="Delete source"
+                              disabled={removeSource.isPending}
+                              onClick={() => {
+                                if (
+                                  window.confirm(
+                                    `Delete "${s.name}"? This is permanent.`,
+                                  )
+                                ) {
+                                  removeSource.mutate(s._id)
+                                }
+                              }}
+                              className="text-destructive hover:text-destructive"
+                            >
+                              <Trash2 />
+                            </Button>
                           </div>
                         </TableCell>
                       </TableRow>
@@ -564,5 +609,167 @@ function FilterSelect({
         ))}
       </select>
     </label>
+  )
+}
+
+// URL → most-likely adapter type. Auto-fills the dropdown so editors
+// don't have to remember which scraper goes with which URL pattern.
+type AdapterType = "ics" | "events-html" | "sitemap-events" | "miami-new-times"
+function inferAdapterType(url: string): AdapterType {
+  const u = url.toLowerCase()
+  if (u.includes("miaminewtimes.com/eventsearch")) return "miami-new-times"
+  if (
+    u.includes("?ical=1") ||
+    u.includes("&ical=1") ||
+    u.endsWith(".ics") ||
+    u.includes("icalendar.aspx") ||
+    u.includes(".ics?") ||
+    u.includes("feed=calendar")
+  ) {
+    return "ics"
+  }
+  if (u.endsWith("/sitemap.xml") || u.endsWith("/sitemap_index.xml")) {
+    return "sitemap-events"
+  }
+  return "events-html"
+}
+
+function AddSourceForm({
+  sections,
+  onAdded,
+}: {
+  sections: ReadonlyArray<{
+    _id: string
+    slug: string
+    name: string
+    parentId?: string
+  }>
+  onAdded: () => void
+}) {
+  const convex = useConvex()
+  const [open, setOpen] = useState(false)
+  const [url, setUrl] = useState("")
+  const [name, setName] = useState("")
+  const [type, setType] = useState<AdapterType>("events-html")
+  const [sectionId, setSectionId] = useState<string>("")
+  const [typeOverridden, setTypeOverridden] = useState(false)
+
+  // Top-level sections only (subsections inherit a parent's adapter
+  // logic; routing to a sub-section is the desk's job at ingest time).
+  const topLevel = sections.filter((s) => !s.parentId)
+
+  // Default section once sections load.
+  if (!sectionId && topLevel.length > 0) {
+    setSectionId(topLevel[0]._id)
+  }
+
+  const add = useMutation({
+    mutationFn: async () => {
+      await convex.mutation(api.sourcesData.create, {
+        name: name.trim() || url,
+        type,
+        url: url.trim(),
+        sectionIds: [sectionId as Id<"sections">],
+        enabled: true,
+      })
+    },
+    onSuccess: () => {
+      setUrl("")
+      setName("")
+      setTypeOverridden(false)
+      onAdded()
+    },
+  })
+
+  if (!open) {
+    return (
+      <div className="flex justify-end">
+        <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
+          <Plus />
+          Add source
+        </Button>
+      </div>
+    )
+  }
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (!url.trim()) return
+        add.mutate()
+      }}
+      className="flex flex-wrap items-end gap-3 rounded-md border bg-card p-3"
+    >
+      <label className="flex min-w-[18rem] flex-1 flex-col gap-1">
+        <span className="meta text-xs">URL</span>
+        <input
+          type="url"
+          required
+          placeholder="https://venue.com/events/?ical=1"
+          value={url}
+          onChange={(e) => {
+            const v = e.target.value
+            setUrl(v)
+            if (!typeOverridden) setType(inferAdapterType(v))
+          }}
+          className="rounded-md border bg-background px-2 py-1.5 text-sm"
+        />
+      </label>
+      <label className="flex min-w-[10rem] flex-1 flex-col gap-1">
+        <span className="meta text-xs">Name</span>
+        <input
+          type="text"
+          placeholder="(defaults to URL)"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className="rounded-md border bg-background px-2 py-1.5 text-sm"
+        />
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className="meta text-xs">Type</span>
+        <select
+          value={type}
+          onChange={(e) => {
+            setType(e.target.value as AdapterType)
+            setTypeOverridden(true)
+          }}
+          className="rounded-md border bg-background px-2 py-1.5 text-sm"
+        >
+          <option value="ics">iCal (.ics / ?ical=1)</option>
+          <option value="events-html">events-html (JSON-LD)</option>
+          <option value="sitemap-events">sitemap-events</option>
+          <option value="miami-new-times">miami-new-times</option>
+        </select>
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className="meta text-xs">Section</span>
+        <select
+          value={sectionId}
+          onChange={(e) => setSectionId(e.target.value)}
+          className="rounded-md border bg-background px-2 py-1.5 text-sm"
+        >
+          {topLevel.map((s) => (
+            <option key={s._id} value={s._id}>
+              {s.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="flex items-center gap-2">
+        <Button size="sm" type="submit" disabled={add.isPending || !url.trim()}>
+          {add.isPending ? <Loader2 className="animate-spin" /> : <Plus />}
+          Add
+        </Button>
+        <Button
+          size="sm"
+          type="button"
+          variant="ghost"
+          onClick={() => setOpen(false)}
+        >
+          Cancel
+        </Button>
+      </div>
+    </form>
   )
 }

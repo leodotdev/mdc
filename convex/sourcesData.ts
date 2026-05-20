@@ -96,20 +96,16 @@ export const create = mutation({
   args: {
     name: v.string(),
     type: v.union(
-      v.literal("rss"),
-      v.literal("reddit"),
-      v.literal("youtube"),
-      v.literal("x"),
-      v.literal("bluesky"),
-      v.literal("web"),
-      v.literal("wikipedia-otd"),
       v.literal("ics"),
-      v.literal("data"),
+      v.literal("events-html"),
+      v.literal("sitemap-events"),
+      v.literal("miami-new-times"),
     ),
     url: v.string(),
     sectionIds: v.array(v.id("sections")),
     enabled: v.boolean(),
     config: v.optional(v.any()),
+    neighborhoodSlugs: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     await requireEditor(ctx)
