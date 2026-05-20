@@ -1438,6 +1438,35 @@ export const tagSourceNeighborhoods = internalMutation({
   },
 })
 
+// Sweeps already-published events that match the audience-filter
+// patterns (faculty meeting, dissertation defense, course code in
+// title, members-only, students-only, etc.). The new ingest pipeline
+// drops these going forward; this catches the backlog.
+//
+// Run: `npx convex run migrations:purgePrivateAudienceEvents`
+import { isPrivateAudience as _isPrivateAudience } from "./lib/audienceFilter"
+
+export const purgePrivateAudienceEvents = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const events = await ctx.db.query("events").take(2000)
+    let deleted = 0
+    for (const e of events) {
+      if (
+        _isPrivateAudience({
+          title: e.title,
+          description: e.description,
+          body: e.body,
+        })
+      ) {
+        await ctx.db.delete(e._id)
+        deleted += 1
+      }
+    }
+    return { scanned: events.length, deleted }
+  },
+})
+
 // Force-categorizes every source by its implied neighborhood, using
 // hardcoded venue-by-venue knowledge instead of regex matching. Run
 // AFTER the schema is widened with neighborhoodSlugs. Overrides

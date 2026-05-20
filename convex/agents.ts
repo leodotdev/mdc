@@ -4,6 +4,7 @@ import { action, internalAction } from "./_generated/server"
 import { fetchItems } from "./lib/adapters"
 import { cronsEnabled } from "./lib/cronGate"
 import { requireEditorInAction } from "./lib/guard"
+import { isPrivateAudience } from "./lib/audienceFilter"
 import { firstSentence } from "./lib/firstSentence"
 import { defaultFreeForSourceUrl } from "./lib/priceExtract"
 import type { Id } from "./_generated/dataModel"
@@ -189,6 +190,21 @@ export const runEventIngestInternal = internalAction({
         const startsAt = c.item.startsAt
         const where = c.item.locationName ?? c.item.locationAddress
         if (!startsAt || !where) {
+          skipped += 1
+          continue
+        }
+        // Audience filter — drops events that are technically on a
+        // public iCal but only intended for a closed community
+        // (students, faculty, staff, members). University calendars
+        // are the main offenders; see lib/audienceFilter for the
+        // phrase + course-code rules.
+        if (
+          isPrivateAudience({
+            title: c.item.title,
+            description: c.item.snippet,
+            body: c.item.body,
+          })
+        ) {
           skipped += 1
           continue
         }
