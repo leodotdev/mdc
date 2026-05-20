@@ -650,6 +650,46 @@ function inferAdapterType(url: string): AdapterType {
   return "events-html"
 }
 
+// URL → most-likely Miami neighborhood. Mirrors the rules in the
+// `forceCategorizeSources` migration so the form's default matches
+// what we'd backfill. Returns "" when no obvious hit; editor can
+// pick from the dropdown manually.
+const NEIGHBORHOOD_HINTS: ReadonlyArray<{
+  match: RegExp
+  slug: string
+}> = [
+  { match: /miamifoundation|arshtcenter|olympiatheater|bayfrontpark|jlkc|frostscience|miamidda|miamigov\b/i, slug: "downtown" },
+  { match: /theunderline|brickell/i, slug: "brickell" },
+  { match: /icamiami|ocinema|thecitadel|manawynwood|wynwoodwalls|wynwoodmiami|\bgramps\b|thelabmiami|bacfl|lagniappemia|endeavormiami/i, slug: "wynwood-design-district" },
+  { match: /rubellmuseum|elespacio23/i, slug: "allapattah" },
+  { match: /youngarts/i, slug: "edgewater" },
+  { match: /towertheater|carnavalmiami|cubaocho|ballandchain/i, slug: "little-havana" },
+  { match: /lyrictheater/i, slug: "overtown" },
+  { match: /thebass|nws\.edu|miaminewdrama|northbeachbandshell|wolfsonian|miamibeachfl|emergeamericas|timeoutmarket/i, slug: "miami-beach" },
+  { match: /balharbour/i, slug: "bal-harbour" },
+  { match: /townofsurfsidefl|\bsurfside\b/i, slug: "surfside" },
+  { match: /sibfl|sunny.?isles/i, slug: "sunny-isles-beach" },
+  { match: /biltmorehotel|coralgablesmuseum|gablestage|actorsplayhouse|booksandbooks|gablescinema|fairchildgarden|lowe\.miami\.edu|miamihurricanes|events\.miami\.edu|coralgables\.com/i, slug: "coral-gables" },
+  { match: /vizcaya|deeringestate|cgsc|coconutgrove/i, slug: "coconut-grove" },
+  { match: /keybiscayne/i, slug: "key-biscayne" },
+  { match: /smdcac|southmiamifl/i, slug: "south-miami" },
+  { match: /pinecrestgardens|pinecrest-fl/i, slug: "pinecrest" },
+  { match: /miamishoresvillage|barry\.edu|mtcmiami/i, slug: "miami-shores" },
+  { match: /cityofaventura/i, slug: "aventura" },
+  { match: /cityofhomestead/i, slug: "homestead" },
+  { match: /cityplacedoral|doralbotanical|cityofdoral/i, slug: "doral" },
+  { match: /hialeahpark/i, slug: "hialeah" },
+  { match: /northmiamifl/i, slug: "north-miami" },
+  { match: /citynmb/i, slug: "north-miami-beach" },
+  { match: /miamisprings-fl/i, slug: "miami-springs" },
+]
+function inferNeighborhood(url: string): string {
+  for (const rule of NEIGHBORHOOD_HINTS) {
+    if (rule.match.test(url)) return rule.slug
+  }
+  return ""
+}
+
 function AddSourceForm({
   sections,
   onAdded,
@@ -668,7 +708,9 @@ function AddSourceForm({
   const [name, setName] = useState("")
   const [type, setType] = useState<AdapterType>("events-html")
   const [sectionId, setSectionId] = useState<string>("")
+  const [hood, setHood] = useState<string>("")
   const [typeOverridden, setTypeOverridden] = useState(false)
+  const [hoodOverridden, setHoodOverridden] = useState(false)
 
   // Top-level sections only (subsections inherit a parent's adapter
   // logic; routing to a sub-section is the desk's job at ingest time).
@@ -687,12 +729,15 @@ function AddSourceForm({
         url: url.trim(),
         sectionIds: [sectionId as Id<"sections">],
         enabled: true,
+        neighborhoodSlugs: hood ? [hood] : undefined,
       })
     },
     onSuccess: () => {
       setUrl("")
       setName("")
+      setHood("")
       setTypeOverridden(false)
+      setHoodOverridden(false)
       onAdded()
     },
   })
@@ -728,6 +773,7 @@ function AddSourceForm({
             const v = e.target.value
             setUrl(v)
             if (!typeOverridden) setType(inferAdapterType(v))
+            if (!hoodOverridden) setHood(inferNeighborhood(v))
           }}
           className="rounded-md border bg-background px-2 py-1.5 text-sm"
         />
@@ -768,6 +814,24 @@ function AddSourceForm({
           {topLevel.map((s) => (
             <option key={s._id} value={s._id}>
               {s.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className="meta text-xs">Neighborhood</span>
+        <select
+          value={hood}
+          onChange={(e) => {
+            setHood(e.target.value)
+            setHoodOverridden(true)
+          }}
+          className="rounded-md border bg-background px-2 py-1.5 text-sm"
+        >
+          <option value="">(citywide)</option>
+          {NEIGHBORHOODS.map((n) => (
+            <option key={n.slug} value={n.slug}>
+              {n.name}
             </option>
           ))}
         </select>
