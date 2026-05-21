@@ -311,11 +311,11 @@ export const unconsumedItemsAll = query({
         (a, b) =>
           (b.publishedAt ?? b.fetchedAt) - (a.publishedAt ?? a.fetchedAt),
       )
-    // Per-source cap: prevents one wire-heavy feed (Local 10 carries
-    // 100+ AP items at any moment) from monopolizing the LLM's input
-    // batch and crowding out smaller hyperlocal sources. 5 items per
-    // source × 10+ sources = balanced 50-item batch.
-    const PER_SOURCE_CAP = 5
+    // Per-source cap: round-robin balance so MNT's 400+ items don't
+    // shut out smaller hyperlocal feeds. Was 5 (Opus-era); 40 fits
+    // the LLM-free pipeline + a 200-item batch (≈5 sources at full
+    // depth, or 10 sources tapering).
+    const PER_SOURCE_CAP = 40
     const perSource = new Map<string, number>()
     const balanced: typeof filtered = []
     for (const item of filtered) {

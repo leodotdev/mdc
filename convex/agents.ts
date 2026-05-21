@@ -68,9 +68,13 @@ function slugify(input: string): string {
 // ============================================================================
 
 const MEGA_DESK_SLUG = "miami-desk"
-// Item firehose cap per ingest tick. Bounds how many ingestedItems
-// the deterministic loop scans before stopping.
-const MEGA_MAX_ITEMS = 50
+// Item firehose cap per ingest tick. The original 50 came from Opus
+// pricing — input had to be small to keep each tick affordable. The
+// deterministic pipeline is LLM-free at ingest, so 200 is fine.
+// Translation + Haiku enrichment scheduled per-insert are
+// budget-gated separately, so extra items just sit idle until the
+// budget refills.
+const MEGA_MAX_ITEMS = 200
 // Default ingest lookback window — 12h focuses on truly fresh items;
 // older unconsumed ones get drained on subsequent ticks.
 const MEGA_DEFAULT_LOOKBACK_HOURS = 12

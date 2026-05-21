@@ -26,7 +26,13 @@ import type { RawItem, SourceForAdapter } from "./types"
 // pipeline needs a concrete startsAt, and these often duplicate
 // museum tours we already ingest.
 
-const MAX_PAGES = 3
+// MNT server-renders 20 events on /eventsearch/. Their "load more"
+// pagination is JS-only (an admin-ajax POST whose payload changes
+// shape on every frontend deploy), and the `?page=N` / `?dl=` URL
+// params all return the same first 20 events. So this is the cap —
+// we get whatever MNT's editors have on the top of their list every
+// ingest tick. Trying to walk deeper just re-fetches page 1.
+const MAX_PAGES = 1
 
 const MONTH_MAP: Record<string, number> = {
   jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
