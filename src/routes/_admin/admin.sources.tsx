@@ -661,7 +661,12 @@ function FilterSelect({
 
 // URL → most-likely adapter type. Auto-fills the dropdown so editors
 // don't have to remember which scraper goes with which URL pattern.
-type AdapterType = "ics" | "events-html" | "sitemap-events" | "miami-new-times"
+type AdapterType =
+  | "ics"
+  | "events-html"
+  | "sitemap-events"
+  | "miami-new-times"
+  | "llm-extract"
 function inferAdapterType(url: string): AdapterType {
   const u = url.toLowerCase()
   if (u.includes("miaminewtimes.com/eventsearch")) return "miami-new-times"
@@ -790,6 +795,7 @@ function AddSourceForm({
           <option value="events-html">events-html (JSON-LD)</option>
           <option value="sitemap-events">sitemap-events</option>
           <option value="miami-new-times">miami-new-times</option>
+          <option value="llm-extract">llm-extract (Haiku — text)</option>
         </select>
       </label>
       <label className="flex flex-col gap-1">

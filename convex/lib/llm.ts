@@ -303,6 +303,140 @@ export async function generateEventEnrichment(opts: {
   return validateEventEnrichment(toolUse.input)
 }
 
+// =====================================================================
+// Page-to-events extractor — used by the llm-extract adapter when a
+// venue page describes events in text but exposes no JSON-LD. Haiku
+// reads a cleaned-up text dump of the page and emits a JSON array of
+// events the scraper found.
+// =====================================================================
+
+export type ExtractedPageEvent = {
+  title: string
+  startsAtIso: string
+  endsAtIso?: string
+  locationName?: string
+  locationAddress?: string
+  description?: string
+  url?: string
+  price?: string
+}
+
+const EXTRACT_EVENTS_TOOL = {
+  name: "extract_events",
+  description:
+    "Extract every concrete, future-dated event mentioned on the page. SKIP: recurring 'every day' opening hours, exhibition runs without a kickoff date, generic store-hours notes, classes / courses without a one-time event. INCLUDE: dated performances, openings, screenings, talks, festivals, ticketed shows. Return an empty array when nothing concrete is in the text.",
+  input_schema: {
+    type: "object",
+    properties: {
+      events: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            title: {
+              type: "string",
+              description: "Event name as the venue states it. No editorializing.",
+            },
+            startsAtIso: {
+              type: "string",
+              description:
+                "Concrete ISO-8601 datetime in the venue's local timezone (assume America/New_York when unstated). MUST be a real date, not 'soon' or 'TBA'.",
+            },
+            endsAtIso: { type: "string" },
+            locationName: { type: "string" },
+            locationAddress: { type: "string" },
+            description: {
+              type: "string",
+              description:
+                "One-sentence summary lifted from the page. Skip when no description is on the page.",
+            },
+            url: {
+              type: "string",
+              description:
+                "Direct event-detail URL when the page links to one. Skip when the event lives only on this page.",
+            },
+            price: {
+              type: "string",
+              description:
+                'Human-readable price label ("Free", "$15", "$10-25"). Skip when not stated.',
+            },
+          },
+          required: ["title", "startsAtIso"],
+        },
+      },
+    },
+    required: ["events"],
+  },
+} as const
+
+export async function generatePageEventExtraction(opts: {
+  model: string
+  pageUrl: string
+  /** Cleaned-up text snapshot of the page (HTML stripped + whitespace
+   *  collapsed). Caller should cap at ~8KB to keep token use bounded. */
+  pageText: string
+  /** Inferred "today" — supplied so Haiku can disambiguate "this
+   *  Saturday" / "next Friday" without time-zone trickery. */
+  todayIso: string
+}): Promise<ReadonlyArray<ExtractedPageEvent> | null> {
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set in Convex env")
+  const client = new Anthropic({ apiKey })
+
+  const prompt = [
+    `You are extracting events from a Miami venue's web page. Output ONLY events the page concretely describes with a real, future date. Skip vague mentions ("coming soon", "see calendar for dates").`,
+    ``,
+    `Today's date (Miami time): ${opts.todayIso}`,
+    `Source URL: ${opts.pageUrl}`,
+    ``,
+    `=== Page text (HTML stripped) ===`,
+    opts.pageText.slice(0, 8000),
+    ``,
+    `Call \`extract_events\` with your list. If nothing concrete is in the text, pass an empty array — don't invent events.`,
+  ].join("\n")
+
+  const response = await client.messages.create({
+    model: opts.model,
+    max_tokens: 2048,
+    messages: [{ role: "user", content: prompt }],
+    tools: [EXTRACT_EVENTS_TOOL],
+    tool_choice: { type: "tool", name: "extract_events" },
+  })
+
+  const toolUse = response.content.find(
+    (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
+  )
+  if (!toolUse) return null
+  const input = toolUse.input as { events?: unknown }
+  if (!Array.isArray(input.events)) return []
+  const out: Array<ExtractedPageEvent> = []
+  for (const e of input.events) {
+    if (!e || typeof e !== "object") continue
+    const obj = e as Record<string, unknown>
+    if (typeof obj.title !== "string" || !obj.title.trim()) continue
+    if (typeof obj.startsAtIso !== "string") continue
+    const startMs = Date.parse(obj.startsAtIso)
+    if (!Number.isFinite(startMs)) continue
+    out.push({
+      title: obj.title.trim(),
+      startsAtIso: obj.startsAtIso,
+      endsAtIso:
+        typeof obj.endsAtIso === "string" ? obj.endsAtIso : undefined,
+      locationName:
+        typeof obj.locationName === "string" ? obj.locationName : undefined,
+      locationAddress:
+        typeof obj.locationAddress === "string"
+          ? obj.locationAddress
+          : undefined,
+      description:
+        typeof obj.description === "string" ? obj.description : undefined,
+      url: typeof obj.url === "string" ? obj.url : undefined,
+      price: typeof obj.price === "string" ? obj.price : undefined,
+    })
+  }
+  return out
+}
+
 export async function generateTranslation(opts: {
   model: string
   article: {

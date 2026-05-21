@@ -2,6 +2,7 @@ import { v } from "convex/values"
 import { api, internal } from "./_generated/api"
 import { action, internalAction } from "./_generated/server"
 import { fetchItems } from "./lib/adapters"
+import { estimatedCallCents } from "./lib/budget"
 import { cronsEnabled } from "./lib/cronGate"
 import { requireEditorInAction } from "./lib/guard"
 import { isPrivateAudience } from "./lib/audienceFilter"
@@ -136,6 +137,25 @@ export const runEventIngestInternal = internalAction({
       await log(`Refreshing ${enabled.length} sources`)
       for (const src of enabled) {
         if (src.type === "data") continue
+        // llm-extract sources cost ~$0.005 per fetch — reserve from
+        // the daily LLM budget before invoking Haiku. When the cap is
+        // hit, skip the fetch for this tick; the row stays in place
+        // and the next tick (tomorrow's budget) will pick it back up.
+        if (src.type === "llm-extract") {
+          const reservation = await ctx.runMutation(
+            internal.budget.reserve,
+            {
+              estimatedCents: estimatedCallCents("claude-haiku-4-5-20251001"),
+              label: "llmExtract",
+            },
+          )
+          if (!reservation.allowed) {
+            await log(
+              `[${src.name}] skipped — daily LLM budget hit (${reservation.centsSpent}¢ / ${reservation.capCents}¢)`,
+            )
+            continue
+          }
+        }
         try {
           const items = await fetchItems({
             type: src.type,

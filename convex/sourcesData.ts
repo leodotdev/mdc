@@ -100,6 +100,7 @@ export const create = mutation({
       v.literal("events-html"),
       v.literal("sitemap-events"),
       v.literal("miami-new-times"),
+      v.literal("llm-extract"),
     ),
     url: v.string(),
     sectionIds: v.array(v.id("sections")),

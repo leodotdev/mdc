@@ -180,6 +180,7 @@ export default defineSchema({
       v.literal("events-html"),
       v.literal("sitemap-events"),
       v.literal("miami-new-times"),
+      v.literal("llm-extract"),
       v.literal("data"),
     ),
     url: v.string(),

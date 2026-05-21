@@ -25,6 +25,7 @@ import type * as lib_adapters_bluesky from "../lib/adapters/bluesky.js";
 import type * as lib_adapters_eventsHtml from "../lib/adapters/eventsHtml.js";
 import type * as lib_adapters_ics from "../lib/adapters/ics.js";
 import type * as lib_adapters_index from "../lib/adapters/index.js";
+import type * as lib_adapters_llmExtract from "../lib/adapters/llmExtract.js";
 import type * as lib_adapters_miamiNewTimes from "../lib/adapters/miamiNewTimes.js";
 import type * as lib_adapters_reddit from "../lib/adapters/reddit.js";
 import type * as lib_adapters_rss from "../lib/adapters/rss.js";
@@ -82,6 +83,7 @@ declare const fullApi: ApiFromModules<{
   "lib/adapters/eventsHtml": typeof lib_adapters_eventsHtml;
   "lib/adapters/ics": typeof lib_adapters_ics;
   "lib/adapters/index": typeof lib_adapters_index;
+  "lib/adapters/llmExtract": typeof lib_adapters_llmExtract;
   "lib/adapters/miamiNewTimes": typeof lib_adapters_miamiNewTimes;
   "lib/adapters/reddit": typeof lib_adapters_reddit;
   "lib/adapters/rss": typeof lib_adapters_rss;

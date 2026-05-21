@@ -42,6 +42,7 @@ export type SourceForAdapter = {
     | "events-html"
     | "sitemap-events"
     | "miami-new-times"
+    | "llm-extract"
     | "data"
   url: string
   config?: unknown

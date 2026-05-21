@@ -1846,6 +1846,7 @@ type ExpansionFeed = {
     | "events-html"
     | "sitemap-events"
     | "miami-new-times"
+    | "llm-extract"
   url: string
   sectionSlugs: ReadonlyArray<string>
   /** Optional Miami neighborhood slugs this source serves. */
