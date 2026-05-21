@@ -4,7 +4,6 @@ import { Link, createFileRoute  } from "@tanstack/react-router"
 
 
 import { api } from "../../../convex/_generated/api"
-import { TrendingStrip } from "@/components/editorial/trending-strip"
 import { SectionHeaderCell } from "@/components/editorial/section-header-cell"
 import { StoryItem } from "@/components/editorial/story-item"
 import { EventListItem } from "@/components/events/event-list-item"
@@ -238,8 +237,6 @@ function HomePage() {
   const morelead = take(allPool, 1, { requireImage: true })[0]
   const moreRail = take(allPool, 4)
 
-  const trending = rankedPool.slice(0, 4)
-
   // Alternate view modes — chronological list / month grid / map view.
   // Default mode (newspaper) falls through to the WaPo-style layout
   // below. The events array is `latest` since it covers the full event
@@ -465,29 +462,6 @@ function HomePage() {
           </div>
         </section>
       ) : null}
-
-      {/* ════════════════════ Trending ════════════════════ */}
-      {trending.length > 0 ? (
-        <section className={BLOCK}>
-          <TrendingStrip
-            label={t("home.trending")}
-            articles={trending}
-          />
-        </section>
-      ) : null}
-
-      {/* ════════════════════ All upcoming events ════════════════════
-          A chronological feed of every event across the whole site —
-          grouped by day, sticky day headers. Drops the per-section
-          blocks that used to live here: the homepage is the all-events
-          view; section/subsection pages do the filtering. */}
-      <section className={BLOCK}>
-        <SectionHeaderCell
-          title="All upcoming events"
-          className="mb-6"
-        />
-        <EventListView events={allUpcoming} />
-      </section>
 
       <BannerAd slot="home-bottom" className={BLOCK} />
     </div>

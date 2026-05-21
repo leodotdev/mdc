@@ -28,6 +28,13 @@ const PRIVATE_PHRASES: ReadonlyArray<RegExp> = [
   // Audience-explicit
   /\b(students?\s+only|faculty\s+only|staff\s+only|members?\s+only|employees?\s+only|invit(?:e|ation)\s+only|closed\s+event|private\s+event)\b/i,
   /\bopen\s+(?:only\s+)?to\s+(?:UM|FIU|MDC|Barry|university|college|campus|enrolled|current)\s+(?:students?|faculty|staff|community|members)/i,
+  // Audience: Faculty / Students / Staff — iCal CATEGORIES or body
+  // text that scopes the event to the university's closed community.
+  // Triggers when ANY of those audience labels appear in an
+  // "audience"-prefixed phrase, OR when the trio shows up together
+  // without a public-override.
+  /\baudience\s*[:\-]?\s*(?:faculty|students?|staff|alumni|prospective\s+students?)\b/i,
+  /\b(faculty|students?)\s*,\s*(students?|staff)\s*,\s*(students?|staff|alumni)\b/i,
   // Internal governance / admin
   /\b(faculty\s+(?:senate|meeting|assembly|forum|retreat)|department\s+meeting|board\s+meeting\s+\(closed\)|townhall\s+\(staff\)|all[- ]hands)\b/i,
   // Student-life / academic-internal
@@ -38,7 +45,16 @@ const PRIVATE_PHRASES: ReadonlyArray<RegExp> = [
   // "public" but they're Zoom calls for prospective applicants or
   // faculty pedagogy sessions — not local Miami events a reader can
   // attend in person.
-  /\b(info\s+session|admissions\s+(?:info|workshop|101)|virtual\s+admissions|application\s+workshop|MBA\s+(?:info|virtual)|virtual\s+info)\b/i,
+  /\b(info(?:rmational?)?\s+(?:session|webinar)|admissions\s+(?:info|workshop|101)|virtual\s+admissions|application\s+workshop|MBA\s+(?:info|virtual)|virtual\s+info)\b/i,
+  // Registered-client / RSVP-by-name events — the support-group
+  // shape that limits attendees to an existing roster.
+  /\bregistered\s+\w+\s+clients?\s+only\b|\bRSVP\s+to\s+(?:Dr\.?\s+|Mr\.?\s+|Ms\.?\s+)?[A-Z]\w+\b/i,
+  // "Save the Date" — almost exclusively used by university
+  // internal-ops (faculty retreats, training, alumni roundtables).
+  // Public events advertise tickets, not save-the-dates.
+  /\bsave\s+the\s+date(?:[:!,.\s])/i,
+  // 1:1 / one-on-one — bespoke sessions, not a public event.
+  /\b(?:1[:\s-]?on[:\s-]?1|one[:\s-]?on[:\s-]?one)\s+(?:training|consultation|session|meeting|tutoring)\b/i,
   /\b(webinar|virtual\s+(?:workshop|meeting|panel|talk|tour|open\s+house|session)|online\s+(?:workshop|meeting|panel)|zoom\s+(?:workshop|meeting|webinar))\b/i,
   /\b(canvas\s+(?:training|course\s+design|pedagogy)|faculty\s+(?:training|development)|instructor\s+training|teaching\s+workshop|pedagogy\s+(?:workshop|consultation))\b/i,
   // Academic-internal seminar / writing-group lingo
