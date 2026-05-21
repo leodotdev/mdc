@@ -356,7 +356,7 @@ function NeighborhoodFilterMenu({
     <span className="inline-flex items-center gap-1">
       <DropdownMenu>
         <DropdownMenuTrigger
-          className={`${linkClass} inline-flex items-center gap-1 max-w-[14rem]`}
+          className={`${linkClass} inline-flex items-center gap-1`}
           data-nav-state={active ? "active" : "inactive"}
           // When the reader is on a section page, tint hover/active with
           // that section's accent so the filter pill reads as part of
@@ -366,11 +366,7 @@ function NeighborhoodFilterMenu({
             activeAccent ? accentVars(activeAccent, activeAccent) : brandVars(activeAccent)
           }
         >
-          {/* Long combined-name labels ("Wynwood + Design District",
-              "Sunny Isles Beach") get clipped with an ellipsis so the
-              nav row keeps a stable shape. Chevron sits outside the
-              truncated span so it always stays visible. */}
-          <span className="truncate" title={triggerLabel}>{triggerLabel}</span>
+          {triggerLabel}
           <ChevronDown className="size-4 shrink-0" aria-hidden />
         </DropdownMenuTrigger>
       <DropdownMenuContent
