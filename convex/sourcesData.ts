@@ -122,13 +122,26 @@ export const update = mutation({
     sectionIds: v.optional(v.array(v.id("sections"))),
     enabled: v.optional(v.boolean()),
     config: v.optional(v.any()),
+    // Type swap allowed but constrained to event-shaped adapters —
+    // matches the `create` mutation's union so editors can't slip a
+    // non-calendar type in via the update path.
+    type: v.optional(
+      v.union(
+        v.literal("ics"),
+        v.literal("events-html"),
+        v.literal("sitemap-events"),
+        v.literal("miami-new-times"),
+        v.literal("llm-extract"),
+      ),
+    ),
   },
   handler: async (ctx, { sourceId, ...patch }) => {
     await requireEditor(ctx)
     if (patch.url !== undefined) {
       const existing = await ctx.db.get(sourceId)
       if (!existing) throw new Error("Source not found")
-      assertSafeSourceUrl(patch.url, existing.type)
+      const effectiveType = patch.type ?? existing.type
+      assertSafeSourceUrl(patch.url, effectiveType)
     }
     const cleaned: Record<string, unknown> = {}
     for (const [key, value] of Object.entries(patch)) {

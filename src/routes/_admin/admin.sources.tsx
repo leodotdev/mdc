@@ -168,14 +168,28 @@ function SourcesPage() {
     mutationFn: async ({
       sourceId,
       url,
+      type,
     }: {
       sourceId: Id<"sources">
       url: string
+      type: AdapterType
     }) => {
-      await convex.mutation(api.sourcesData.update, { sourceId, url })
+      await convex.mutation(api.sourcesData.update, { sourceId, url, type })
     },
-    onSuccess: () => {
+    onSuccess: async (_data, vars) => {
       setEditingUrl(null)
+      // Auto-run a test fetch right after the URL changes — the
+      // editor's most likely intent for editing a URL is "this link
+      // broke, try the new one", so verifying it works now matters
+      // more than waiting for the next 30-min cron tick.
+      try {
+        await convex.action(api.sources.testFetch, {
+          sourceId: vars.sourceId,
+        })
+      } catch {
+        // testFetch failures show up in the row's lastFetchError;
+        // swallow here so the URL save itself still reports success.
+      }
       refetch()
     },
   })
@@ -437,9 +451,15 @@ function SourcesPage() {
                                   setEditingUrl(null)
                                   return
                                 }
+                                // Re-evaluate adapter type based on the
+                                // new URL so e.g. swapping an
+                                // events-html URL for a ?ical=1 link
+                                // flips the source over to ics with no
+                                // extra editor work.
                                 updateUrl.mutate({
                                   sourceId: s._id,
                                   url: next,
+                                  type: inferAdapterType(next),
                                 })
                               }}
                               className="mt-1 flex items-center gap-1"
