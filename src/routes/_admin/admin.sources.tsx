@@ -3,12 +3,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute } from "@tanstack/react-router"
 import { useConvex } from "convex/react"
 import {
+  Check,
   ExternalLink,
   Loader2,
+  Pencil,
   Plus,
   Power,
   RefreshCw,
   Trash2,
+  X,
 } from "lucide-react"
 import { useMemo, useState } from "react"
 
@@ -160,6 +163,28 @@ function SourcesPage() {
     },
     onSuccess: () => refetch(),
   })
+
+  const updateUrl = useMutation({
+    mutationFn: async ({
+      sourceId,
+      url,
+    }: {
+      sourceId: Id<"sources">
+      url: string
+    }) => {
+      await convex.mutation(api.sourcesData.update, { sourceId, url })
+    },
+    onSuccess: () => {
+      setEditingUrl(null)
+      refetch()
+    },
+  })
+
+  // Which row's URL field is currently in inline-edit mode.
+  const [editingUrl, setEditingUrl] = useState<{
+    id: string
+    value: string
+  } | null>(null)
 
   const setEnabled = useMutation({
     mutationFn: async ({
@@ -403,14 +428,74 @@ function SourcesPage() {
                               </Badge>
                             ) : null}
                           </div>
-                          <a
-                            href={s.url.startsWith("http") ? s.url : undefined}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="meta text-xs break-words hover:underline block"
-                          >
-                            {s.url}
-                          </a>
+                          {editingUrl?.id === id ? (
+                            <form
+                              onSubmit={(e) => {
+                                e.preventDefault()
+                                const next = editingUrl.value.trim()
+                                if (!next || next === s.url) {
+                                  setEditingUrl(null)
+                                  return
+                                }
+                                updateUrl.mutate({
+                                  sourceId: s._id,
+                                  url: next,
+                                })
+                              }}
+                              className="mt-1 flex items-center gap-1"
+                            >
+                              <input
+                                type="url"
+                                autoFocus
+                                value={editingUrl.value}
+                                onChange={(e) =>
+                                  setEditingUrl({
+                                    id,
+                                    value: e.target.value,
+                                  })
+                                }
+                                onKeyDown={(e) => {
+                                  if (e.key === "Escape") setEditingUrl(null)
+                                }}
+                                className="flex-1 rounded-sm border bg-background px-1.5 py-0.5 font-mono text-xs"
+                              />
+                              <Button
+                                size="icon-sm"
+                                variant="ghost"
+                                type="submit"
+                                disabled={updateUrl.isPending}
+                                title="Save URL"
+                                aria-label="Save URL"
+                              >
+                                {updateUrl.isPending ? (
+                                  <Loader2 className="animate-spin" />
+                                ) : (
+                                  <Check />
+                                )}
+                              </Button>
+                              <Button
+                                size="icon-sm"
+                                variant="ghost"
+                                type="button"
+                                title="Cancel"
+                                aria-label="Cancel URL edit"
+                                onClick={() => setEditingUrl(null)}
+                              >
+                                <X />
+                              </Button>
+                            </form>
+                          ) : (
+                            <a
+                              href={
+                                s.url.startsWith("http") ? s.url : undefined
+                              }
+                              target="_blank"
+                              rel="noreferrer"
+                              className="meta text-xs break-words hover:underline block"
+                            >
+                              {s.url}
+                            </a>
+                          )}
                         </TableCell>
                         <TableCell className="hidden md:table-cell">
                           <Badge variant="outline" className="text-[0.65rem]">
@@ -459,6 +544,17 @@ function SourcesPage() {
                                 <ExternalLink />
                               </Button>
                             ) : null}
+                            <Button
+                              size="icon-sm"
+                              variant="ghost"
+                              aria-label="Fix URL"
+                              title="Fix URL — paste a new one"
+                              onClick={() =>
+                                setEditingUrl({ id, value: s.url })
+                              }
+                            >
+                              <Pencil />
+                            </Button>
                             <Button
                               size="icon-sm"
                               variant="ghost"
