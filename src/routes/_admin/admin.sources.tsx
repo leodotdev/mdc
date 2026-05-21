@@ -7,7 +7,6 @@ import {
   ExternalLink,
   Loader2,
   Pencil,
-  Plus,
   Power,
   RefreshCw,
   Trash2,
@@ -306,18 +305,6 @@ function SourcesPage() {
           </div>
         </div>
       </header>
-
-      {/* Quick-add form — paste any event-rich URL and we auto-pick
-          the right adapter type. Source is saved enabled so the next
-          ingest tick fetches it. */}
-      <AddSourceForm
-        sections={sectionsQuery.data ?? []}
-        onAdded={() =>
-          queryClient.invalidateQueries({
-            queryKey: convexQuery(api.sourcesData.list, {}).queryKey,
-          })
-        }
-      />
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3 rounded-md border bg-card px-3 py-2">
@@ -704,149 +691,4 @@ function inferAdapterType(url: string): AdapterType {
     return "sitemap-events"
   }
   return "events-html"
-}
-
-
-function AddSourceForm({
-  sections,
-  onAdded,
-}: {
-  sections: ReadonlyArray<{
-    _id: string
-    slug: string
-    name: string
-    parentId?: string
-  }>
-  onAdded: () => void
-}) {
-  const convex = useConvex()
-  const [open, setOpen] = useState(false)
-  const [url, setUrl] = useState("")
-  const [name, setName] = useState("")
-  const [type, setType] = useState<AdapterType>("events-html")
-  const [sectionId, setSectionId] = useState<string>("")
-  const [typeOverridden, setTypeOverridden] = useState(false)
-
-  // Top-level sections only (subsections inherit a parent's adapter
-  // logic; routing to a sub-section is the desk's job at ingest time).
-  const topLevel = sections.filter((s) => !s.parentId)
-
-  // (no default — empty `sectionId` means "any section / auto-route".
-  // Editor explicitly picks a section to pin.)
-
-  const add = useMutation({
-    mutationFn: async () => {
-      await convex.mutation(api.sourcesData.create, {
-        name: name.trim() || url,
-        type,
-        url: url.trim(),
-        // Empty `sectionId` ⇒ no source-level section pin. Each
-        // event's section gets picked at enrichment time by Haiku
-        // based on its content. Useful for citywide aggregators
-        // (Soul of Miami, MNT, Eventbrite-ish feeds).
-        sectionIds: sectionId ? [sectionId as Id<"sections">] : [],
-        enabled: true,
-      })
-    },
-    onSuccess: () => {
-      setUrl("")
-      setName("")
-      setTypeOverridden(false)
-      onAdded()
-    },
-  })
-
-  if (!open) {
-    return (
-      <div className="flex justify-end">
-        <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
-          <Plus />
-          Add source
-        </Button>
-      </div>
-    )
-  }
-
-  return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault()
-        if (!url.trim()) return
-        add.mutate()
-      }}
-      className="flex flex-wrap items-end gap-3 rounded-md border bg-card p-3"
-    >
-      <label className="flex min-w-[18rem] flex-1 flex-col gap-1">
-        <span className="meta text-xs">URL</span>
-        <input
-          type="url"
-          required
-          placeholder="https://venue.com/events/?ical=1"
-          value={url}
-          onChange={(e) => {
-            const v = e.target.value
-            setUrl(v)
-            if (!typeOverridden) setType(inferAdapterType(v))
-          }}
-          className="rounded-md border bg-background px-2 py-1.5 text-sm"
-        />
-      </label>
-      <label className="flex min-w-[10rem] flex-1 flex-col gap-1">
-        <span className="meta text-xs">Name</span>
-        <input
-          type="text"
-          placeholder="(defaults to URL)"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          className="rounded-md border bg-background px-2 py-1.5 text-sm"
-        />
-      </label>
-      <label className="flex flex-col gap-1">
-        <span className="meta text-xs">Type</span>
-        <select
-          value={type}
-          onChange={(e) => {
-            setType(e.target.value as AdapterType)
-            setTypeOverridden(true)
-          }}
-          className="rounded-md border bg-background px-2 py-1.5 text-sm"
-        >
-          <option value="ics">iCal (.ics / ?ical=1)</option>
-          <option value="events-html">events-html (JSON-LD)</option>
-          <option value="sitemap-events">sitemap-events</option>
-          <option value="miami-new-times">miami-new-times</option>
-          <option value="llm-extract">llm-extract (Haiku — text)</option>
-        </select>
-      </label>
-      <label className="flex flex-col gap-1">
-        <span className="meta text-xs">Section</span>
-        <select
-          value={sectionId}
-          onChange={(e) => setSectionId(e.target.value)}
-          className="rounded-md border bg-background px-2 py-1.5 text-sm"
-        >
-          <option value="">(any — auto-route)</option>
-          {topLevel.map((s) => (
-            <option key={s._id} value={s._id}>
-              {s.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <div className="flex items-center gap-2">
-        <Button size="sm" type="submit" disabled={add.isPending || !url.trim()}>
-          {add.isPending ? <Loader2 className="animate-spin" /> : <Plus />}
-          Add
-        </Button>
-        <Button
-          size="sm"
-          type="button"
-          variant="ghost"
-          onClick={() => setOpen(false)}
-        >
-          Cancel
-        </Button>
-      </div>
-    </form>
-  )
 }

@@ -1,5 +1,6 @@
 import { v } from "convex/values"
-import { internalQuery, mutation, query } from "./_generated/server"
+import { internalMutation, internalQuery, mutation, query } from "./_generated/server"
+import type { Id } from "./_generated/dataModel"
 import { requireEditor } from "./lib/guard"
 
 export const list = query({
@@ -150,6 +151,51 @@ export const update = mutation({
     if (Object.keys(cleaned).length > 0) {
       await ctx.db.patch(sourceId, cleaned)
     }
+  },
+})
+
+// Idempotent installer — adds a source if no row exists with the
+// same URL, leaves it alone otherwise. Internal-only; called from
+// CLI (`npx convex run sourcesData:installSource`) when adding feeds
+// without a UI form. type defaults to "events-html"; section can be
+// omitted (sectionIds: []).
+export const installSource = internalMutation({
+  args: {
+    url: v.string(),
+    name: v.string(),
+    type: v.union(
+      v.literal("ics"),
+      v.literal("events-html"),
+      v.literal("sitemap-events"),
+      v.literal("miami-new-times"),
+      v.literal("llm-extract"),
+    ),
+    sectionSlug: v.optional(v.string()),
+  },
+  handler: async (ctx, { url, name, type, sectionSlug }) => {
+    const existing = await ctx.db
+      .query("sources")
+      .filter((q) => q.eq(q.field("url"), url))
+      .first()
+    if (existing) {
+      return { added: false, sourceId: existing._id, reason: "exists" }
+    }
+    const sectionIds: Array<Id<"sections">> = []
+    if (sectionSlug) {
+      const section = await ctx.db
+        .query("sections")
+        .withIndex("by_slug", (q) => q.eq("slug", sectionSlug))
+        .unique()
+      if (section) sectionIds.push(section._id)
+    }
+    const sourceId = await ctx.db.insert("sources", {
+      name,
+      type,
+      url,
+      sectionIds,
+      enabled: true,
+    })
+    return { added: true, sourceId, reason: "inserted" }
   },
 })
 
