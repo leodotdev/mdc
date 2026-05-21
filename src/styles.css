@@ -128,21 +128,24 @@
 }
 
 @layer base {
+    /* Squircle corners everywhere. CSS Corner Shapes Level 1 — the
+       property cascades to any element that has a border-radius
+       (Tailwind's rounded-* utilities and the explicit border-radius
+       calls in this file). Browsers without support silently ignore
+       the property and render plain circular arcs. */
     * {
         @apply border-border outline-ring/50;
+        corner-shape: squircle;
+        -webkit-corner-shape: squircle;
     }
     body {
         @apply bg-background text-foreground overflow-x-hidden;
         font-feature-settings: "ss01", "cv11";
     }
-    /* Tiny CSS squircle on every <img>. corner-shape: squircle gives the
-       smoother iOS-style curve where supported (Safari, Chromium ≥ 138);
-       border-radius is the universal fallback. Avatars override with
-       rounded-full so the circle wins. */
+    /* Tiny rounded corner on every <img> so the squircle has something
+       to shape. Avatars override with rounded-full so the circle wins. */
     img {
         border-radius: 4px;
-        corner-shape: squircle;
-        -webkit-corner-shape: squircle;
     }
     button:not(:disabled), [role="button"]:not(:disabled) {
         cursor: pointer;
