@@ -15,8 +15,11 @@ const RADAR_URL = "https://radar.weather.gov/ridge/standard/KAMX_loop.gif"
 const REFRESH_MS = 5 * 60 * 1000
 
 export function RadarWidget() {
-  const [ts, setTs] = useState(() => Date.now())
+  // Start with null so SSR and the first client render agree on the bare
+  // URL; the cache-buster gets appended on the client after mount.
+  const [ts, setTs] = useState<number | null>(null)
   useEffect(() => {
+    setTs(Date.now())
     const id = setInterval(() => setTs(Date.now()), REFRESH_MS)
     return () => clearInterval(id)
   }, [])
@@ -33,7 +36,7 @@ export function RadarWidget() {
           title="NWS Miami radar — open full station view"
         >
           <img
-            src={`${RADAR_URL}?ts=${ts}`}
+            src={ts === null ? RADAR_URL : `${RADAR_URL}?ts=${ts}`}
             alt="Animated radar loop centered on Miami showing the last hour of precipitation"
             className="aspect-square w-full object-cover"
             loading="lazy"

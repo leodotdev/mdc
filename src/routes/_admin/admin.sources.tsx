@@ -3,20 +3,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute } from "@tanstack/react-router"
 import { useConvex } from "convex/react"
 import {
-  Check,
   ExternalLink,
   Loader2,
-  Pencil,
-  Power,
   RefreshCw,
   Trash2,
-  X,
 } from "lucide-react"
 import { useMemo, useState } from "react"
 
 import { api } from "../../../convex/_generated/api"
 import type { Id } from "../../../convex/_generated/dataModel"
-import { TableLoadingRows } from "@/components/editorial/story-card-skeleton"
+import { TableLoadingRows } from "@/components/editorial/event-card-skeleton"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -30,6 +26,7 @@ import {
 } from "@/components/ui/table"
 import { relativeTime } from "@/lib/dates"
 import { runOnAll, useBulkSelection } from "@/lib/use-bulk-selection"
+import { cn } from "@/lib/utils"
 
 export const Route = createFileRoute("/_admin/admin/sources")({
   component: SourcesPage,
@@ -75,21 +72,16 @@ function SourcesPage() {
   const convex = useConvex()
   const queryClient = useQueryClient()
   const sources = useQuery(convexQuery(api.sourcesData.list, {}))
-  const sectionsQuery = useQuery(convexQuery(api.sections.list, {}))
+  // Cumulative events-per-source. Drives the "Events gathered" column.
+  // Cached server-side; refetches on the same triggers as the source
+  // list so adding/disabling a source doesn't desync the numbers.
+  const eventCounts = useQuery(convexQuery(api.sourcesData.eventCounts, {}))
 
-  // Filters
+  // Filters — section binding was retired with the classifier (#1),
+  // so only status + free-text search remain.
   const [statusFilter, setStatusFilter] =
     useState<SourceState | "all">("all")
-  const [sectionFilter, setSectionFilter] = useState<string>("all")
   const [search, setSearch] = useState("")
-
-  const sectionById = useMemo(() => {
-    const map = new Map<string, { slug: string; name: string }>()
-    for (const s of sectionsQuery.data ?? []) {
-      map.set(s._id as string, { slug: s.slug, name: s.name })
-    }
-    return map
-  }, [sectionsQuery.data])
 
   // Apply filters
   const filtered = useMemo(() => {
@@ -98,34 +90,64 @@ function SourcesPage() {
     return rows.filter((s) => {
       const state = classify(s)
       if (statusFilter !== "all" && state !== statusFilter) return false
-      if (sectionFilter !== "all") {
-        const primary = s.sectionIds[0] as unknown as string | undefined
-        if (sectionById.get(primary ?? "")?.slug !== sectionFilter) return false
-      }
       if (needle) {
         const hay = `${s.name} ${s.url}`.toLowerCase()
         if (!hay.includes(needle)) return false
       }
       return true
     })
-  }, [sources.data, statusFilter, sectionFilter, search, sectionById])
+  }, [sources.data, statusFilter, search])
 
-  // Group filtered rows by primary section, sorted alphabetically by
-  // section name. Sources with no primary section land under "Other".
-  const grouped = useMemo(() => {
-    const groups = new Map<string, { name: string; rows: typeof filtered }>()
-    for (const s of filtered) {
-      const primaryId = s.sectionIds[0] as unknown as string | undefined
-      const meta = primaryId ? sectionById.get(primaryId) : null
-      const key = meta?.slug ?? "_other"
-      const name = meta?.name ?? "Other"
-      if (!groups.has(key)) groups.set(key, { name, rows: [] })
-      groups.get(key)!.rows.push(s)
-    }
-    return Array.from(groups.entries()).sort((a, b) =>
-      a[1].name.localeCompare(b[1].name),
+  // Click-to-sort state. Default sort = Name ASC. Clicking the same
+  // column twice flips direction; clicking a different column resets
+  // to ASC for the new key.
+  type SortKey = "name" | "type" | "events" | "lastFetch" | "status"
+  const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" }>({
+    key: "name",
+    dir: "asc",
+  })
+  const toggleSort = (key: SortKey) =>
+    setSort((prev) =>
+      prev.key === key
+        ? { key, dir: prev.dir === "asc" ? "desc" : "asc" }
+        : { key, dir: "asc" },
     )
-  }, [filtered, sectionById])
+
+  // Sorted flat row list. Name is the tie-breaker so the table stays
+  // stable when the primary sort key is coarse (Type / Status).
+  const sortedRows = useMemo(() => {
+    const decorated = filtered.map((s) => ({
+      row: s,
+      nameKey: s.name.toLowerCase(),
+      typeKey: s.type,
+      eventsKey: eventCounts.data?.[s._id as string] ?? 0,
+      lastFetchKey: s.lastFetchedAt ?? 0,
+      statusKey: classify(s),
+    }))
+    decorated.sort((a, b) => {
+      let cmp = 0
+      switch (sort.key) {
+        case "name":
+          cmp = a.nameKey.localeCompare(b.nameKey)
+          break
+        case "type":
+          cmp = a.typeKey.localeCompare(b.typeKey)
+          break
+        case "events":
+          cmp = a.eventsKey - b.eventsKey
+          break
+        case "lastFetch":
+          cmp = a.lastFetchKey - b.lastFetchKey
+          break
+        case "status":
+          cmp = a.statusKey.localeCompare(b.statusKey)
+          break
+      }
+      if (cmp === 0) cmp = a.nameKey.localeCompare(b.nameKey)
+      return sort.dir === "asc" ? cmp : -cmp
+    })
+    return decorated.map((d) => d.row)
+  }, [filtered, sort, eventCounts.data])
 
   // Coverage counts across the unfiltered dataset — what the row
   // counts at the top of the page show.
@@ -163,54 +185,38 @@ function SourcesPage() {
     onSuccess: () => refetch(),
   })
 
-  const updateUrl = useMutation({
-    mutationFn: async ({
-      sourceId,
-      url,
-      type,
-    }: {
-      sourceId: Id<"sources">
-      url: string
-      type: AdapterType
-    }) => {
-      await convex.mutation(api.sourcesData.update, { sourceId, url, type })
-    },
-    onSuccess: async (_data, vars) => {
-      setEditingUrl(null)
-      // Auto-run a test fetch right after the URL changes — the
-      // editor's most likely intent for editing a URL is "this link
-      // broke, try the new one", so verifying it works now matters
-      // more than waiting for the next 30-min cron tick.
-      try {
-        await convex.action(api.sources.testFetch, {
-          sourceId: vars.sourceId,
-        })
-      } catch {
-        // testFetch failures show up in the row's lastFetchError;
-        // swallow here so the URL save itself still reports success.
-      }
+  // Add-source form state. Single URL field; server probes the page,
+  // picks the adapter type, derives a name, and runs an initial
+  // fetch + drain. Status surfaces inline so the editor sees "added
+  // with 12 items" / "blocked (Cloudflare)" / "fetched 0" without
+  // bouncing to the row.
+  const [addUrl, setAddUrl] = useState("")
+  const [addResult, setAddResult] = useState<{
+    name: string
+    adapter: string
+    blocked: boolean
+    fetched: number
+    error?: string
+  } | null>(null)
+  const smartAdd = useMutation({
+    mutationFn: async (url: string) =>
+      await convex.action(api.sources.smartAdd, { url }),
+    onSuccess: (data) => {
+      setAddResult({
+        name: data.name,
+        adapter: data.adapter,
+        blocked: data.blocked,
+        fetched: data.fetched,
+        error: data.error,
+      })
+      setAddUrl("")
       refetch()
     },
   })
 
-  // Which row's URL field is currently in inline-edit mode.
-  const [editingUrl, setEditingUrl] = useState<{
-    id: string
-    value: string
-  } | null>(null)
-
-  const setEnabled = useMutation({
-    mutationFn: async ({
-      sourceId,
-      enabled,
-    }: {
-      sourceId: Id<"sources">
-      enabled: boolean
-    }) => {
-      await convex.mutation(api.sourcesData.update, { sourceId, enabled })
-    },
-    onSuccess: () => refetch(),
-  })
+  const suggestions = useQuery(
+    convexQuery(api.discovery.listSuggestions, {}),
+  )
 
   const bulkTestFetch = useMutation({
     mutationFn: async () => {
@@ -225,11 +231,11 @@ function SourcesPage() {
     },
   })
 
-  const bulkSetEnabled = useMutation({
-    mutationFn: async (enabled: boolean) => {
+  const bulkRemove = useMutation({
+    mutationFn: async () => {
       const ids = Array.from(selected) as Array<Id<"sources">>
       await runOnAll(ids, (sourceId) =>
-        convex.mutation(api.sourcesData.update, { sourceId, enabled }),
+        convex.mutation(api.sourcesData.remove, { sourceId }),
       )
     },
     onSuccess: () => {
@@ -258,23 +264,25 @@ function SourcesPage() {
               ) : (
                 <RefreshCw />
               )}{" "}
-              Test fetch
+              Fetch now
             </Button>
             <Button
               size="sm"
-              variant="outline"
-              disabled={bulkSetEnabled.isPending}
-              onClick={() => bulkSetEnabled.mutate(true)}
+              variant="destructive"
+              disabled={bulkRemove.isPending}
+              onClick={() => {
+                if (
+                  window.confirm(
+                    `Delete ${selected.size} source${
+                      selected.size === 1 ? "" : "s"
+                    }? Permanent.`,
+                  )
+                ) {
+                  bulkRemove.mutate()
+                }
+              }}
             >
-              Enable
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={bulkSetEnabled.isPending}
-              onClick={() => bulkSetEnabled.mutate(false)}
-            >
-              Disable
+              <Trash2 /> Delete
             </Button>
             <Button size="sm" variant="ghost" onClick={clear}>
               Clear
@@ -291,7 +299,7 @@ function SourcesPage() {
           <p className="meta mt-1">
             Defined in <code className="font-mono">convex/seed.ts</code> — run{" "}
             <code className="font-mono">npx convex run seed:run</code> after
-            editing. Sources are grouped by primary section.
+            editing.
           </p>
           {/* Quick counts strip */}
           <div className="meta mt-2 flex flex-wrap items-center gap-x-3 text-xs">
@@ -305,6 +313,129 @@ function SourcesPage() {
           </div>
         </div>
       </header>
+
+      {/* Add source — single URL input. Server probes the page, picks
+          the adapter type, derives the name, then runs a test fetch
+          so the new row shows up populated. */}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault()
+          const u = addUrl.trim()
+          if (!u) return
+          setAddResult(null)
+          smartAdd.mutate(u)
+        }}
+        className="flex flex-wrap items-center gap-2 rounded-md border bg-card px-3 py-2"
+      >
+        <label className="meta text-xs">Add source</label>
+        <input
+          type="url"
+          value={addUrl}
+          onChange={(e) => setAddUrl(e.target.value)}
+          placeholder="https://venue.example.com/events"
+          className="flex-1 min-w-[16rem] rounded-md border bg-background px-2 py-1 text-sm"
+          disabled={smartAdd.isPending}
+        />
+        <Button
+          type="submit"
+          size="sm"
+          disabled={smartAdd.isPending || addUrl.trim().length === 0}
+        >
+          {smartAdd.isPending ? "Probing…" : "Add"}
+        </Button>
+        {addResult ? (
+          <span className="meta text-xs">
+            <span className="font-medium text-foreground">
+              {addResult.name}
+            </span>{" "}
+            · <code className="font-mono">{addResult.adapter}</code> ·{" "}
+            {addResult.blocked ? (
+              <span className="text-destructive">
+                blocked (try browser-extract)
+              </span>
+            ) : addResult.error ? (
+              <span className="text-destructive">
+                error: {addResult.error.slice(0, 60)}
+              </span>
+            ) : addResult.fetched > 0 ? (
+              <span className="text-primary">
+                fetched {addResult.fetched} items
+              </span>
+            ) : (
+              <span className="text-muted-foreground">
+                fetched 0 — check adapter
+              </span>
+            )}
+          </span>
+        ) : null}
+      </form>
+
+      {/* Discovery suggestions — domains we've seen in event citations
+          that aren't yet on the sources table. One-click install via
+          smartAdd; dismiss to hide. Pending only. */}
+      {suggestions.data && suggestions.data.length > 0 ? (
+        <details className="rounded-md border bg-card px-3 py-2 text-sm">
+          <summary className="cursor-pointer">
+            <span className="font-medium">
+              {suggestions.data.length} discovered domain
+              {suggestions.data.length === 1 ? "" : "s"}
+            </span>{" "}
+            <span className="meta text-xs">
+              — citation URLs we've seen but haven't installed
+            </span>
+          </summary>
+          <ul className="mt-2 space-y-1.5">
+            {suggestions.data.slice(0, 20).map((s) => (
+              <li
+                key={s._id}
+                className="flex flex-wrap items-center gap-2 border-t border-foreground/5 pt-1.5"
+              >
+                <span className="font-medium">{s.domain}</span>
+                <span className="meta text-xs">
+                  {s.eventCount} event{s.eventCount === 1 ? "" : "s"}
+                </span>
+                <a
+                  href={s.sampleUrls[0]}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="meta text-xs hover:underline"
+                >
+                  preview ↗
+                </a>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  className="ml-auto"
+                  disabled={smartAdd.isPending}
+                  onClick={async () => {
+                    smartAdd.mutate(`https://${s.domain}/`)
+                  }}
+                >
+                  Install
+                </Button>
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  onClick={async () => {
+                    await convex.mutation(
+                      api.discovery.dismissSuggestion,
+                      { suggestionId: s._id },
+                    )
+                    queryClient.invalidateQueries({
+                      queryKey: convexQuery(
+                        api.discovery.listSuggestions,
+                        {},
+                      ).queryKey,
+                    })
+                  }}
+                >
+                  Dismiss
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3 rounded-md border bg-card px-3 py-2">
@@ -330,17 +461,6 @@ function SourcesPage() {
             { value: "untested", label: `Untested (${totals.untested})` },
           ]}
         />
-        <FilterSelect
-          label="Section"
-          value={sectionFilter}
-          onChange={setSectionFilter}
-          options={[
-            { value: "all", label: "All sections" },
-            ...(sectionsQuery.data ?? [])
-              .filter((s) => !s.parentId)
-              .map((s) => ({ value: s.slug, label: s.name })),
-          ]}
-        />
         <span className="meta ml-auto text-xs">
           Showing {filtered.length} of {totals.all}
         </span>
@@ -350,56 +470,71 @@ function SourcesPage() {
         <div className="overflow-x-auto rounded-md border">
           <Table>
             <TableBody>
-              <TableLoadingRows rows={6} cols={6} />
+              <TableLoadingRows rows={6} cols={7} />
             </TableBody>
           </Table>
         </div>
-      ) : grouped.length === 0 ? (
+      ) : sortedRows.length === 0 ? (
         <p className="meta">No sources match these filters.</p>
       ) : (
-        <div className="flex flex-col gap-4">
-          {grouped.map(([slug, group]) => (
-            <div key={slug} className="overflow-x-auto rounded-md border">
-              <div className="flex items-baseline justify-between bg-muted/50 px-3 py-2 border-b">
-                <h2 className="font-sans text-sm font-semibold">{group.name}</h2>
-                <span className="meta text-xs">{group.rows.length}</span>
-              </div>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-10">
-                      <Checkbox
-                        aria-label={`Select all ${group.name}`}
-                        checked={
-                          group.rows.length > 0 &&
-                          group.rows.every((s) => selected.has(s._id as string))
-                        }
-                        onCheckedChange={(v) => {
-                          for (const s of group.rows) {
-                            const id = s._id as string
-                            const isSel = selected.has(id)
-                            if (v && !isSel) toggleOne(id)
-                            if (!v && isSel) toggleOne(id)
-                          }
-                        }}
-                      />
-                    </TableHead>
-                    <TableHead className="w-8" />
-                    <TableHead>Source</TableHead>
-                    <TableHead className="hidden md:table-cell">Type</TableHead>
-                    <TableHead className="hidden md:table-cell">Last fetch</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {group.rows.map((s) => {
+        <div className="overflow-x-auto rounded-md border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-10">
+                  <Checkbox
+                    aria-label="Select all sources"
+                    checked={allSelected}
+                    onCheckedChange={() => toggleAll()}
+                  />
+                </TableHead>
+                <SortableHead
+                  className="w-8"
+                  sortKey="status"
+                  current={sort}
+                  onSort={toggleSort}
+                  ariaLabel="Sort by status"
+                />
+                <SortableHead
+                  sortKey="name"
+                  current={sort}
+                  onSort={toggleSort}
+                >
+                  Source
+                </SortableHead>
+                <SortableHead
+                  className="hidden md:table-cell"
+                  sortKey="type"
+                  current={sort}
+                  onSort={toggleSort}
+                >
+                  Type
+                </SortableHead>
+                <SortableHead
+                  className="hidden md:table-cell text-right"
+                  sortKey="events"
+                  current={sort}
+                  onSort={toggleSort}
+                >
+                  Events
+                </SortableHead>
+                <SortableHead
+                  className="hidden md:table-cell"
+                  sortKey="lastFetch"
+                  current={sort}
+                  onSort={toggleSort}
+                >
+                  Last fetch
+                </SortableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {sortedRows.map((s) => {
                     const id = s._id as string
                     const isSelected = selected.has(id)
                     const isPending =
                       testFetch.isPending && testFetch.variables === s._id
-                    const isToggling =
-                      setEnabled.isPending &&
-                      setEnabled.variables?.sourceId === s._id
                     const state = classify(s)
                     return (
                       <TableRow
@@ -429,85 +564,39 @@ function SourcesPage() {
                               </Badge>
                             ) : null}
                           </div>
-                          {editingUrl?.id === id ? (
-                            <form
-                              onSubmit={(e) => {
-                                e.preventDefault()
-                                const next = editingUrl.value.trim()
-                                if (!next || next === s.url) {
-                                  setEditingUrl(null)
-                                  return
-                                }
-                                // Re-evaluate adapter type based on the
-                                // new URL so e.g. swapping an
-                                // events-html URL for a ?ical=1 link
-                                // flips the source over to ics with no
-                                // extra editor work.
-                                updateUrl.mutate({
-                                  sourceId: s._id,
-                                  url: next,
-                                  type: inferAdapterType(next),
-                                })
-                              }}
-                              className="mt-1 flex items-center gap-1"
-                            >
-                              <input
-                                type="url"
-                                autoFocus
-                                value={editingUrl.value}
-                                onChange={(e) =>
-                                  setEditingUrl({
-                                    id,
-                                    value: e.target.value,
-                                  })
-                                }
-                                onKeyDown={(e) => {
-                                  if (e.key === "Escape") setEditingUrl(null)
-                                }}
-                                className="flex-1 rounded-sm border bg-background px-1.5 py-0.5 font-mono text-xs"
-                              />
-                              <Button
-                                size="icon-sm"
-                                variant="ghost"
-                                type="submit"
-                                disabled={updateUrl.isPending}
-                                title="Save URL"
-                                aria-label="Save URL"
-                              >
-                                {updateUrl.isPending ? (
-                                  <Loader2 className="animate-spin" />
-                                ) : (
-                                  <Check />
-                                )}
-                              </Button>
-                              <Button
-                                size="icon-sm"
-                                variant="ghost"
-                                type="button"
-                                title="Cancel"
-                                aria-label="Cancel URL edit"
-                                onClick={() => setEditingUrl(null)}
-                              >
-                                <X />
-                              </Button>
-                            </form>
-                          ) : (
-                            <a
-                              href={
-                                s.url.startsWith("http") ? s.url : undefined
-                              }
-                              target="_blank"
-                              rel="noreferrer"
-                              className="meta text-xs break-words hover:underline block"
-                            >
-                              {s.url}
-                            </a>
-                          )}
+                          <a
+                            href={
+                              s.url.startsWith("http") ? s.url : undefined
+                            }
+                            target="_blank"
+                            rel="noreferrer"
+                            className="meta text-xs break-words hover:underline block"
+                          >
+                            {s.url}
+                          </a>
                         </TableCell>
                         <TableCell className="hidden md:table-cell">
                           <Badge variant="outline" className="text-[0.65rem]">
                             {s.type}
                           </Badge>
+                        </TableCell>
+                        <TableCell className="hidden md:table-cell text-right tabular-nums text-xs">
+                          {eventCounts.data === undefined ? (
+                            <span className="meta text-muted-foreground/60">
+                              …
+                            </span>
+                          ) : (
+                            <span
+                              className={cn(
+                                "font-medium",
+                                (eventCounts.data[id] ?? 0) === 0
+                                  ? "text-muted-foreground/60"
+                                  : "text-foreground",
+                              )}
+                            >
+                              {eventCounts.data[id] ?? 0}
+                            </span>
+                          )}
                         </TableCell>
                         <TableCell className="hidden md:table-cell meta text-xs tabular-nums">
                           {s.lastFetchedAt ? (
@@ -554,19 +643,8 @@ function SourcesPage() {
                             <Button
                               size="icon-sm"
                               variant="ghost"
-                              aria-label="Fix URL"
-                              title="Fix URL — paste a new one"
-                              onClick={() =>
-                                setEditingUrl({ id, value: s.url })
-                              }
-                            >
-                              <Pencil />
-                            </Button>
-                            <Button
-                              size="icon-sm"
-                              variant="ghost"
-                              aria-label="Test fetch"
-                              title="Test fetch"
+                              aria-label="Fetch now"
+                              title="Fetch now — pulls items and immediately drains them into events"
                               disabled={isPending}
                               onClick={() => testFetch.mutate(s._id)}
                             >
@@ -575,21 +653,6 @@ function SourcesPage() {
                               ) : (
                                 <RefreshCw />
                               )}
-                            </Button>
-                            <Button
-                              size="icon-sm"
-                              variant="ghost"
-                              aria-label={s.enabled ? "Disable" : "Enable"}
-                              title={s.enabled ? "Disable" : "Enable"}
-                              disabled={isToggling}
-                              onClick={() =>
-                                setEnabled.mutate({
-                                  sourceId: s._id,
-                                  enabled: !s.enabled,
-                                })
-                              }
-                            >
-                              <Power />
                             </Button>
                             <Button
                               size="icon-sm"
@@ -615,25 +678,57 @@ function SourcesPage() {
                       </TableRow>
                     )
                   })}
-                  {/* The first row's "select all" checkbox state is
-                      handled above; the header checkbox below is for
-                      keyboard tab order parity. */}
-                  {group.rows.length === 0 ? null : null}
-                </TableBody>
-              </Table>
-            </div>
-          ))}
+            </TableBody>
+          </Table>
         </div>
       )}
-
-      {/* Hidden cross-group "select all" indicator — kept for the
-          parent allSelected accessor though we render per-group
-          headers now. */}
-      <span className="sr-only" aria-hidden>
-        {allSelected ? "all selected" : ""}
-      </span>
-      <span className="hidden">{toggleAll.name}</span>
     </div>
+  )
+}
+
+// Clickable column header. Renders the label, an indicator arrow
+// when this column is the active sort, and toggles direction on
+// click. Pure presentational — the parent owns the `sort` state.
+function SortableHead<K extends string>({
+  sortKey,
+  current,
+  onSort,
+  className,
+  children,
+  ariaLabel,
+}: {
+  sortKey: K
+  current: { key: K; dir: "asc" | "desc" }
+  onSort: (key: K) => void
+  className?: string
+  children?: React.ReactNode
+  ariaLabel?: string
+}) {
+  const isActive = current.key === sortKey
+  const arrow = isActive ? (current.dir === "asc" ? "▲" : "▼") : ""
+  return (
+    <TableHead className={className}>
+      <button
+        type="button"
+        aria-label={ariaLabel ?? `Sort by ${String(sortKey)}`}
+        aria-sort={
+          isActive
+            ? current.dir === "asc"
+              ? "ascending"
+              : "descending"
+            : "none"
+        }
+        onClick={() => onSort(sortKey)}
+        className="-mx-1 inline-flex items-center gap-1 rounded px-1 py-0.5 text-left hover:bg-muted focus-visible:bg-muted"
+      >
+        {children}
+        {arrow ? (
+          <span className="text-[0.65rem] text-muted-foreground">
+            {arrow}
+          </span>
+        ) : null}
+      </button>
+    </TableHead>
   )
 }
 
@@ -666,29 +761,3 @@ function FilterSelect({
   )
 }
 
-// URL → most-likely adapter type. Auto-fills the dropdown so editors
-// don't have to remember which scraper goes with which URL pattern.
-type AdapterType =
-  | "ics"
-  | "events-html"
-  | "sitemap-events"
-  | "miami-new-times"
-  | "llm-extract"
-function inferAdapterType(url: string): AdapterType {
-  const u = url.toLowerCase()
-  if (u.includes("miaminewtimes.com/eventsearch")) return "miami-new-times"
-  if (
-    u.includes("?ical=1") ||
-    u.includes("&ical=1") ||
-    u.endsWith(".ics") ||
-    u.includes("icalendar.aspx") ||
-    u.includes(".ics?") ||
-    u.includes("feed=calendar")
-  ) {
-    return "ics"
-  }
-  if (u.endsWith("/sitemap.xml") || u.endsWith("/sitemap_index.xml")) {
-    return "sitemap-events"
-  }
-  return "events-html"
-}

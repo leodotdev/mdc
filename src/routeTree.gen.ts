@@ -18,13 +18,12 @@ import { Route as SiteTagSlugRouteImport } from './routes/_site/tag.$slug'
 import { Route as SiteSectionSlugRouteImport } from './routes/_site/section.$slug'
 import { Route as SiteNeighborhoodSlugRouteImport } from './routes/_site/neighborhood.$slug'
 import { Route as SiteEventSlugRouteImport } from './routes/_site/event.$slug'
-import { Route as SiteAuthorSlugRouteImport } from './routes/_site/author.$slug'
-import { Route as SiteArticleSlugRouteImport } from './routes/_site/article.$slug'
+import { Route as AdminAdminTaxonomyRouteImport } from './routes/_admin/admin.taxonomy'
 import { Route as AdminAdminSourcesRouteImport } from './routes/_admin/admin.sources'
+import { Route as AdminAdminSettingsRouteImport } from './routes/_admin/admin.settings'
 import { Route as AdminAdminRunsRouteImport } from './routes/_admin/admin.runs'
 import { Route as AdminAdminPublishedRouteImport } from './routes/_admin/admin.published'
 import { Route as AdminAdminEventsIdRouteImport } from './routes/_admin/admin.events.$id'
-import { Route as AdminAdminArticleIdRouteImport } from './routes/_admin/admin.article.$id'
 
 const SiteRoute = SiteRouteImport.update({
   id: '/_site',
@@ -69,19 +68,19 @@ const SiteEventSlugRoute = SiteEventSlugRouteImport.update({
   path: '/event/$slug',
   getParentRoute: () => SiteRoute,
 } as any)
-const SiteAuthorSlugRoute = SiteAuthorSlugRouteImport.update({
-  id: '/author/$slug',
-  path: '/author/$slug',
-  getParentRoute: () => SiteRoute,
-} as any)
-const SiteArticleSlugRoute = SiteArticleSlugRouteImport.update({
-  id: '/article/$slug',
-  path: '/article/$slug',
-  getParentRoute: () => SiteRoute,
+const AdminAdminTaxonomyRoute = AdminAdminTaxonomyRouteImport.update({
+  id: '/admin/taxonomy',
+  path: '/admin/taxonomy',
+  getParentRoute: () => AdminRoute,
 } as any)
 const AdminAdminSourcesRoute = AdminAdminSourcesRouteImport.update({
   id: '/admin/sources',
   path: '/admin/sources',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminAdminSettingsRoute = AdminAdminSettingsRouteImport.update({
+  id: '/admin/settings',
+  path: '/admin/settings',
   getParentRoute: () => AdminRoute,
 } as any)
 const AdminAdminRunsRoute = AdminAdminRunsRouteImport.update({
@@ -99,26 +98,20 @@ const AdminAdminEventsIdRoute = AdminAdminEventsIdRouteImport.update({
   path: '/admin/events/$id',
   getParentRoute: () => AdminRoute,
 } as any)
-const AdminAdminArticleIdRoute = AdminAdminArticleIdRouteImport.update({
-  id: '/admin/article/$id',
-  path: '/admin/article/$id',
-  getParentRoute: () => AdminRoute,
-} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof SiteIndexRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/published': typeof AdminAdminPublishedRoute
   '/admin/runs': typeof AdminAdminRunsRoute
+  '/admin/settings': typeof AdminAdminSettingsRoute
   '/admin/sources': typeof AdminAdminSourcesRoute
-  '/article/$slug': typeof SiteArticleSlugRoute
-  '/author/$slug': typeof SiteAuthorSlugRoute
+  '/admin/taxonomy': typeof AdminAdminTaxonomyRoute
   '/event/$slug': typeof SiteEventSlugRoute
   '/neighborhood/$slug': typeof SiteNeighborhoodSlugRoute
   '/section/$slug': typeof SiteSectionSlugRoute
   '/tag/$slug': typeof SiteTagSlugRoute
   '/admin/': typeof AdminAdminIndexRoute
-  '/admin/article/$id': typeof AdminAdminArticleIdRoute
   '/admin/events/$id': typeof AdminAdminEventsIdRoute
 }
 export interface FileRoutesByTo {
@@ -126,15 +119,14 @@ export interface FileRoutesByTo {
   '/admin/login': typeof AdminLoginRoute
   '/admin/published': typeof AdminAdminPublishedRoute
   '/admin/runs': typeof AdminAdminRunsRoute
+  '/admin/settings': typeof AdminAdminSettingsRoute
   '/admin/sources': typeof AdminAdminSourcesRoute
-  '/article/$slug': typeof SiteArticleSlugRoute
-  '/author/$slug': typeof SiteAuthorSlugRoute
+  '/admin/taxonomy': typeof AdminAdminTaxonomyRoute
   '/event/$slug': typeof SiteEventSlugRoute
   '/neighborhood/$slug': typeof SiteNeighborhoodSlugRoute
   '/section/$slug': typeof SiteSectionSlugRoute
   '/tag/$slug': typeof SiteTagSlugRoute
   '/admin': typeof AdminAdminIndexRoute
-  '/admin/article/$id': typeof AdminAdminArticleIdRoute
   '/admin/events/$id': typeof AdminAdminEventsIdRoute
 }
 export interface FileRoutesById {
@@ -145,15 +137,14 @@ export interface FileRoutesById {
   '/_site/': typeof SiteIndexRoute
   '/_admin/admin/published': typeof AdminAdminPublishedRoute
   '/_admin/admin/runs': typeof AdminAdminRunsRoute
+  '/_admin/admin/settings': typeof AdminAdminSettingsRoute
   '/_admin/admin/sources': typeof AdminAdminSourcesRoute
-  '/_site/article/$slug': typeof SiteArticleSlugRoute
-  '/_site/author/$slug': typeof SiteAuthorSlugRoute
+  '/_admin/admin/taxonomy': typeof AdminAdminTaxonomyRoute
   '/_site/event/$slug': typeof SiteEventSlugRoute
   '/_site/neighborhood/$slug': typeof SiteNeighborhoodSlugRoute
   '/_site/section/$slug': typeof SiteSectionSlugRoute
   '/_site/tag/$slug': typeof SiteTagSlugRoute
   '/_admin/admin/': typeof AdminAdminIndexRoute
-  '/_admin/admin/article/$id': typeof AdminAdminArticleIdRoute
   '/_admin/admin/events/$id': typeof AdminAdminEventsIdRoute
 }
 export interface FileRouteTypes {
@@ -163,15 +154,14 @@ export interface FileRouteTypes {
     | '/admin/login'
     | '/admin/published'
     | '/admin/runs'
+    | '/admin/settings'
     | '/admin/sources'
-    | '/article/$slug'
-    | '/author/$slug'
+    | '/admin/taxonomy'
     | '/event/$slug'
     | '/neighborhood/$slug'
     | '/section/$slug'
     | '/tag/$slug'
     | '/admin/'
-    | '/admin/article/$id'
     | '/admin/events/$id'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -179,15 +169,14 @@ export interface FileRouteTypes {
     | '/admin/login'
     | '/admin/published'
     | '/admin/runs'
+    | '/admin/settings'
     | '/admin/sources'
-    | '/article/$slug'
-    | '/author/$slug'
+    | '/admin/taxonomy'
     | '/event/$slug'
     | '/neighborhood/$slug'
     | '/section/$slug'
     | '/tag/$slug'
     | '/admin'
-    | '/admin/article/$id'
     | '/admin/events/$id'
   id:
     | '__root__'
@@ -197,15 +186,14 @@ export interface FileRouteTypes {
     | '/_site/'
     | '/_admin/admin/published'
     | '/_admin/admin/runs'
+    | '/_admin/admin/settings'
     | '/_admin/admin/sources'
-    | '/_site/article/$slug'
-    | '/_site/author/$slug'
+    | '/_admin/admin/taxonomy'
     | '/_site/event/$slug'
     | '/_site/neighborhood/$slug'
     | '/_site/section/$slug'
     | '/_site/tag/$slug'
     | '/_admin/admin/'
-    | '/_admin/admin/article/$id'
     | '/_admin/admin/events/$id'
   fileRoutesById: FileRoutesById
 }
@@ -280,25 +268,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SiteEventSlugRouteImport
       parentRoute: typeof SiteRoute
     }
-    '/_site/author/$slug': {
-      id: '/_site/author/$slug'
-      path: '/author/$slug'
-      fullPath: '/author/$slug'
-      preLoaderRoute: typeof SiteAuthorSlugRouteImport
-      parentRoute: typeof SiteRoute
-    }
-    '/_site/article/$slug': {
-      id: '/_site/article/$slug'
-      path: '/article/$slug'
-      fullPath: '/article/$slug'
-      preLoaderRoute: typeof SiteArticleSlugRouteImport
-      parentRoute: typeof SiteRoute
+    '/_admin/admin/taxonomy': {
+      id: '/_admin/admin/taxonomy'
+      path: '/admin/taxonomy'
+      fullPath: '/admin/taxonomy'
+      preLoaderRoute: typeof AdminAdminTaxonomyRouteImport
+      parentRoute: typeof AdminRoute
     }
     '/_admin/admin/sources': {
       id: '/_admin/admin/sources'
       path: '/admin/sources'
       fullPath: '/admin/sources'
       preLoaderRoute: typeof AdminAdminSourcesRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/_admin/admin/settings': {
+      id: '/_admin/admin/settings'
+      path: '/admin/settings'
+      fullPath: '/admin/settings'
+      preLoaderRoute: typeof AdminAdminSettingsRouteImport
       parentRoute: typeof AdminRoute
     }
     '/_admin/admin/runs': {
@@ -322,31 +310,26 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminAdminEventsIdRouteImport
       parentRoute: typeof AdminRoute
     }
-    '/_admin/admin/article/$id': {
-      id: '/_admin/admin/article/$id'
-      path: '/admin/article/$id'
-      fullPath: '/admin/article/$id'
-      preLoaderRoute: typeof AdminAdminArticleIdRouteImport
-      parentRoute: typeof AdminRoute
-    }
   }
 }
 
 interface AdminRouteChildren {
   AdminAdminPublishedRoute: typeof AdminAdminPublishedRoute
   AdminAdminRunsRoute: typeof AdminAdminRunsRoute
+  AdminAdminSettingsRoute: typeof AdminAdminSettingsRoute
   AdminAdminSourcesRoute: typeof AdminAdminSourcesRoute
+  AdminAdminTaxonomyRoute: typeof AdminAdminTaxonomyRoute
   AdminAdminIndexRoute: typeof AdminAdminIndexRoute
-  AdminAdminArticleIdRoute: typeof AdminAdminArticleIdRoute
   AdminAdminEventsIdRoute: typeof AdminAdminEventsIdRoute
 }
 
 const AdminRouteChildren: AdminRouteChildren = {
   AdminAdminPublishedRoute: AdminAdminPublishedRoute,
   AdminAdminRunsRoute: AdminAdminRunsRoute,
+  AdminAdminSettingsRoute: AdminAdminSettingsRoute,
   AdminAdminSourcesRoute: AdminAdminSourcesRoute,
+  AdminAdminTaxonomyRoute: AdminAdminTaxonomyRoute,
   AdminAdminIndexRoute: AdminAdminIndexRoute,
-  AdminAdminArticleIdRoute: AdminAdminArticleIdRoute,
   AdminAdminEventsIdRoute: AdminAdminEventsIdRoute,
 }
 
@@ -354,8 +337,6 @@ const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
 
 interface SiteRouteChildren {
   SiteIndexRoute: typeof SiteIndexRoute
-  SiteArticleSlugRoute: typeof SiteArticleSlugRoute
-  SiteAuthorSlugRoute: typeof SiteAuthorSlugRoute
   SiteEventSlugRoute: typeof SiteEventSlugRoute
   SiteNeighborhoodSlugRoute: typeof SiteNeighborhoodSlugRoute
   SiteSectionSlugRoute: typeof SiteSectionSlugRoute
@@ -364,8 +345,6 @@ interface SiteRouteChildren {
 
 const SiteRouteChildren: SiteRouteChildren = {
   SiteIndexRoute: SiteIndexRoute,
-  SiteArticleSlugRoute: SiteArticleSlugRoute,
-  SiteAuthorSlugRoute: SiteAuthorSlugRoute,
   SiteEventSlugRoute: SiteEventSlugRoute,
   SiteNeighborhoodSlugRoute: SiteNeighborhoodSlugRoute,
   SiteSectionSlugRoute: SiteSectionSlugRoute,

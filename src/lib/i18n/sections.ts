@@ -15,8 +15,6 @@ const SECTION_NAMES: Record<string, Record<Lang, string>> = {
   mdc: { en: "Miami Dade College", es: "Miami Dade College" },
   fiu: { en: "FIU", es: "FIU" },
   "high-schools": { en: "High Schools", es: "Escuelas secundarias" },
-  "middle-schools": { en: "Middle Schools", es: "Escuelas intermedias" },
-  "elementary-schools": { en: "Elementary Schools", es: "Escuelas primarias" },
   health: { en: "Health", es: "Salud" },
   fitness: { en: "Fitness", es: "Fitness" },
   medical: { en: "Medical", es: "Medicina" },

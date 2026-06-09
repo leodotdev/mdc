@@ -4,6 +4,9 @@ import { useEffect, useMemo, useRef, useState } from "react"
 
 import type { EventWithRelations } from "@/lib/article-types"
 import type { Map as MapLibreMap, Marker } from "maplibre-gl"
+import { effectiveStartsAt } from "@/lib/event-helpers"
+import { useTranslation } from "@/lib/i18n/context"
+import { localizedEvent } from "@/lib/localized-event"
 import { useOpenEventDrawer } from "@/lib/use-open-article-drawer"
 import { cn } from "@/lib/utils"
 
@@ -52,13 +55,18 @@ export function EventsMap({
 }: {
   events: ReadonlyArray<EventWithRelations>
 }) {
+  const { lang } = useTranslation()
+  // Apply language localization up front — the marker tooltips + the
+  // side list both pick up translated titles on a lang switch.
   const placed = useMemo(
     () =>
-      events.filter(
-        (e): e is EventWithRelations & { lat: number; lng: number } =>
-          typeof e.lat === "number" && typeof e.lng === "number",
-      ),
-    [events],
+      events
+        .map((e) => localizedEvent(e, lang))
+        .filter(
+          (e): e is EventWithRelations & { lat: number; lng: number } =>
+            typeof e.lat === "number" && typeof e.lng === "number",
+        ),
+    [events, lang],
   )
 
   const mapRef = useRef<HTMLDivElement>(null)
@@ -174,7 +182,7 @@ export function EventsMap({
                         {new Intl.DateTimeFormat("en-US", {
                           month: "short",
                           day: "numeric",
-                        }).format(e.startsAt)}
+                        }).format(effectiveStartsAt(e))}
                       </span>
                     </div>
                   </Link>

@@ -1,61 +1,13 @@
 import { v } from "convex/values"
-import { internal } from "./_generated/api"
 import { mutation, query } from "./_generated/server"
-import { buildSearchableText } from "./articles"
 import { requireEditor } from "./lib/guard"
-import { linkRelated } from "./lib/storyArcs"
 import type { Id } from "./_generated/dataModel"
 import type { QueryCtx } from "./_generated/server"
 
-// Extract a YouTube or Vimeo video id from the first matching citation.
-// Returns undefined when no citation is a video URL — the article stays
-// "article" media type, with the hero image as its lead.
-//
-// YouTube formats supported:
-//   https://www.youtube.com/watch?v=ID
-//   https://youtu.be/ID
-//   https://www.youtube.com/shorts/ID
-// Vimeo: https://vimeo.com/ID
-function videoEmbedFrom(
-  citations: ReadonlyArray<{ url: string }>,
-): { provider: "youtube" | "vimeo"; id: string } | undefined {
-  for (const c of citations) {
-    const yt = extractYouTubeId(c.url)
-    if (yt) return { provider: "youtube", id: yt }
-    const vimeo = extractVimeoId(c.url)
-    if (vimeo) return { provider: "vimeo", id: vimeo }
-  }
-  return undefined
-}
-
-function extractYouTubeId(url: string): string | undefined {
-  try {
-    const u = new URL(url)
-    const host = u.hostname.replace(/^www\./, "")
-    if (host === "youtu.be") {
-      return u.pathname.slice(1).split("/")[0] || undefined
-    }
-    if (host !== "youtube.com" && host !== "m.youtube.com") return undefined
-    const watch = u.searchParams.get("v")
-    if (watch) return watch
-    const shortsMatch = u.pathname.match(/^\/shorts\/([^/]+)/)
-    if (shortsMatch) return shortsMatch[1]
-    return undefined
-  } catch {
-    return undefined
-  }
-}
-
-function extractVimeoId(url: string): string | undefined {
-  try {
-    const u = new URL(url)
-    if (u.hostname.replace(/^www\./, "") !== "vimeo.com") return undefined
-    const m = u.pathname.match(/^\/(\d+)/)
-    return m ? m[1] : undefined
-  } catch {
-    return undefined
-  }
-}
+// `videoEmbedFrom` + extractor helpers + `insertDraft` mutation were
+// removed with the article-era purge. Event ingest doesn't go through
+// this file (see convex/events.ts:insertExtracted) and articles no
+// longer ship from the desk.
 
 export const list = query({
   args: {},
@@ -91,10 +43,10 @@ export const getBySlug = query({
 })
 
 /**
- * Sections this desk can file stories under: its primary section + every
+ * Sections this desk can file events under: its primary section + every
  * direct child. Used by the desk action to constrain the LLM's section
- * choice — Arts desk picks from {arts, music, film, ...} but never lands
- * a story under News.
+ * choice — Arts desk picks from {arts, music, film, ...} but never
+ * lands an event under Sports.
  */
 export const allowedSectionsForAgent = query({
   args: { agentId: v.id("agents") },
@@ -222,7 +174,7 @@ export const enabledSourcesForAgent = query({
       .collect()
     return all
       .filter((s) =>
-        s.sectionIds.some(
+        (s.sectionIds ?? []).some(
           (sectionId) => owned.has(sectionId),
         ),
       )
@@ -250,7 +202,7 @@ export const unconsumedItemsForAgent = query({
     const ourSourceIds = new Set(
       sourcesForSection
         .filter((s) =>
-          s.sectionIds.some(
+          (s.sectionIds ?? []).some(
             (sectionId) => owned.has(sectionId),
           ),
         )
@@ -355,96 +307,3 @@ export const markItemsConsumed = mutation({
   },
 })
 
-export const insertDraft = mutation({
-  args: {
-    article: v.object({
-      slug: v.string(),
-      title: v.string(),
-      dek: v.string(),
-      body: v.string(),
-      sectionId: v.id("sections"),
-      tags: v.array(v.string()),
-      heroImage: v.optional(v.string()),
-      heroCaption: v.optional(v.string()),
-      heroSource: v.optional(
-        v.union(
-          v.literal("source"),
-          v.literal("unsplash"),
-          v.literal("wikimedia"),
-          v.literal("none"),
-        ),
-      ),
-      citations: v.array(
-        v.object({
-          url: v.string(),
-          title: v.string(),
-          publisher: v.optional(v.string()),
-          fetchedAt: v.number(),
-          snippet: v.optional(v.string()),
-        }),
-      ),
-      agentSlug: v.string(),
-      agentRunId: v.id("agentRuns"),
-      derivedFromItems: v.array(v.id("ingestedItems")),
-      publishedAt: v.optional(v.number()),
-      neighborhoods: v.optional(v.array(v.string())),
-    }),
-    authorIds: v.array(v.id("authors")),
-    relatedIds: v.optional(v.array(v.id("articles"))),
-  },
-  handler: async (ctx, { article, authorIds, relatedIds }) => {
-    // Avoid slug collisions by appending a short suffix
-    let slug = article.slug
-    let suffix = 0
-    while (
-      await ctx.db
-        .query("articles")
-        .withIndex("by_slug", (q) => q.eq("slug", slug))
-        .unique()
-    ) {
-      suffix += 1
-      slug = `${article.slug}-${suffix}`
-    }
-
-    // Self-publish — every desk-drafted article goes live immediately.
-    // Subsequent desk runs augment in place via `articles.augmentArticle`
-    // (citations + content refresh) and the merge sweep folds across-run
-    // duplicates. No editor review. The tradeoff vs an approval gate:
-    // occasional weak copy ships; the dedup, merge, voice re-roll, and
-    // hero watchdog crons backfill quality out-of-band without blocking
-    // the news cycle.
-    const now = Date.now()
-    // Detect a video-native draft: the lead citation is a YouTube /
-    // Vimeo URL. Stamp mediaType + videoEmbed so the article-page
-    // template can render the player as the lead instead of the hero
-    // image. Falls back to "article" when no video citation is found.
-    const videoEmbed = videoEmbedFrom(article.citations)
-    const articleId = await ctx.db.insert("articles", {
-      ...article,
-      slug,
-      status: "published",
-      publishedAt: article.publishedAt ?? now,
-      createdAt: now,
-      mediaType: videoEmbed ? "video" : undefined,
-      videoEmbed,
-      relatedArticleIds: relatedIds ?? [],
-      searchableText: buildSearchableText({
-        title: article.title,
-        dek: article.dek,
-        tags: article.tags,
-      }),
-    })
-    for (const authorId of authorIds) {
-      await ctx.db.insert("article_authors", { articleId, authorId })
-    }
-    if (relatedIds && relatedIds.length > 0) {
-      await linkRelated(ctx, articleId, relatedIds, article.title)
-    }
-    await ctx.scheduler.runAfter(
-      60_000,
-      internal.articles.translateArticleAction,
-      { articleId, lang: "es" },
-    )
-    return articleId
-  },
-})

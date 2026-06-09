@@ -46,6 +46,18 @@ export const reserve = internalMutation({
     // change take effect on the next gate without a redeploy.
     const settings = await ctx.db.query("siteSettings").first()
     const capCents = settings?.dailyBudgetCents ?? BUDGET_DAILY_CENTS_DEFAULT
+    // Lights Out — when the editor explicitly disabled LLM via
+    // /admin/settings, every reserve fails. Surfaces as the same
+    // shape as a budget cap hit so adapters / actions don't need a
+    // separate branch.
+    if (settings?.llmEnabled === false) {
+      return {
+        allowed: false,
+        centsSpent: 0,
+        capCents,
+        reason: "lights-out",
+      } as const
+    }
     const row = await ctx.db
       .query("llmBudget")
       .withIndex("by_day", (q) => q.eq("dayKey", dayKey))

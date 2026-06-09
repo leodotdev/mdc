@@ -3,7 +3,7 @@ import { TableCell, TableRow } from "@/components/ui/table"
 
 type Variant = "hero" | "lead" | "secondary" | "list" | "compact"
 
-export function StoryCardSkeleton({
+export function EventCardSkeleton({
   variant = "secondary",
   showImage = true,
 }: {
@@ -45,7 +45,7 @@ export function StoryCardSkeleton({
   )
 }
 
-export function StoryCardSkeletonGrid({
+export function EventCardSkeletonGrid({
   count = 6,
   variant = "secondary",
 }: {
@@ -55,7 +55,7 @@ export function StoryCardSkeletonGrid({
   return (
     <div className="grid gap-x-8 gap-y-8 md:grid-cols-3">
       {Array.from({ length: count }).map((_, i) => (
-        <StoryCardSkeleton key={i} variant={variant} />
+        <EventCardSkeleton key={i} variant={variant} />
       ))}
     </div>
   )

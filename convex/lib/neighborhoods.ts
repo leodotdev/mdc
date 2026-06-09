@@ -1,4 +1,4 @@
-// Single source of truth for Miami neighborhoods we tag stories with. The
+// Single source of truth for Miami neighborhoods we tag events with. The
 // frontend imports this same file (`../../convex/lib/neighborhoods`) so the
 // allowed list and slug→name mapping stay in lockstep.
 //

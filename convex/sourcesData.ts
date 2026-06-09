@@ -3,6 +3,20 @@ import { internalMutation, internalQuery, mutation, query } from "./_generated/s
 import type { Id } from "./_generated/dataModel"
 import { requireEditor } from "./lib/guard"
 
+// Shared adapter-type validator. Mirrors the union on `sources.type`
+// in schema.ts so create/update/installSource accept the same set.
+// `browser-extract` is reserved for the headless-browser fetch path
+// — it routes through Cloudflare Browser Rendering when configured,
+// falls back to llm-extract semantics otherwise.
+const adapterTypeValidator = v.union(
+  v.literal("ics"),
+  v.literal("events-html"),
+  v.literal("sitemap-events"),
+  v.literal("miami-new-times"),
+  v.literal("llm-extract"),
+  v.literal("browser-extract"),
+)
+
 export const list = query({
   args: {},
   handler: async (ctx) => {
@@ -18,6 +32,30 @@ export const listInternal = internalQuery({
   args: {},
   handler: async (ctx) => {
     return await ctx.db.query("sources").collect()
+  },
+})
+
+// Events-per-source counts. Walks the events table and credits the
+// first `derivedFromItems` entry (the originating insert) to its
+// source. Merge-target events count toward the source that first
+// produced them — not the source whose duplicate got folded in.
+// Used by /admin/sources to show a cumulative "events gathered" tally
+// alongside the last-fetch line. Editor-gated.
+export const eventCounts = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireEditor(ctx)
+    const events = await ctx.db.query("events").collect()
+    const counts: Record<string, number> = {}
+    for (const e of events) {
+      const itemId = e.derivedFromItems?.[0]
+      if (!itemId) continue
+      const item = await ctx.db.get(itemId)
+      if (!item) continue
+      const sid = item.sourceId as unknown as string
+      counts[sid] = (counts[sid] ?? 0) + 1
+    }
+    return counts
   },
 })
 
@@ -38,7 +76,13 @@ export const getForAdapter = query({
     // calls invoked from within the action handler.
     const s = await ctx.db.get(sourceId)
     if (!s) return null
-    return { type: s.type, url: s.url, config: s.config }
+    return {
+      type: s.type,
+      url: s.url,
+      config: s.config,
+      lastEtag: s.lastEtag,
+      lastModifiedHeader: s.lastModifiedHeader,
+    }
   },
 })
 
@@ -49,21 +93,7 @@ export const getForAdapter = query({
 //     here; we just block raw-IP and known private hostnames).
 //   - bluesky://, at://: the bluesky adapter's own URL convention.
 //   - everything else: rejected.
-function assertSafeSourceUrl(url: string, type: string): void {
-  // Bluesky uses its own URL convention; the adapter constructs the
-  // actual HTTPS endpoint internally. No SSRF surface.
-  if (type === "bluesky") {
-    if (!/^bluesky:\/\//i.test(url) && !/^at:\/\//i.test(url)) {
-      throw new Error("Bluesky source URLs must start with bluesky:// or at://")
-    }
-    return
-  }
-  // YouTube source URLs are channel handles or playlist IDs handled
-  // server-side, not arbitrary URLs.
-  if (type === "youtube") return
-  // Wikipedia-OTD / data adapters may use specific URL schemes.
-  if (type === "wikipedia-otd") return
-
+function assertSafeSourceUrl(url: string, _type: string): void {
   let parsed: URL
   try {
     parsed = new URL(url)
@@ -96,15 +126,12 @@ function assertSafeSourceUrl(url: string, type: string): void {
 export const create = mutation({
   args: {
     name: v.string(),
-    type: v.union(
-      v.literal("ics"),
-      v.literal("events-html"),
-      v.literal("sitemap-events"),
-      v.literal("miami-new-times"),
-      v.literal("llm-extract"),
-    ),
+    type: adapterTypeValidator,
     url: v.string(),
-    sectionIds: v.array(v.id("sections")),
+    // Section pre-binding is deprecated — kept optional so existing
+    // callers don't break, but new sources should omit and let the
+    // classifier (lib/classify.ts) section each event by content.
+    sectionIds: v.optional(v.array(v.id("sections"))),
     enabled: v.boolean(),
     config: v.optional(v.any()),
   },
@@ -126,15 +153,7 @@ export const update = mutation({
     // Type swap allowed but constrained to event-shaped adapters —
     // matches the `create` mutation's union so editors can't slip a
     // non-calendar type in via the update path.
-    type: v.optional(
-      v.union(
-        v.literal("ics"),
-        v.literal("events-html"),
-        v.literal("sitemap-events"),
-        v.literal("miami-new-times"),
-        v.literal("llm-extract"),
-      ),
-    ),
+    type: v.optional(adapterTypeValidator),
   },
   handler: async (ctx, { sourceId, ...patch }) => {
     await requireEditor(ctx)
@@ -154,6 +173,35 @@ export const update = mutation({
   },
 })
 
+// Editor-facing installer — used by the smart-add action. Same
+// idempotent semantics as installSource below (skip if URL exists)
+// but auth-gated so editors can hit it via the convex client.
+export const installSourceEditor = mutation({
+  args: {
+    url: v.string(),
+    name: v.string(),
+    type: adapterTypeValidator,
+  },
+  handler: async (ctx, { url, name, type }) => {
+    await requireEditor(ctx)
+    assertSafeSourceUrl(url, type)
+    const existing = await ctx.db
+      .query("sources")
+      .filter((q) => q.eq(q.field("url"), url))
+      .first()
+    if (existing) {
+      return { added: false, sourceId: existing._id, reason: "exists" }
+    }
+    const sourceId = await ctx.db.insert("sources", {
+      name,
+      type,
+      url,
+      enabled: true,
+    })
+    return { added: true, sourceId, reason: "inserted" }
+  },
+})
+
 // Idempotent installer — adds a source if no row exists with the
 // same URL, leaves it alone otherwise. Internal-only; called from
 // CLI (`npx convex run sourcesData:installSource`) when adding feeds
@@ -163,13 +211,7 @@ export const installSource = internalMutation({
   args: {
     url: v.string(),
     name: v.string(),
-    type: v.union(
-      v.literal("ics"),
-      v.literal("events-html"),
-      v.literal("sitemap-events"),
-      v.literal("miami-new-times"),
-      v.literal("llm-extract"),
-    ),
+    type: adapterTypeValidator,
     sectionSlug: v.optional(v.string()),
   },
   handler: async (ctx, { url, name, type, sectionSlug }) => {
@@ -230,8 +272,28 @@ export const recordFetch = mutation({
         price: v.optional(v.string()),
       }),
     ),
+    /** Fresh caching headers from this fetch. Stored so the next
+     *  tick can send conditional-GET headers and skip the work when
+     *  the server replies 304. */
+    etag: v.optional(v.string()),
+    lastModifiedHeader: v.optional(v.string()),
+    /** True when the server returned 304 Not Modified. Caller should
+     *  pass items: [] and status: "not-modified"; this mutation
+     *  just bumps lastFetchedAt without churning the queue. */
+    notModified: v.optional(v.boolean()),
   },
-  handler: async (ctx, { sourceId, status, error, items }) => {
+  handler: async (
+    ctx,
+    {
+      sourceId,
+      status,
+      error,
+      items,
+      etag,
+      lastModifiedHeader,
+      notModified,
+    },
+  ) => {
     const now = Date.now()
     let inserted = 0
     for (const item of items) {
@@ -284,6 +346,18 @@ export const recordFetch = mutation({
       lastFetchItemCount: items.length,
       lastFetchNewCount: inserted,
       consecutiveErrors,
+    }
+    // Preserve caching headers across fetches. A 304 response keeps
+    // the values stable; a fresh 200 with new headers overwrites
+    // them. Either way the next tick's conditional GET stays sharp.
+    if (etag !== undefined) patch.lastEtag = etag
+    if (lastModifiedHeader !== undefined) patch.lastModifiedHeader = lastModifiedHeader
+    // On 304 we don't want to reset itemCount/newCount to 0 — that
+    // would make the source look like it stopped working. Restore
+    // the previous values instead.
+    if (notModified) {
+      patch.lastFetchItemCount = existingSource?.lastFetchItemCount ?? 0
+      patch.lastFetchNewCount = 0
     }
     if (permanentlyGone) {
       patch.enabled = false

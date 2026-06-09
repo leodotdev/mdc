@@ -1,6 +1,6 @@
 import { v } from "convex/values"
 
-import { mutation, query } from "./_generated/server"
+import { internalQuery, mutation, query } from "./_generated/server"
 import { BUDGET_DAILY_CENTS_DEFAULT } from "./lib/budget"
 import { requireEditor } from "./lib/guard"
 
@@ -11,6 +11,7 @@ import { requireEditor } from "./lib/guard"
 // defaults below).
 
 const DEFAULT_ADS_ENABLED = true
+const DEFAULT_LLM_ENABLED = true
 
 export const get = query({
   args: {},
@@ -19,6 +20,36 @@ export const get = query({
     return {
       adsEnabled: row?.adsEnabled ?? DEFAULT_ADS_ENABLED,
       dailyBudgetCents: row?.dailyBudgetCents ?? BUDGET_DAILY_CENTS_DEFAULT,
+      llmEnabled: row?.llmEnabled ?? DEFAULT_LLM_ENABLED,
+    }
+  },
+})
+
+// Internal-only read for backend short-circuit checks. Avoids the
+// editor-gate on the public `get` query so action contexts can call
+// it without an auth identity.
+export const llmEnabledInternal = internalQuery({
+  args: {},
+  handler: async (ctx): Promise<boolean> => {
+    const row = await ctx.db.query("siteSettings").first()
+    return row?.llmEnabled ?? DEFAULT_LLM_ENABLED
+  },
+})
+
+export const setLlmEnabled = mutation({
+  args: { enabled: v.boolean() },
+  handler: async (ctx, { enabled }) => {
+    await requireEditor(ctx)
+    const row = await ctx.db.query("siteSettings").first()
+    const now = Date.now()
+    if (row) {
+      await ctx.db.patch(row._id, { llmEnabled: enabled, updatedAt: now })
+    } else {
+      await ctx.db.insert("siteSettings", {
+        adsEnabled: DEFAULT_ADS_ENABLED,
+        llmEnabled: enabled,
+        updatedAt: now,
+      })
     }
   },
 })

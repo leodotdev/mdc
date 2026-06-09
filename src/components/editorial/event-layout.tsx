@@ -1,12 +1,18 @@
 import { Link } from "@tanstack/react-router"
-import { ExternalLink, MapPin } from "lucide-react"
+import {
+  Calendar,
+  DollarSign,
+  ExternalLink,
+  MapPin,
+  Repeat,
+} from "lucide-react"
+import { useEffect, useState } from "react"
 
 import { api } from "../../../convex/_generated/api"
 import { neighborhoodName } from "../../../convex/lib/neighborhoods"
 import { HeroCaption } from "./hero-caption"
 import { SectionBadge } from "./section-badge"
 import { ShareWidget } from "./share-widget"
-import { SourcesBlock } from "./sources-block"
 import type { FunctionReturnType } from "convex/server"
 import { EventLocationMap } from "./event-location-map"
 import { AddToCalendar } from "@/components/events/add-to-calendar"
@@ -14,29 +20,36 @@ import { HeroImg } from "@/components/site/hero-img"
 import { Button } from "@/components/ui/button"
 import { useTranslation } from "@/lib/i18n/context"
 import {
+  effectiveStartsAt,
   formatEventDate,
   formatEventTime,
 } from "@/lib/event-helpers"
 import { localizedEvent } from "@/lib/localized-event"
-import { describeRRule, nextOccurrences } from "@/lib/rrule"
-import { useOpenArticleDrawer } from "@/lib/use-open-article-drawer"
+import { describeRRule } from "@/lib/rrule"
 
 type EventDoc = NonNullable<FunctionReturnType<typeof api.events.getBySlug>>
 
 // Single source of truth for how a published event renders. Used by
-// both /event/$slug and the EventDrawer overlay so they stay
-// pixel-identical except for the surrounding chrome.
+// both /event/$slug and the EventModal so they stay pixel-identical
+// except for the surrounding chrome.
+//
+// Layout: one column, left-aligned, top → bottom. Section badge +
+// title, dek, icon-led meta strip (date / location / price /
+// recurrence), action row, optional contained hero, single "Filed
+// under" pill row, deferred map disclosure, single-line source.
+//
+// The earlier 12-col @container/event grid was dropped — the modal is
+// ~672 px wide so the rail almost never activated, and on the
+// dedicated route the linear layout reads cleaner anyway.
 export function EventLayout({ rawEvent }: { rawEvent: EventDoc }) {
   const { lang } = useTranslation()
   const event = localizedEvent(rawEvent, lang)
-  const openInDrawer = useOpenArticleDrawer()
   const heroImage = event.heroImage
   const neighborhoodSlugs = event.neighborhoods ?? []
   const neighborhoodLabels = neighborhoodSlugs
     .map((n) => neighborhoodName(n) ?? n)
     .filter(Boolean)
-  // Visible location text — `Venue, Neighborhood`. Comma instead of the
-  // bullet separator we use elsewhere so it reads as a single address
+  // Comma-joined `Venue, Neighborhood` so it reads as one address
   // line, not two parallel facts.
   const locationText = [event.locationName, neighborhoodLabels[0]]
     .filter(Boolean)
@@ -57,289 +70,331 @@ export function EventLayout({ rawEvent }: { rawEvent: EventDoc }) {
     ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapsQuery)}`
     : null
   const tags = event.tags ?? []
-  const time = formatEventTime(event)
+  // Recurring-event horizon: when the canonical startsAt has already
+  // passed but the next occurrence is in the future (populated by the
+  // recurrence cron), show the upcoming instance everywhere on the
+  // page instead of last week's date.
+  const effectiveStart = effectiveStartsAt(event)
+  const dateLabel = formatEventDate(effectiveStart)
+  const timeLabel = formatEventTime({
+    ...event,
+    startsAt: effectiveStart,
+  })
+  const hasCoords =
+    typeof event.lat === "number" && typeof event.lng === "number"
+  const sourceUrl = event.url ?? event.citations?.[0]?.url
+  const sourceHostname = sourceUrl
+    ? (() => {
+        try {
+          return new URL(sourceUrl).hostname.replace(/^www\./, "")
+        } catch {
+          return sourceUrl
+        }
+      })()
+    : null
+  const recurrenceLabel = event.recurrenceRule
+    ? describeRRule(event.recurrenceRule)
+    : null
+  const priceLabel =
+    event.price && event.price.trim().length > 0 ? event.price.trim() : null
+
+  const calendarPayload = {
+    id: event._id,
+    title: event.title,
+    description: event.description,
+    startsAt: event.startsAt,
+    endsAt: event.endsAt,
+    allDay: event.allDay,
+    locationName: event.locationName,
+    locationAddress: event.locationAddress,
+    url: event.url,
+  }
 
   return (
-    <article className="py-2">
-      {/* Header: kicker → title → date/time/location dek → meta pills →
-          contained 16:9 hero. Mirrors ArticleHeader proportions so
-          stories and events read in the same family. */}
-      <header className="mx-auto max-w-3xl">
-        <div className="flex flex-col gap-3 text-center">
-          <div className="mx-auto">
-            <SectionBadge section={event.section} size="md" />
-          </div>
-          <h1 className="display-xl mt-2">{event.title}</h1>
-
-          {/* Line 1 — date · time · location (· price). Date pulled to
-              foreground weight so it leads visually; time / location /
-              price stay muted as supporting context. Clickable location
-              opens Maps. */}
-          <div className="font-sans mx-auto mt-2 flex max-w-2xl flex-wrap items-center justify-center gap-x-3 gap-y-1.5 text-base font-normal text-muted-foreground">
-            <time
-              dateTime={new Date(event.startsAt).toISOString()}
-              className="font-medium text-foreground"
-            >
-              {formatEventDate(event.startsAt)}
-            </time>
-            {time ? <span aria-hidden>·</span> : null}
-            {time ? (
-              <span className="font-medium text-foreground">{time}</span>
-            ) : null}
-            {locationText ? <span aria-hidden>·</span> : null}
-            {locationText && mapsHref ? (
-              <a
-                href={mapsHref}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1 hover:text-foreground hover:underline"
-                title="Open in Maps"
-              >
-                <MapPin className="size-3.5" aria-hidden />
-                {locationText}
-              </a>
-            ) : locationText ? (
-              <span className="inline-flex items-center gap-1">
-                <MapPin className="size-3.5" aria-hidden />
-                {locationText}
-              </span>
-            ) : null}
-            <span aria-hidden>·</span>
-            <span>
-              {event.price && event.price.trim().length > 0
-                ? event.price
-                : "Price unknown"}
-            </span>
-          </div>
-
-          {/* Recurrence — when the source provided an RFC 5545 RRULE,
-              show the human-readable cadence plus the next three
-              future occurrences. Lets a "yoga every Saturday at the
-              park" event ship as ONE row instead of weekly duplicates. */}
-          {event.recurrenceRule
-            ? (() => {
-                const label = describeRRule(event.recurrenceRule)
-                if (!label) return null
-                const occs = nextOccurrences(
-                  event.recurrenceRule,
-                  event.startsAt,
-                  3,
-                ).filter((ms) => ms > Date.now())
-                const nextLabel = occs
-                  .map((ms) =>
-                    new Date(ms).toLocaleString("en-US", {
-                      month: "short",
-                      day: "numeric",
-                    }),
-                  )
-                  .join(" · ")
-                return (
-                  <div className="font-sans mx-auto mt-1 max-w-2xl text-sm text-muted-foreground">
-                    <span className="font-medium text-foreground">{label}</span>
-                    {nextLabel ? (
-                      <span>
-                        {" "}
-                        · Upcoming: <span className="tabular-nums">{nextLabel}</span>
-                      </span>
-                    ) : null}
-                  </div>
-                )
-              })()
-            : null}
-
-          {/* Line 2 — #tags · neighborhood pills. Same pill shape so they
-              read as one taxonomy strip. */}
-          {tags.length > 0 || neighborhoodLabels.length > 0 ? (
-            <div className="mx-auto flex flex-wrap items-center justify-center gap-x-3 gap-y-2">
-              {tags.slice(0, 4).map((tag) => (
-                <Link
-                  key={`tag-${tag}`}
-                  to="/tag/$slug"
-                  params={{ slug: tag }}
-                  className="rounded-full border border-foreground/15 bg-card px-2.5 py-0.5 text-xs hover:bg-muted"
-                >
-                  #{tag}
-                </Link>
-              ))}
-              {neighborhoodSlugs.map((slug) => {
-                const name = neighborhoodName(slug) ?? slug
-                return (
-                  <Link
-                    key={`hood-${slug}`}
-                    to="/neighborhood/$slug"
-                    params={{ slug }}
-                    className="rounded-full border border-foreground/15 bg-card px-2.5 py-0.5 text-xs hover:bg-muted"
-                  >
-                    {name}
-                  </Link>
-                )
-              })}
-            </div>
-          ) : null}
-
-          {/* Line 3 — primary CTA (source page) leads; secondary
-              actions (share, add to calendar) follow. Falls back to
-              the first cited URL when the event itself has no direct
-              `url`, so readers always have a way out to the venue.
-              Hairline above lifts the action row off the meta strip. */}
-          {(() => {
-            const sourceUrl = event.url ?? event.citations?.[0]?.url
-            return (
-              <div className="mx-auto mt-3 flex w-fit flex-wrap items-center justify-center gap-2 border-t border-foreground/10 pt-3">
-                {sourceUrl ? (
-                  <Button
-                    size="default"
-                    render={
-                      <a
-                        href={sourceUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                      />
-                    }
-                  >
-                    Get full details
-                    <ExternalLink className="size-4" />
-                  </Button>
-                ) : null}
-                <ShareWidget title={event.title} />
-                <AddToCalendar
-                  event={{
-                    id: event._id,
-                    title: event.title,
-                    description: event.description,
-                    startsAt: event.startsAt,
-                    endsAt: event.endsAt,
-                    allDay: event.allDay,
-                    locationName: event.locationName,
-                    locationAddress: event.locationAddress,
-                    url: event.url,
-                  }}
-                />
-              </div>
-            )
-          })()}
-
-        </div>
-
-        {event.videoEmbed ? (
-          // Video embed takes priority over the hero image. Video is
-          // no longer first-class via a separate /watch route — when an
-          // event arrives with a YouTube/Vimeo reference (e.g. a Local 10
-          // segment about the event, or a stream from the venue), the
-          // player renders in the hero slot instead of the photo.
-          <figure className="mt-8">
-            <div className="relative aspect-video w-full overflow-hidden bg-black">
-              <iframe
-                src={
-                  event.videoEmbed.provider === "youtube"
-                    ? `https://www.youtube.com/embed/${event.videoEmbed.id}?rel=0&modestbranding=1&playsinline=1`
-                    : `https://player.vimeo.com/video/${event.videoEmbed.id}`
-                }
-                title={event.title}
-                allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                allowFullScreen
-                className="absolute inset-0 h-full w-full"
-              />
-            </div>
-            {event.heroCaption ? (
-              <figcaption className="mt-2 text-sm">
-                <HeroCaption
-                  caption={event.heroCaption}
-                  citations={event.citations}
-                />
-              </figcaption>
-            ) : null}
-          </figure>
-        ) : heroImage ? (
-          <figure className="mt-8">
-            <HeroImg
-              url={heroImage}
-              width={1200}
-              priority
-              alt={event.heroCaption ?? ""}
-              className="aspect-[16/9] w-full object-cover"
-            />
-            {event.heroCaption ? (
-              <figcaption className="mt-2 text-sm">
-                <HeroCaption
-                  caption={event.heroCaption}
-                  citations={event.citations}
-                />
-              </figcaption>
-            ) : null}
-          </figure>
+    <article className="flex flex-col gap-5">
+      {/* Header — section accent kicker + headline + dek. Left-aligned
+          to match the rest of the editorial cards. */}
+      <header className="flex flex-col gap-3">
+        <SectionBadge section={event.section} size="sm" />
+        <h1 className="font-heading text-balance text-3xl leading-[1.1] font-semibold tracking-tight md:text-4xl">
+          {event.title}
+        </h1>
+        {(event.dek || event.description) ? (
+          <p className="font-editorial text-base leading-snug text-muted-foreground">
+            {event.dek || event.description}
+          </p>
         ) : null}
       </header>
 
-      {/* Body — full-width single column now that the "More in section"
-          rail is gone. Constrains width on wide viewports for readability. */}
-      <div className="mt-12 grid grid-cols-1">
-        <div className="mx-auto w-full max-w-3xl">
-          {/* Single 1-sentence dek replaces the longer description.
-              Falls through to `description` for legacy rows whose
-              backfill hasn't run yet — those are still concise. */}
-          {(event.dek || event.description) ? (
-            <p className="font-editorial text-lg leading-snug text-foreground">
-              {event.dek || event.description}
-            </p>
+      {/* Meta strip — icon-led facts grid. Replaces the six separately
+          -labeled rail sections. Each fact is suppressed individually
+          when the field is missing. */}
+      <div className="grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+        <MetaItem icon={Calendar}>
+          <span className="text-foreground">{dateLabel}</span>
+          {timeLabel ? (
+            <span className="text-muted-foreground"> · {timeLabel}</span>
           ) : null}
+        </MetaItem>
+        {locationText ? (
+          <MetaItem icon={MapPin}>
+            <span className="text-foreground">{locationText}</span>
+          </MetaItem>
+        ) : null}
+        {priceLabel ? (
+          <MetaItem icon={DollarSign}>
+            <span className="text-foreground">{priceLabel}</span>
+          </MetaItem>
+        ) : null}
+        {recurrenceLabel ? (
+          <MetaItem icon={Repeat}>
+            <span className="text-foreground">{recurrenceLabel}</span>
+          </MetaItem>
+        ) : null}
+      </div>
 
-          {/* Location map — shown when the event has resolved coords.
-              A single accent-colored pin centered on (lng, lat). Below
-              the map, the venue + address + a Maps link mirror the
-              header strip so readers can hand off to navigation. */}
-          {typeof event.lat === "number" && typeof event.lng === "number" ? (
-            <div className="mt-8">
-              <EventLocationMap
-                lat={event.lat}
-                lng={event.lng}
-                accentColor={event.section?.accentColor ?? "var(--foreground)"}
-                title={event.title}
+      {/* Action row — ghost-button trio so the chrome doesn't compete
+          with the headline. "Get full details" is the primary intent
+          (off-site link to the source); calendar + share sit next to
+          it as peer affordances. */}
+      <div className="flex flex-wrap items-center gap-1">
+        {sourceUrl ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            render={
+              <a href={sourceUrl} target="_blank" rel="noreferrer" />
+            }
+          >
+            <ExternalLink className="size-4" />
+            Get full details
+          </Button>
+        ) : null}
+        <AddToCalendar event={calendarPayload} />
+        <ShareWidget title={event.title} />
+      </div>
+
+      {/* Hero (image or video). Contained at max-height so weak stock
+          images don't dominate the modal; suppressed entirely when no
+          hero is present. */}
+      {event.videoEmbed ? (
+        <figure>
+          <div className="relative aspect-video w-full overflow-hidden rounded-md bg-black">
+            <iframe
+              src={
+                event.videoEmbed.provider === "youtube"
+                  ? `https://www.youtube.com/embed/${event.videoEmbed.id}?rel=0&modestbranding=1&playsinline=1`
+                  : `https://player.vimeo.com/video/${event.videoEmbed.id}`
+              }
+              title={event.title}
+              allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+              allowFullScreen
+              className="absolute inset-0 h-full w-full"
+            />
+          </div>
+          {event.heroCaption ? (
+            <figcaption className="mt-2 text-xs">
+              <HeroCaption
+                caption={event.heroCaption}
+                citations={event.citations}
               />
-              {locationText || event.locationAddress ? (
-                <div className="font-sans mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm text-muted-foreground">
-                  <MapPin className="size-3.5 shrink-0" aria-hidden />
-                  <span className="font-medium text-foreground">
-                    {event.locationName || locationText}
-                  </span>
-                  {event.locationAddress ? (
-                    <span>{event.locationAddress}</span>
-                  ) : null}
-                  {mapsHref ? (
-                    <a
-                      href={mapsHref}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="ml-auto hover:text-foreground hover:underline"
-                    >
-                      Open in Maps →
-                    </a>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
+            </figcaption>
           ) : null}
+        </figure>
+      ) : heroImage ? (
+        <figure>
+          <HeroImg
+            url={heroImage}
+            width={1200}
+            priority
+            alt={event.heroCaption ?? ""}
+            className="aspect-[3/2] max-h-80 w-full rounded-md object-cover"
+          />
+          {event.heroCaption ? (
+            <figcaption className="mt-2 text-xs">
+              <HeroCaption
+                caption={event.heroCaption}
+                citations={event.citations}
+              />
+            </figcaption>
+          ) : null}
+        </figure>
+      ) : null}
 
-          {event.article ? (
-            <div className="mt-8 rounded-md border border-foreground/15 bg-card p-4">
-              <p className="kicker mb-2 text-xs">Related article</p>
+      {/* "Filed under" — tags + neighborhoods merged into one inline
+          pill row. Both route to listing pages; the visual distinction
+          was scaffolding, not signal. */}
+      {tags.length > 0 || neighborhoodSlugs.length > 0 ? (
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1.5 text-xs">
+          <span className="kicker text-muted-foreground">Filed under</span>
+          {tags.slice(0, 8).map((tag) => (
+            <Link
+              key={`tag-${tag}`}
+              to="/tag/$slug"
+              params={{ slug: tag }}
+              className="rounded-full border border-foreground/15 bg-background px-2.5 py-0.5 hover:bg-muted/60"
+            >
+              #{tag}
+            </Link>
+          ))}
+          {neighborhoodSlugs.map((slug) => {
+            const name = neighborhoodName(slug) ?? slug
+            return (
               <Link
-                to="/article/$slug"
-                params={{ slug: event.article.slug }}
-                onClick={(e) => openInDrawer(event.article!.slug, e)}
-                className="font-sans text-lg font-semibold leading-snug hover:text-primary"
+                key={`hood-${slug}`}
+                to="/neighborhood/$slug"
+                params={{ slug }}
+                className="rounded-full border border-foreground/15 bg-background px-2.5 py-0.5 hover:bg-muted/60"
               >
-                {event.article.title}
+                {name}
               </Link>
+            )
+          })}
+        </div>
+      ) : null}
+
+      {/* Map block — `MapToggle` defers the actual EventLocationMap /
+          Google iframe mount until the reader clicks "Show map". The
+          modal opens ~100x more often than the map gets opened, and
+          MapLibre + tile requests are heavy; this saves the network
+          cost on the common case. */}
+      {locationText || event.locationAddress ? (
+        <MapToggle
+          address={event.locationAddress}
+          mapsHref={mapsHref}
+          mapsQuery={mapsQuery}
+          hasCoords={hasCoords}
+          lat={event.lat}
+          lng={event.lng}
+          accentColor={event.section?.accentColor ?? "var(--foreground)"}
+          title={event.title}
+          locationName={event.locationName}
+        />
+      ) : null}
+
+      {/* Source — single-line attribution, demoted to the bottom of
+          the layout. Hidden when no source URL is known. */}
+      {sourceUrl ? (
+        <p className="meta text-xs">
+          Source ·{" "}
+          <a
+            href={sourceUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 hover:text-foreground hover:underline break-all"
+          >
+            {sourceHostname}
+            <ExternalLink className="size-3" aria-hidden />
+          </a>
+        </p>
+      ) : null}
+    </article>
+  )
+}
+
+// Inline definition-list item — icon prefix + value, used in the meta
+// strip. The icon column is fixed-width so values left-align across
+// rows even when wraps occur.
+function MetaItem({
+  icon: Icon,
+  children,
+}: {
+  icon: React.ComponentType<{ className?: string; "aria-hidden"?: boolean }>
+  children: React.ReactNode
+}) {
+  return (
+    <div className="flex items-baseline gap-2">
+      <Icon
+        className="relative top-[0.15em] size-4 shrink-0 text-muted-foreground"
+        aria-hidden
+      />
+      <div className="min-w-0 leading-snug">{children}</div>
+    </div>
+  )
+}
+
+// Lazily mounts the map only when the user clicks "Show map".
+// EventLocationMap initializes MapLibre + fires tile requests on
+// mount; we avoid both until the reader actually opts in. `useEffect`
+// resets the SSR fallback `closed` state on hydrate so the initial
+// server render stays inert (no map markup), which keeps the page
+// payload small.
+function MapToggle({
+  address,
+  mapsHref,
+  mapsQuery,
+  hasCoords,
+  lat,
+  lng,
+  accentColor,
+  title,
+  locationName,
+}: {
+  address: string | undefined
+  mapsHref: string | null
+  mapsQuery: string
+  hasCoords: boolean
+  lat: number | undefined
+  lng: number | undefined
+  accentColor: string
+  title: string
+  locationName: string | undefined
+}) {
+  const [open, setOpen] = useState(false)
+  // Track hydration so the initial server render matches the client
+  // render exactly (both show the toggle button, no map markup).
+  const [hydrated, setHydrated] = useState(false)
+  useEffect(() => setHydrated(true), [])
+
+  return (
+    <div className="border-t border-foreground/10 pt-3">
+      <div className="meta flex items-center gap-2 text-xs">
+        <MapPin className="size-3.5" aria-hidden />
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          disabled={!hydrated}
+          className="font-medium hover:text-foreground disabled:opacity-50"
+        >
+          {open ? "Hide map ▾" : "Show map ▸"}
+        </button>
+        {mapsHref ? (
+          <a
+            href={mapsHref}
+            target="_blank"
+            rel="noreferrer"
+            className="ml-auto inline-flex items-center gap-1 hover:text-foreground hover:underline"
+          >
+            Open in Maps →
+          </a>
+        ) : null}
+      </div>
+      {open ? (
+        <div className="mt-3 space-y-2">
+          {address ? (
+            <p className="text-xs text-muted-foreground">{address}</p>
+          ) : null}
+          {hasCoords ? (
+            <EventLocationMap
+              lat={lat as number}
+              lng={lng as number}
+              accentColor={accentColor}
+              title={title}
+            />
+          ) : mapsHref ? (
+            <div className="aspect-[4/3] w-full overflow-hidden rounded-md border border-foreground/10">
+              <iframe
+                title={`Map of ${locationName ?? title}`}
+                src={`https://www.google.com/maps?q=${encodeURIComponent(mapsQuery)}&output=embed`}
+                loading="lazy"
+                referrerPolicy="no-referrer-when-downgrade"
+                className="h-full w-full border-0"
+              />
             </div>
           ) : null}
         </div>
-
-      </div>
-
-      {event.citations && event.citations.length > 0 ? (
-        <SourcesBlock citations={event.citations} />
       ) : null}
-    </article>
+    </div>
   )
 }

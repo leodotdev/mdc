@@ -1,7 +1,7 @@
 import { convexQuery } from "@convex-dev/react-query"
 import { useQuery } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
-import { Calendar, FileText, Hash, MapPin } from "lucide-react"
+import { Calendar, Hash, MapPin } from "lucide-react"
 import {
   createContext,
   useCallback,
@@ -108,10 +108,7 @@ function SearchCommand() {
     if (!open) setQuery("")
   }, [open])
 
-  const { data: articles } = useQuery({
-    ...convexQuery(api.articles.search, { query: trimmed, limit: 5 }),
-    enabled,
-  })
+  // Article search removed with the article-era purge.
   const { data: events } = useQuery({
     ...convexQuery(api.events.search, { query: trimmed, limit: 5 }),
     enabled,
@@ -140,19 +137,7 @@ function SearchCommand() {
 
   const close = useCallback(() => setOpen(false), [setOpen])
 
-  const goArticle = useCallback(
-    (slug: string) => {
-      close()
-      void navigate({
-        search: ((prev: Record<string, unknown>) => ({
-          ...prev,
-          article: slug,
-        })) as never,
-      })
-    },
-    [close, navigate],
-  )
-
+  // goArticle removed with the article-era purge.
   const goEvent = useCallback(
     (slug: string) => {
       close()
@@ -202,29 +187,10 @@ function SearchCommand() {
           </CommandEmpty>
         ) : null}
 
-        {articles && articles.length > 0 ? (
-          <CommandGroup heading={t("searchPalette.articles")}>
-            {articles.map((a) => (
-              <CommandItem
-                key={a._id}
-                value={`article:${a._id}:${a.title}`}
-                onSelect={() => goArticle(a.slug)}
-              >
-                <FileText />
-                <span className="truncate">{a.title}</span>
-                {a.section ? (
-                  <span className="text-muted-foreground ml-auto text-xs">
-                    {localizeSectionName(a.section, lang)}
-                  </span>
-                ) : null}
-              </CommandItem>
-            ))}
-          </CommandGroup>
-        ) : null}
+        {/* Article search results removed with the article-era purge. */}
 
         {events && events.length > 0 ? (
           <>
-            {articles && articles.length > 0 ? <CommandSeparator /> : null}
             <CommandGroup heading={t("searchPalette.events")}>
               {events.map((e) => (
                 <CommandItem
@@ -247,10 +213,7 @@ function SearchCommand() {
 
         {filteredSections.length > 0 ? (
           <>
-            {(articles && articles.length > 0) ||
-            (events && events.length > 0) ? (
-              <CommandSeparator />
-            ) : null}
+            {events && events.length > 0 ? <CommandSeparator /> : null}
             <CommandGroup heading={t("searchPalette.sections")}>
               {filteredSections.map((s) => (
                 <CommandItem
@@ -268,9 +231,7 @@ function SearchCommand() {
 
         {filteredNeighborhoods.length > 0 ? (
           <>
-            {(articles && articles.length > 0) ||
-            (events && events.length > 0) ||
-            filteredSections.length > 0 ? (
+            {(events && events.length > 0) || filteredSections.length > 0 ? (
               <CommandSeparator />
             ) : null}
             <CommandGroup heading={t("searchPalette.neighborhoods")}>

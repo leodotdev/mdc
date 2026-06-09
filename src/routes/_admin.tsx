@@ -11,6 +11,7 @@ import { LogOut } from "lucide-react"
 import { useEffect } from "react"
 
 import { api } from "../../convex/_generated/api"
+import { AdminCommandPalette } from "@/components/admin/command-palette"
 import { ThemeSwitcher } from "@/components/site/theme-switcher"
 import { Button } from "@/components/ui/button"
 import { useTranslation } from "@/lib/i18n/context"
@@ -56,7 +57,9 @@ function AdminLayout() {
     { to: "/admin", label: "Dashboard" },
     { to: "/admin/published", label: "Published" },
     { to: "/admin/sources", label: "Sources" },
+    { to: "/admin/taxonomy", label: "Taxonomy" },
     { to: "/admin/runs", label: "Runs" },
+    { to: "/admin/settings", label: "Settings" },
   ] as const
 
   return (
@@ -113,6 +116,9 @@ function AdminLayout() {
       <main className="w-full flex-1 px-6 py-8">
         <Outlet />
       </main>
+      {/* Cmd+K palette — global across /admin. Lazy-rendered modal,
+          no perf hit when closed. */}
+      <AdminCommandPalette />
     </div>
   )
 }

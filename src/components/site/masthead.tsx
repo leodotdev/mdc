@@ -79,7 +79,7 @@ export function Masthead() {
             className="font-brand leading-[0.85]"
             aria-label={t("masthead.aria.home")}
           >
-            <span className="block text-2xl md:text-5xl lg:text-6xl">
+            <span className="block text-4xl sm:text-5xl md:text-6xl lg:text-7xl">
               {t("brand.name")}
             </span>
           </Link>

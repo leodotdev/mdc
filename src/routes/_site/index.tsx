@@ -5,7 +5,7 @@ import { Link, createFileRoute  } from "@tanstack/react-router"
 
 import { api } from "../../../convex/_generated/api"
 import { SectionHeaderCell } from "@/components/editorial/section-header-cell"
-import { StoryItem } from "@/components/editorial/story-item"
+import { EventCard } from "@/components/editorial/event-card"
 import { EventListItem } from "@/components/events/event-list-item"
 import { HeroImg } from "@/components/site/hero-img"
 import { PhotoOfDayWidget } from "@/components/widgets/photo-of-day-widget"
@@ -49,7 +49,7 @@ export const Route = createFileRoute("/_site/")({
       ),
       context.queryClient.ensureQueryData(convexQuery(api.sections.list, {})),
       context.queryClient.ensureQueryData(
-        convexQuery(api.events.upcoming, { limit: 5, days: 14 }),
+        convexQuery(api.events.popularToday, { limit: 5, days: 30 }),
       ),
       // Long chronological tail used by the all-events list below the
       // importance-driven hero blocks.
@@ -121,7 +121,7 @@ function HomePage() {
     convexSuspenseQuery(api.events.latestEditorial, { limit: 40 }),
   )
   const { data: upcomingEventsRaw } = useSuspenseQuery(
-    convexSuspenseQuery(api.events.upcoming, { limit: 5, days: 14 }),
+    convexSuspenseQuery(api.events.popularToday, { limit: 5, days: 30 }),
   )
   // Long chronological tail — feeds the "All upcoming events" list at
   // the bottom of the page. 200/60d is wide enough to read as a real
@@ -231,7 +231,7 @@ function HomePage() {
   const leadStack = take(allPool, 2)
   const xlRows = take(allPool, 5, { requireImage: true })
 
-  // More Top Stories (mirrors WaPo's second hero block):
+  // More upcoming events (second hero block):
   // • Lead xl on the left.
   // • 4 text-only headlines stacked on the right.
   const morelead = take(allPool, 1, { requireImage: true })[0]
@@ -294,8 +294,8 @@ function HomePage() {
               {/* Text col — lead with kicker/headline/dek + 2 text-only stacked */}
               <div className="flex flex-col divide-y divide-foreground/15 md:col-span-5 md:col-start-1 md:row-start-1">
                 <div className="pb-5">
-                  <StoryItem
-                    article={lead}
+                  <EventCard
+                    event={lead}
                     layout="text-only"
                     size="lead"
                     showDek
@@ -303,8 +303,8 @@ function HomePage() {
                 </div>
                 {leadStack[0] ? (
                   <div className="py-5">
-                    <StoryItem
-                      article={leadStack[0]}
+                    <EventCard
+                      event={leadStack[0]}
                       layout="text-only"
                       size="compact"
                     />
@@ -312,8 +312,8 @@ function HomePage() {
                 ) : null}
                 {leadStack[1] ? (
                   <div className="pt-5">
-                    <StoryItem
-                      article={leadStack[1]}
+                    <EventCard
+                      event={leadStack[1]}
                       layout="text-only"
                       size="compact"
                     />
@@ -350,8 +350,8 @@ function HomePage() {
                 </Link>
               ) : null}
               <div className="flex flex-col md:col-span-5 md:col-start-1 md:row-start-1">
-                <StoryItem
-                  article={a}
+                <EventCard
+                  event={a}
                   layout="text-only"
                   size="lead"
                   showDek
@@ -373,7 +373,7 @@ function HomePage() {
           <SportsWidget />
           <div>
             <SectionHeaderCell
-              title={t("nav.events")}
+              title={t("rail.popular")}
             />
             <div className="flex flex-col divide-y divide-foreground/15">
               {upcomingEvents.length === 0 ? (
@@ -398,7 +398,7 @@ function HomePage() {
 
       <BannerAd slot="home-mid" className={BLOCK} />
 
-      {/* ════════════════════ More Top Stories ════════════════════
+      {/* ════════════════════ More upcoming events ════════════════════
           Mirrors WaPo's second hero chain: lead xl on the left + 4 text-only
           headlines stacked on the right with a vertical hairline between. */}
       {morelead ? (
@@ -430,8 +430,8 @@ function HomePage() {
                   </Link>
                 ) : null}
                 <div className="flex flex-col md:col-span-5 md:col-start-1 md:row-start-1">
-                  <StoryItem
-                    article={morelead}
+                  <EventCard
+                    event={morelead}
                     layout="text-only"
                     size="lead"
                     showDek
@@ -451,8 +451,8 @@ function HomePage() {
                         : "py-4"
                   }
                 >
-                  <StoryItem
-                    article={a}
+                  <EventCard
+                    event={a}
                     layout="text-only"
                     size="compact"
                   />

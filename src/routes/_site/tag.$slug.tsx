@@ -5,14 +5,13 @@ import { Link, createFileRoute } from "@tanstack/react-router"
 import { api } from "../../../convex/_generated/api"
 import { BlockSeparator } from "@/components/editorial/block-separator"
 import { HeroSplit } from "@/components/editorial/hero-split"
-import { TrendingStrip } from "@/components/editorial/trending-strip"
 import { PageHeader } from "@/components/editorial/page-header"
 import { SectionHeaderCell } from "@/components/editorial/section-header-cell"
 import { SidebarRail } from "@/components/editorial/sidebar-rail"
 import { CalendarMonth } from "@/components/editorial/calendar-month"
 import { EventsMap } from "@/components/editorial/events-map"
 import { EventListView } from "@/components/editorial/event-list-view"
-import { StoryItem } from "@/components/editorial/story-item"
+import { EventCard } from "@/components/editorial/event-card"
 import { XlRowList } from "@/components/editorial/xl-row-list"
 import { BannerAd } from "@/components/site/banner-ad"
 import { convexSuspenseQuery } from "@/lib/convex-suspense"
@@ -153,16 +152,12 @@ function TagPage() {
             {lead ? <HeroSplit lead={lead} subleads={subleads} /> : null}
             {xlRows.length > 0 ? (
               <BlockSeparator className="mt-2">
-                <XlRowList articles={xlRows} />
+                <XlRowList events={xlRows} />
               </BlockSeparator>
             ) : null}
           </div>
 
           <SidebarRail className="lg:col-span-3">
-            <TrendingStrip
-              label={`Trending · #${slug}`}
-              articles={data}
-            />
             {coTags.length > 0 ? (
               <section>
                 <SectionHeaderCell title="Often together" className="mb-4" />
@@ -196,10 +191,10 @@ function TagPage() {
             className="mb-6"
           />
           <div className="grid border-t border-l border-foreground md:grid-cols-3">
-            {longTail.map((article) => (
-              <StoryItem
-                key={article._id}
-                article={article}
+            {longTail.map((event) => (
+              <EventCard
+                key={event._id}
+                event={event}
                 layout="framed"
                 size="sm"
                 imageAspect="4/3"

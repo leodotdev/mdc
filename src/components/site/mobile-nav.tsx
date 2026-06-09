@@ -36,7 +36,7 @@ export function MobileNav() {
       />
       <SheetContent side="left" className="flex w-80 flex-col p-0">
         <SheetHeader className="border-b border-foreground px-6 pt-6 pb-4">
-          <SheetTitle className="font-brand text-2xl leading-[0.85]">
+          <SheetTitle className="font-brand text-4xl leading-[0.85]">
             {t("brand.name")}
           </SheetTitle>
         </SheetHeader>

@@ -182,6 +182,126 @@ export async function generateEventTranslation(opts: {
 }
 
 // =====================================================================
+// Batched event translation — one Haiku call returns N translations.
+// The drain loop builds a list of cache-miss events (each with a stable
+// `key`) and calls this once per batch (up to ~20). Output is keyed by
+// the same `key`, so the caller can write each result back to its row
+// without ambiguity. Cost vs. single-call: one shared prompt + one
+// per-event tool call cost, so ~5-10x cheaper at typical batch sizes.
+// =====================================================================
+
+export type EventBatchTranslationInput = {
+  key: string
+  title: string
+  dek: string
+  heroCaption?: string
+  sectionSlug?: string
+  tags: ReadonlyArray<string>
+  locationName?: string
+}
+
+const TRANSLATE_EVENT_BATCH_TOOL = {
+  name: "translate_event_batch",
+  description:
+    "Translate a batch of published event listings into Spanish, preserving the house voice. NOT literal — re-write in the same snappy local-paper register, in Spanish. Output one entry per input event, in the same order, keyed by the supplied `key`. Hard caps: title ≤ 60 chars, dek ≤ 200 chars / 1 sentence. Miami Spanish; natural anglicisms OK. Proper nouns stay in their original form.",
+  input_schema: {
+    type: "object",
+    properties: {
+      items: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            key: { type: "string", description: "Echo the input key verbatim." },
+            title: {
+              type: "string",
+              description:
+                "Spanish event title. ≤ 60 chars. Active voice. Lead with what the event IS.",
+            },
+            dek: {
+              type: "string",
+              description:
+                "Spanish dek. EXACTLY one sentence, ≤ 200 chars. Punchy, factual.",
+            },
+            heroCaption: {
+              type: "string",
+              description:
+                "Spanish image caption when an English caption was provided. Omit otherwise.",
+            },
+          },
+          required: ["key", "title", "dek"],
+        },
+      },
+    },
+    required: ["items"],
+  },
+} as const
+
+export async function generateEventBatchTranslation(opts: {
+  model: string
+  events: ReadonlyArray<EventBatchTranslationInput>
+}): Promise<Map<string, EventTranslationOutput>> {
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set in Convex env")
+  if (opts.events.length === 0) return new Map()
+  const client = new Anthropic({ apiKey })
+
+  const blocks = opts.events
+    .map((e) => {
+      const lines = [
+        `--- key: ${e.key} ---`,
+        `Section: ${e.sectionSlug ?? "—"}`,
+        `Tags: ${e.tags.join(", ") || "(none)"}`,
+        e.locationName ? `Venue: ${e.locationName}` : "",
+        `Title: ${e.title}`,
+        `Dek: ${e.dek}`,
+        e.heroCaption ? `Hero caption: ${e.heroCaption}` : "",
+      ].filter(Boolean)
+      return lines.join("\n")
+    })
+    .join("\n\n")
+
+  const userPrompt = [
+    `You are translating ${opts.events.length} published event listings from miami.community — Miami's AI-edited local paper — into Spanish.`,
+    `The EN copy is in our house voice: punchy, short, conversational, no headlinese. Reproduce that voice in Spanish, NOT a literal word-for-word translation.`,
+    ``,
+    `Hard rules:`,
+    `- Title: ≤ 60 chars. Active voice.`,
+    `- Dek: EXACTLY 1 sentence, ≤ 200 chars. Concrete facts only.`,
+    `- Miami Spanish (Cuban / South-American influences). OK to mix in natural anglicisms.`,
+    `- Proper nouns stay in their original form (venue names, neighborhoods, people).`,
+    `- Don't add facts. Don't drop facts. Don't invent dates or prices.`,
+    `- Return one item per input, in the same order, echoing the "key" verbatim.`,
+    ``,
+    `=== EVENTS ===`,
+    blocks,
+  ].join("\n")
+
+  const response = await client.messages.create({
+    model: opts.model,
+    max_tokens: Math.min(8192, 256 + opts.events.length * 220),
+    messages: [{ role: "user", content: userPrompt }],
+    tools: [TRANSLATE_EVENT_BATCH_TOOL],
+    tool_choice: { type: "tool", name: "translate_event_batch" },
+  })
+
+  const toolUse = response.content.find(
+    (block): block is Anthropic.ToolUseBlock => block.type === "tool_use",
+  )
+  const out = new Map<string, EventTranslationOutput>()
+  if (!toolUse) return out
+  const raw = toolUse.input as { items?: ReadonlyArray<unknown> }
+  for (const item of raw.items ?? []) {
+    const t = validateEventTranslation(item)
+    if (!t) continue
+    const keyVal = (item as Record<string, unknown>).key
+    if (typeof keyVal !== "string" || keyVal.length === 0) continue
+    out.set(keyVal, t)
+  }
+  return out
+}
+
+// =====================================================================
 // Event enrichment — Haiku call that returns structured tags +
 // neighborhood slugs + optional section refinement for one event.
 // Used by the deterministic ingest pipeline as the only LLM step:
@@ -739,9 +859,9 @@ export async function generateWidgetBacklog(opts: {
 
 // =====================================================================
 // Merge verification — cheap Haiku call that confirms whether two
-// articles cover the same news event. Used by the post-publish merge
-// sweep to gate auto-merges so high-confidence-overlap pairs that are
-// actually distinct stories (e.g. two Marlins games against the same
+// event rows cover the same real-world event. Used by the post-publish
+// merge sweep to gate auto-merges so high-confidence-overlap pairs that
+// are actually distinct events (e.g. two Marlins games against the same
 // opponent on consecutive days) don't get incorrectly fused.
 //
 // Cost: ~1¢ per verification. Run only after the cheap title/citation

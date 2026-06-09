@@ -34,25 +34,44 @@ export function dayKey(ts: number): string {
   return `${y}-${m}-${day}`
 }
 
+// Recurring-event horizon. When an event is a recurring series whose
+// canonical `startsAt` is in the past, we shift the displayed time to
+// the next future occurrence from `recurrenceInstances` (populated
+// nightly by the recurrence cron). Cards, headers, and rails all read
+// through this so "Yoga at Bayfront Park" doesn't surface as "last
+// Tuesday" — it surfaces as "this Tuesday."
+export function effectiveStartsAt(event: {
+  startsAt: number
+  recurrenceRule?: string | null
+  recurrenceInstances?: ReadonlyArray<number> | null
+}): number {
+  if (event.startsAt >= Date.now()) return event.startsAt
+  const instances = event.recurrenceInstances ?? []
+  if (!event.recurrenceRule || instances.length === 0) return event.startsAt
+  const now = Date.now()
+  const next = instances.find((t) => t >= now)
+  return next ?? event.startsAt
+}
+
 export function formatEventTime(event: {
   startsAt: number
   endsAt?: number
   allDay: boolean
 }): string {
   if (event.allDay) return "All day"
-  const start = new Date(event.startsAt)
-  const time = new Intl.DateTimeFormat("en-US", {
+  const fmt = new Intl.DateTimeFormat("en-US", {
     hour: "numeric",
     minute: "2-digit",
     timeZone: MIAMI_TZ,
-  }).format(start)
-  if (event.endsAt) {
-    const endTime = new Intl.DateTimeFormat("en-US", {
-      hour: "numeric",
-      minute: "2-digit",
-      timeZone: MIAMI_TZ,
-    }).format(new Date(event.endsAt))
-    return `${time} – ${endTime}`
+  })
+  const time = fmt.format(new Date(event.startsAt))
+  // Show a range only when end is set AND renders to a different
+  // human-readable time. Many feeds default endsAt = startsAt (or
+  // round to the same minute), which would otherwise render as
+  // "8:00 PM – 8:00 PM".
+  if (event.endsAt && event.endsAt > event.startsAt) {
+    const endTime = fmt.format(new Date(event.endsAt))
+    if (endTime !== time) return `${time} – ${endTime}`
   }
   return time
 }

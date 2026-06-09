@@ -164,7 +164,7 @@ function NavRow({
     <>
       <ul
         ref={rowRef}
-        className="flex items-center justify-center gap-x-1 [&:has([data-nav-state=inactive]:hover)_[data-nav-state=inactive]:not(:hover)]:opacity-70"
+        className="flex items-center justify-center gap-x-1"
       >
         {/* Site-wide neighborhood filter — lives BEFORE the section
             beats so it reads as the room-selector for the whole page,
@@ -375,7 +375,7 @@ function NeighborhoodFilterMenu({
         // Fixed width on the popover so the menu stays a consistent
         // size even though the trigger hugs its label. Overrides the
         // base `w-(--anchor-width)` via tailwind-merge.
-        className="w-56 max-h-[28rem] overflow-y-auto [&:has([data-nav-state=inactive]:hover)_[data-nav-state=inactive]:not(:hover)]:opacity-70"
+        className="w-56 max-h-[28rem] overflow-y-auto"
       >
         {/* All Neighborhoods row — clearing collapses to the empty / unfiltered
             state. Bolds when no filter active so the reader can see
@@ -467,7 +467,7 @@ function MoreSectionsMenu({
       <DropdownMenuContent
         align="end"
         sideOffset={6}
-        className="w-48 [&:has([data-nav-state=inactive]:hover)_[data-nav-state=inactive]:not(:hover)]:opacity-70"
+        className="w-48"
       >
         {items.map((s) => {
           const itemActive = trunkSlug === s.slug

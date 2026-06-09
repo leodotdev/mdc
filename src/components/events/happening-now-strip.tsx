@@ -6,7 +6,6 @@ import { formatEventTime } from "@/lib/event-helpers"
 import { useTranslation } from "@/lib/i18n/context"
 import { localizedEvent } from "@/lib/localized-event"
 import { HeroImg } from "@/components/site/hero-img"
-import { useOpenArticleDrawer } from "@/lib/use-open-article-drawer"
 
 const ONE_DAY_MS = 24 * 3_600_000
 
@@ -61,7 +60,6 @@ export function HappeningNowStrip({
 function HappeningCard({ event: rawEvent }: { event: EventWithSection }) {
   const { lang } = useTranslation()
   const event = localizedEvent(rawEvent, lang)
-  const openInDrawer = useOpenArticleDrawer()
   const accent = event.section?.accentColor ?? "var(--foreground)"
   const label = event.section?.name ?? "Event"
   const time = formatEventTime(event)
@@ -131,17 +129,6 @@ function HappeningCard({ event: rawEvent }: { event: EventWithSection }) {
       </a>
     )
   }
-  if (event.article) {
-    return (
-      <Link
-        to="/article/$slug"
-        params={{ slug: event.article.slug }}
-        onClick={(e) => openInDrawer(event.article!.slug, e)}
-        className="snap-start"
-      >
-        {inner}
-      </Link>
-    )
-  }
+  // article fallback removed with the article-era purge.
   return <div className="snap-start">{inner}</div>
 }

@@ -18,10 +18,55 @@ import type { RawItem, SourceForAdapter } from "./types"
 //
 // Drops events whose start is more than 24h in the past (so the queue
 // doesn't fill with last week's recurring tours).
+//
+// Follows up to two extra WordPress-style pagination pages
+// (`?paged=2`, `?paged=3`) when the first page yields ≥10 events —
+// many "The Events Calendar" / Yoast venue sites only show ~10 per
+// page, so a single fetch was capping us at ~10 even when the venue
+// had 30+ upcoming. Bounded: 3 pages total. Stops on 4xx/5xx or an
+// empty page so non-paginating sites pay one extra fetch at most.
 export async function fetchEventsHtml(
   source: SourceForAdapter,
 ): Promise<Array<RawItem>> {
-  const res = await fetch(source.url, {
+  const cutoff = Date.now() - 24 * 3_600_000
+  const events: Array<RawItem> = []
+  const seen = new Set<string>()
+
+  const page1 = await fetchEventsHtmlPage(source.url, cutoff, seen)
+  events.push(...page1)
+
+  // Only paginate when page 1 looks "full" and the URL has no query
+  // string — query-bearing URLs (e.g. faceted calendar filters) often
+  // 404 or return the same page when we append `?paged=N`.
+  if (page1.length >= 10 && !source.url.includes("?")) {
+    for (let p = 2; p <= 3; p++) {
+      const pageUrl = `${source.url}${source.url.endsWith("/") ? "" : "/"}?paged=${p}`
+      try {
+        const more = await fetchEventsHtmlPage(pageUrl, cutoff, seen)
+        if (more.length === 0) break
+        events.push(...more)
+      } catch {
+        // 4xx/5xx — stop paginating; either the site doesn't support
+        // it or we've walked past the last page.
+        break
+      }
+    }
+  }
+
+  events.sort((a, b) => (a.publishedAt ?? 0) - (b.publishedAt ?? 0))
+  return events.slice(0, 50)
+}
+
+// Single-page fetch + extract. Shared between page 1 and the optional
+// pagination follow-ups. `seen` is threaded through both the JSON-LD
+// and Eventbrite passes so the same event isn't emitted twice across
+// pages.
+async function fetchEventsHtmlPage(
+  url: string,
+  cutoff: number,
+  seen: Set<string>,
+): Promise<Array<RawItem>> {
+  const res = await fetch(url, {
     headers: {
       "User-Agent":
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
@@ -30,7 +75,7 @@ export async function fetchEventsHtml(
       "Accept-Language": "en-US,en;q=0.9",
     },
   })
-  if (!res.ok) throw new Error(`events-html ${source.url} → ${res.status}`)
+  if (!res.ok) throw new Error(`events-html ${url} → ${res.status}`)
   const html = await res.text()
 
   // Pull every JSON-LD island out of the page. We don't care about
@@ -50,9 +95,7 @@ export async function fetchEventsHtml(
     }
   }
 
-  const cutoff = Date.now() - 24 * 3_600_000
   const events: Array<RawItem> = []
-  const seen = new Set<string>()
   const stack: Array<unknown> = [...blocks]
   while (stack.length > 0) {
     const cur = stack.pop()
@@ -74,13 +117,13 @@ export async function fetchEventsHtml(
       if (name && startRaw) {
         const startMs = Date.parse(startRaw)
         if (Number.isFinite(startMs) && startMs >= cutoff) {
-          const url =
+          const eventUrl =
             typeof obj.url === "string" && obj.url.length > 0
               ? obj.url
-              : source.url
+              : url
           // Dedupe within the page — Yoast often emits the same event
           // in both an `ItemList` and as a standalone block.
-          const key = `${url}|${startRaw}`
+          const key = `${eventUrl}|${startRaw}`
           if (!seen.has(key)) {
             seen.add(key)
             const description =
@@ -130,7 +173,7 @@ export async function fetchEventsHtml(
                 .join("\n\n") || undefined
             events.push({
               externalId: `evhtml_${key}`,
-              url,
+              url: eventUrl,
               title: decodeEntities(name),
               snippet: description?.slice(0, 400),
               body,
@@ -155,8 +198,139 @@ export async function fetchEventsHtml(
     }
   }
 
-  events.sort((a, b) => (a.publishedAt ?? 0) - (b.publishedAt ?? 0))
-  return events.slice(0, 50)
+  // Pass 2 — Eventbrite organizer/listing pages. They emit a
+  // `<script id="__NEXT_DATA__" type="application/json">` blob with
+  // the full Event objects under `props.pageProps`. We only run this
+  // when JSON-LD didn't already cover the page (Eventbrite event
+  // *detail* pages do emit JSON-LD; *organizer* pages don't, but they
+  // carry the full event list in Next data). Cheap to run on every
+  // events-html source — the regex bails immediately when no
+  // `__NEXT_DATA__` block is present.
+  if (events.length === 0) {
+    const nextEvents = extractEventbriteNextData(html, url, cutoff, seen)
+    for (const e of nextEvents) events.push(e)
+  }
+
+  return events
+}
+
+// Eventbrite embeds Next.js page data in a single inline JSON blob.
+// We walk it and grab every node that looks like an event: a string
+// `name` + ISO `start.utc` (organizer pages) or `startDate`
+// (detail pages). Same dedupe key as the JSON-LD pass so we don't
+// double-emit when both fire.
+function extractEventbriteNextData(
+  html: string,
+  sourceUrl: string,
+  cutoff: number,
+  seen: Set<string>,
+): Array<RawItem> {
+  const m = html.match(
+    /<script[^>]*id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i,
+  )
+  if (!m) return []
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(m[1].trim())
+  } catch {
+    return []
+  }
+  const out: Array<RawItem> = []
+  const stack: Array<unknown> = [parsed]
+  while (stack.length > 0) {
+    const cur = stack.pop()
+    if (Array.isArray(cur)) {
+      for (const x of cur) if (x && typeof x === "object") stack.push(x)
+      continue
+    }
+    if (!cur || typeof cur !== "object") continue
+    const obj = cur as Record<string, unknown>
+
+    // Two shapes: organizer pages use { name, start: { utc }, end: { utc },
+    // venue: {…}, url } per event in props.pageProps.events.
+    // Detail pages use { name, startDate, endDate, location, url }.
+    const name = typeof obj.name === "string" ? obj.name : undefined
+    const startCandidate =
+      typeof obj.startDate === "string"
+        ? obj.startDate
+        : typeof (obj.start as Record<string, unknown> | undefined)?.utc ===
+            "string"
+          ? ((obj.start as Record<string, unknown>).utc as string)
+          : undefined
+    const url = typeof obj.url === "string" ? obj.url : undefined
+    if (name && startCandidate && url && /eventbrite\.com\/e\//.test(url)) {
+      const startMs = Date.parse(startCandidate)
+      if (Number.isFinite(startMs) && startMs >= cutoff) {
+        const key = `${url}|${startCandidate}`
+        if (!seen.has(key)) {
+          seen.add(key)
+          const endCandidate =
+            typeof obj.endDate === "string"
+              ? obj.endDate
+              : typeof (obj.end as Record<string, unknown> | undefined)?.utc ===
+                  "string"
+                ? ((obj.end as Record<string, unknown>).utc as string)
+                : undefined
+          const endMs = endCandidate ? Date.parse(endCandidate) : undefined
+          const venue = obj.venue as Record<string, unknown> | undefined
+          const locName =
+            typeof venue?.name === "string" ? venue.name : undefined
+          const addr = venue?.address as Record<string, unknown> | undefined
+          const locAddress = (() => {
+            const parts = [
+              addr?.address_1,
+              addr?.city,
+              addr?.region,
+            ].filter((v): v is string => typeof v === "string")
+            return parts.length > 0 ? parts.join(", ") : undefined
+          })()
+          const description =
+            typeof obj.description === "string"
+              ? obj.description
+              : typeof (obj.description as Record<string, unknown> | undefined)
+                    ?.text === "string"
+                ? ((obj.description as Record<string, unknown>).text as string)
+                : undefined
+          const image =
+            typeof (obj.image as Record<string, unknown> | undefined)?.url ===
+            "string"
+              ? ((obj.image as Record<string, unknown>).url as string)
+              : typeof (obj.logo as Record<string, unknown> | undefined)
+                    ?.url === "string"
+                ? ((obj.logo as Record<string, unknown>).url as string)
+                : undefined
+          const price = extractPriceFromText(description)
+          out.push({
+            externalId: `evbrite_${key}`,
+            url,
+            title: decodeEntities(name),
+            snippet: description?.slice(0, 400),
+            body:
+              [
+                description,
+                locName ? `Location: ${locName}` : null,
+              ]
+                .filter(Boolean)
+                .join("\n\n") || undefined,
+            mediaUrl: image,
+            publishedAt: startMs,
+            startsAt: startMs,
+            endsAt: Number.isFinite(endMs) ? endMs : undefined,
+            locationName: locName ? decodeEntities(locName) : undefined,
+            locationAddress: locAddress ? decodeEntities(locAddress) : undefined,
+            price,
+          })
+        }
+      }
+    }
+    for (const v of Object.values(obj)) {
+      if (v && typeof v === "object") stack.push(v)
+    }
+  }
+  // Note `sourceUrl` is used implicitly via dedupe; explicit param
+  // kept for symmetry with the JSON-LD path.
+  void sourceUrl
+  return out
 }
 
 // schema.org Event.image is "Text|URL|ImageObject" or array. Walk the

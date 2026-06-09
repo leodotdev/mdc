@@ -9,10 +9,8 @@ import {
 
 import { api } from "../../../convex/_generated/api"
 import { PageHeader } from "@/components/editorial/page-header"
-import { TrendingInline } from "@/components/editorial/trending-inline"
-import { TrendingStrip } from "@/components/editorial/trending-strip"
 import { SectionHeaderCell } from "@/components/editorial/section-header-cell"
-import { StoryItem } from "@/components/editorial/story-item"
+import { EventCard } from "@/components/editorial/event-card"
 import { EventListItem } from "@/components/events/event-list-item"
 import { BannerAd } from "@/components/site/banner-ad"
 import { HeroImg } from "@/components/site/hero-img"
@@ -50,6 +48,12 @@ export const Route = createFileRoute("/_site/section/$slug")({
         convexQuery(api.events.topInSection, {
           sectionSlug: params.slug,
           limit: 8,
+        }),
+      ),
+      context.queryClient.ensureQueryData(
+        convexQuery(api.events.popularInSection, {
+          sectionSlug: params.slug,
+          limit: 5,
         }),
       ),
       context.queryClient.ensureQueryData(
@@ -103,13 +107,21 @@ function SectionPage() {
         }
       : { title: e.title, heroCaption: e.heroCaption }
 
-  // Top events ranked by importance — feeds the above-fold hero
-  // blocks AND the right rail "Top events" list. Pulling 8 gives the
-  // rail 5 + a few extras after dedup with the lead picks.
+  // Importance-ranked top events feed the above-fold hero blocks
+  // (lead + subleads + xl rows).
   const { data: topRaw } = useSuspenseQuery(
     convexSuspenseQuery(api.events.topInSection, {
       sectionSlug: slug,
       limit: 8,
+    }),
+  )
+  // Popular events (trailing-30-day views, importance fallback) feed
+  // the right rail. Separate query so the hero stays editorial while
+  // the rail reflects reader behavior.
+  const { data: popularRaw } = useSuspenseQuery(
+    convexSuspenseQuery(api.events.popularInSection, {
+      sectionSlug: slug,
+      limit: 5,
     }),
   )
   // All events for this section, paginated. Long-tail chronological
@@ -126,6 +138,7 @@ function SectionPage() {
   const { matches, selected, clear } = useNeighborhoodFilter()
   const filterActive = selected.length > 0
   const top = topRaw.filter(matches)
+  const popular = popularRaw.filter(matches)
   const list = {
     ...listRaw,
     page: listRaw.page.filter(matches),
@@ -173,7 +186,7 @@ function SectionPage() {
     )
   }
 
-  // Dedupe across the page so the same story doesn't appear twice in
+  // Dedupe across the page so the same event doesn't appear twice in
   // different blocks. Mirrors the homepage `take` pattern exactly.
   const used = new Set<string>()
   const take = (
@@ -199,12 +212,9 @@ function SectionPage() {
   const leadStack = take(allPool, 2)
   const xlRows = take(allPool, 5)
 
-  // More Top Stories block: 1 lead + 4 stacked text-only.
+  // More upcoming events block: 1 lead + 4 stacked text-only.
   const morelead = take(allPool, 1)[0]
   const moreRail = take(allPool, 4)
-
-  // Trending uses the same ranked pool; cap to 4 for the strip.
-  const trending = rankedPool.slice(0, 4)
 
   // Long-tail framed grid below — leftovers after every block grabs.
   const longTail = list.page
@@ -258,10 +268,6 @@ function SectionPage() {
           masthead nav rule. */}
       <div className="rule-bottom flex flex-col gap-3 pb-6">
         <PageHeader title={sectionName} ruleBottom={false} className="pb-0" />
-        <TrendingInline
-          articles={top.slice(0, 2)}
-          className="justify-center border-0 pb-0"
-        />
       </div>
 
       {/* ════════════════════ TOP HERO TABLE ════════════════════
@@ -292,8 +298,8 @@ function SectionPage() {
               ) : null}
               <div className="flex flex-col divide-y divide-foreground/15 md:col-span-5 md:col-start-1 md:row-start-1">
                 <div className="pb-5">
-                  <StoryItem
-                    article={lead}
+                  <EventCard
+                    event={lead}
                     layout="text-only"
                     size="lead"
                     showDek
@@ -302,8 +308,8 @@ function SectionPage() {
                 </div>
                 {leadStack[0] ? (
                   <div className="py-5">
-                    <StoryItem
-                      article={leadStack[0]}
+                    <EventCard
+                      event={leadStack[0]}
                       layout="text-only"
                       size="compact"
   
@@ -312,8 +318,8 @@ function SectionPage() {
                 ) : null}
                 {leadStack[1] ? (
                   <div className="pt-5">
-                    <StoryItem
-                      article={leadStack[1]}
+                    <EventCard
+                      event={leadStack[1]}
                       layout="text-only"
                       size="compact"
   
@@ -349,8 +355,8 @@ function SectionPage() {
                 </Link>
               ) : null}
               <div className="flex flex-col md:col-span-5 md:col-start-1 md:row-start-1">
-                <StoryItem
-                  article={a}
+                <EventCard
+                  event={a}
                   layout="text-only"
                   size="lead"
                   showDek
@@ -361,25 +367,27 @@ function SectionPage() {
           ))}
         </div>
 
-        {/* Right rail — Top Events for this section (importance-ranked,
-            5 max). Mirrors the homepage's "Top events" treatment but
-            scoped. The Sports widget is hoisted into this rail on the
-            sports section so every franchise's latest result lives next
-            to the section's coverage. */}
+        {/* Right rail — Popular events scoped to this section + its
+            sub-sections + cross-listed sections + tag enrichment.
+            Ranked by trailing-30-day views with editorial-importance
+            fallback so freshly-deployed sections still populate. The
+            Sports widget is hoisted into this rail on the sports
+            section so every franchise's latest result lives next to
+            the section's coverage. */}
         <aside className="flex flex-col gap-8 lg:col-span-3 lg:border-l lg:border-foreground/15 lg:pl-6">
           {slug === "sports" ? <TeamWidgets /> : null}
           <div>
             <SectionHeaderCell
-              title="Top"
+              title={t("rail.popular")}
               accent={section.accentColor}
             />
             <div className="flex flex-col divide-y divide-foreground/15">
-              {top.length === 0 ? (
+              {popular.length === 0 ? (
                 <p className="meta py-6 text-xs">
                   No upcoming events in {sectionName}.
                 </p>
               ) : (
-                top.slice(0, 5).map((e) => (
+                popular.map((e) => (
                   <div key={e._id} className="py-4 first:pt-5 last:pb-0">
                     <EventListItem event={e} />
                   </div>
@@ -392,7 +400,7 @@ function SectionPage() {
 
       <BannerAd slot={`section-${slug}-mid`} className={BLOCK} />
 
-      {/* ════════════════════ More Top Stories ════════════════════ */}
+      {/* ════════════════════ More upcoming events ════════════════════ */}
       {morelead ? (
         <section className={BLOCK}>
           <SectionHeaderCell
@@ -423,8 +431,8 @@ function SectionPage() {
                   </Link>
                 ) : null}
                 <div className="flex flex-col md:col-span-5 md:col-start-1 md:row-start-1">
-                  <StoryItem
-                    article={morelead}
+                  <EventCard
+                    event={morelead}
                     layout="text-only"
                     size="lead"
                     showDek
@@ -445,8 +453,8 @@ function SectionPage() {
                         : "py-4"
                   }
                 >
-                  <StoryItem
-                    article={a}
+                  <EventCard
+                    event={a}
                     layout="text-only"
                     size="compact"
 
@@ -455,16 +463,6 @@ function SectionPage() {
               ))}
             </div>
           </div>
-        </section>
-      ) : null}
-
-      {/* ════════════════════ Trending ════════════════════ */}
-      {trending.length > 0 ? (
-        <section className={BLOCK}>
-          <TrendingStrip
-            label={`${t("home.trending")} · ${sectionName}`}
-            articles={trending}
-          />
         </section>
       ) : null}
 
@@ -480,10 +478,10 @@ function SectionPage() {
             className="mb-6"
           />
           <div className="grid gap-x-6 gap-y-10 md:grid-cols-2 lg:grid-cols-3">
-            {longTail.map((article) => (
-              <StoryItem
-                key={article._id}
-                article={article}
+            {longTail.map((event) => (
+              <EventCard
+                key={event._id}
+                event={event}
                 layout="image-top"
                 size="compact"
                 imageAspect="16/9"

@@ -1,29 +1,21 @@
 import { v } from "convex/values"
 
 import { internal } from "./_generated/api"
-import { buildSearchableText } from "./articles"
 import { internalAction, internalMutation } from "./_generated/server"
+import { classifyEvent } from "./lib/classify"
+import {
+  eventSeriesKey,
+  normalizeTitle,
+  normalizeVenue,
+} from "./lib/eventDedupe"
+import { isShouty, maybeTitleCase } from "./lib/titleCase"
 
-// One-shot strip for redundant location tags. Every story on
+// One-shot strip for redundant location tags. Every event on
 // miami.community is local by definition, so tags like "miami-dade" carry
 // no signal and clutter the tag list.
 //
 // Run with:
 //   npx convex run migrations:stripTag '{"tag":"miami-dade"}'
-export const stripTag = internalMutation({
-  args: { tag: v.string() },
-  handler: async (ctx, { tag }) => {
-    const articles = await ctx.db.query("articles").collect()
-    let cleared = 0
-    for (const a of articles) {
-      if (!a.tags.includes(tag)) continue
-      const next = a.tags.filter((t) => t !== tag)
-      await ctx.db.patch(a._id, { tags: next })
-      cleared += 1
-    }
-    return { scanned: articles.length, cleared }
-  },
-})
 
 // Backfill `searchableText` on every article from its current title + dek
 // + tags so the search index covers legacy docs. Idempotent — re-running
@@ -31,24 +23,6 @@ export const stripTag = internalMutation({
 //
 // Run with:
 //   npx convex run migrations:backfillSearchable
-export const backfillSearchable = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    const articles = await ctx.db.query("articles").collect()
-    let updated = 0
-    for (const a of articles) {
-      const next = buildSearchableText({
-        title: a.title,
-        dek: a.dek,
-        tags: a.tags,
-      })
-      if (a.searchableText === next) continue
-      await ctx.db.patch(a._id, { searchableText: next })
-      updated += 1
-    }
-    return { scanned: articles.length, updated }
-  },
-})
 
 // =====================================================================
 // Article wipe — events-only pivot Phase 4 (narrow). Deletes every row
@@ -70,65 +44,6 @@ export const backfillSearchable = internalMutation({
 // if it's worth the round trip.
 // =====================================================================
 
-export const wipeArticlesBatch = internalMutation({
-  args: { batchSize: v.optional(v.number()) },
-  handler: async (ctx, { batchSize }) => {
-    // 200 articles × (~1 join row each) ≈ 400 writes per call, well
-    // under Convex's per-transaction write limit.
-    const cap = batchSize ?? 200
-    const articles = await ctx.db.query("articles").take(cap)
-    let deletedArticles = 0
-    let deletedAuthorJoins = 0
-    for (const a of articles) {
-      const joins = await ctx.db
-        .query("article_authors")
-        .withIndex("by_article", (q) => q.eq("articleId", a._id))
-        .collect()
-      for (const j of joins) {
-        await ctx.db.delete(j._id)
-        deletedAuthorJoins += 1
-      }
-      await ctx.db.delete(a._id)
-      deletedArticles += 1
-    }
-    return {
-      deletedArticles,
-      deletedAuthorJoins,
-      hasMore: articles.length === cap,
-    }
-  },
-})
-
-export const wipeArticles = internalAction({
-  args: {},
-  handler: async (ctx): Promise<{
-    totalArticles: number
-    totalAuthorJoins: number
-    batches: number
-  }> => {
-    let totalArticles = 0
-    let totalAuthorJoins = 0
-    let batches = 0
-    // Safety ceiling — refuses to loop forever if something is wrong.
-    // 50 batches × 200 = 10k articles, plenty for our scale.
-    const MAX_BATCHES = 200
-    for (let i = 0; i < MAX_BATCHES; i += 1) {
-      const result: {
-        deletedArticles: number
-        deletedAuthorJoins: number
-        hasMore: boolean
-      } = await ctx.runMutation(
-        internal.migrations.wipeArticlesBatch,
-        {},
-      )
-      totalArticles += result.deletedArticles
-      totalAuthorJoins += result.deletedAuthorJoins
-      batches += 1
-      if (!result.hasMore) break
-    }
-    return { totalArticles, totalAuthorJoins, batches }
-  },
-})
 
 // =====================================================================
 // 2026-05 section restructure for the events-only world. The legacy
@@ -378,6 +293,58 @@ const FOOD_SUBS_TO_DELETE: ReadonlyArray<string> = [
   "food-closings",
 ]
 
+const SCHOOL_SUBS_TO_DELETE: ReadonlyArray<string> = [
+  "middle-schools",
+  "elementary-schools",
+]
+
+// Drop the K-8 school subsections. Reparents anything tagged there
+// onto the umbrella `education` section so we don't lose rows.
+export const trimSchoolSubsections = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const log: Array<string> = []
+    const all = await ctx.db.query("sections").collect()
+    const bySlug = new Map(all.map((s) => [s.slug, s]))
+    const parent = bySlug.get("education")
+    if (!parent) {
+      log.push("WARN: no `education` parent section; aborting before any change")
+      return { eventsReparented: 0, articlesReparented: 0, sourcesUpdated: 0, sectionsDeleted: 0, log }
+    }
+    let eventsReparented = 0
+    let articlesReparented = 0
+    let sourcesUpdated = 0
+    let sectionsDeleted = 0
+    for (const slug of SCHOOL_SUBS_TO_DELETE) {
+      const dead = bySlug.get(slug)
+      if (!dead) continue
+      const events = await ctx.db
+        .query("events")
+        .withIndex("by_section_starts", (q) => q.eq("sectionId", dead._id))
+        .collect()
+      for (const e of events) {
+        await ctx.db.patch(e._id, { sectionId: parent._id })
+        eventsReparented += 1
+      }
+      if (events.length > 0) {
+        log.push(`reparented ${events.length} events from ${slug} → education`)
+      }
+      // Drop the dead section id from any sources that reference it.
+      const sources = await ctx.db.query("sources").collect()
+      for (const s of sources) {
+        if (!s.sectionIds?.includes(dead._id)) continue
+        const next = s.sectionIds.filter((id) => id !== dead._id)
+        await ctx.db.patch(s._id, { sectionIds: next })
+        sourcesUpdated += 1
+      }
+      await ctx.db.delete(dead._id)
+      sectionsDeleted += 1
+      log.push(`deleted section ${slug}`)
+    }
+    return { eventsReparented, articlesReparented, sourcesUpdated, sectionsDeleted, log }
+  },
+})
+
 export const trimFoodSubsections = internalMutation({
   args: {},
   handler: async (ctx) => {
@@ -543,6 +510,22 @@ const ASSOCIATED_TAGS: Record<string, ReadonlyArray<string>> = {
     "real-estate-panel",
     "real-estate-tour",
   ],
+  commerce: [
+    "commerce",
+    "retail",
+    "store",
+    "store-opening",
+    "chamber-of-commerce",
+    "pop-up-shop",
+    "popup-shop",
+    "market",
+    "mall",
+    "plaza",
+    "boutique",
+    "ribbon-cutting",
+    "grand-opening",
+    "small-business",
+  ],
 
   // Sports — parent + each team sub gets its own lineage.
   sports: ["sports", "game", "tailgate", "match"],
@@ -551,7 +534,11 @@ const ASSOCIATED_TAGS: Record<string, ReadonlyArray<string>> = {
   marlins: ["marlins", "mlb", "miami-marlins"],
   panthers: ["panthers", "nhl", "florida-panthers"],
   "inter-miami": ["inter-miami", "mls", "soccer"],
-  "the-u": ["um", "the-u", "hurricanes", "miami-hurricanes"],
+  // Hurricanes = athletics ONLY. "um" / "university-of-miami" tags
+  // belong to the academic UM section, so omit them here — otherwise
+  // every general-UM event leaks into /sports/hurricanes.
+  "the-u": ["the-u", "hurricanes", "miami-hurricanes"],
+  "university-of-miami": ["um", "university-of-miami"],
   "miami-fc": ["miami-fc", "usl", "soccer"],
   "fiu-panthers": ["fiu", "fiu-panthers"],
 
@@ -679,12 +666,11 @@ export const seedAssociatedTags = internalMutation({
 })
 
 // =====================================================================
-// 2026-05 hard prune of story-gathering sources. The events-only pivot
-// shifted the editorial product from news+events to calendar-only —
-// pure-news feeds now produce zero events per fetch in 90% of cases,
-// they just consume input tokens. This migration flips
-// enabled=false on every source that isn't in the event-rich
-// allowlist below.
+// 2026-05 hard prune of non-event sources. The events-only pivot
+// shifted the editorial product to calendar-only — pure-news feeds
+// now produce zero events per fetch in 90% of cases, they just
+// consume input tokens. This migration flips enabled=false on every
+// source that isn't in the event-rich allowlist below.
 //
 // Reversible: rows stay in place, only `enabled` flips. Re-enable in
 // /admin/sources by URL when needed.
@@ -706,7 +692,7 @@ export const seedAssociatedTags = internalMutation({
 // Tightened 2026-05-12: lifestyle magazines (Coral Gables / Brickell /
 // Key Biscayne / Doral Family Journal / Miami Geographic), Miami Today
 // News, Eater RSS, and civic-news Blueskys leaked through the original
-// pass — they're ~5% events / 95% stories. Stripped down to the curated
+// pass — they're ~5% events / 95% news copy. Stripped down to the curated
 // set where events are the primary feed shape. Anything still wanted
 // can be re-enabled in /admin/sources by URL.
 const EVENT_RICH_URLS: ReadonlyArray<string> = [
@@ -800,7 +786,7 @@ export const pruneNonEventSources = internalMutation({
         enabled: false,
         autoDisabledAt: now,
         autoDisabledReason:
-          "story-gathering source (events-only pivot prune)",
+          "non-event source (events-only pivot prune)",
       })
       disabled += 1
       disabledByType[s.type] = (disabledByType[s.type] ?? 0) + 1
@@ -1045,15 +1031,6 @@ const EDU_HEALTH_SECTIONS: Array<{
     parentSlug: "education",
   },
   {
-    slug: "high-schools",
-    name: "High Schools",
-    description:
-      "Miami-Dade public and private high school events — open houses, fairs, parent nights, performances.",
-    accentColor: "oklch(0.609 0.126 221.723)", // cyan-600
-    order: 39,
-    parentSlug: "education",
-  },
-  {
     slug: "middle-schools",
     name: "Middle Schools",
     description:
@@ -1228,6 +1205,103 @@ export const addEducationAndHealth = internalMutation({
       }
     }
 
+    if (reparented > 0) log.push(`reparented ${reparented} events`)
+
+    return { inserted, reparented, log }
+  },
+})
+
+// =====================================================================
+// 2026-06 add Commerce sub-section under Business.
+//
+// Business previously had two sub-sections — Tech (order 22) and Real
+// Estate (order 24). Commerce slots in at order 26 to cover retail
+// openings, store launches, chamber of commerce events, pop-up shops,
+// markets, plazas, and small-business happenings — events that were
+// previously filing under Business (catch-all) or Food when they had
+// a market angle.
+//
+// One-shot reparent: walks events under Business / Food whose title
+// matches COMMERCE_RE and patches sectionId. Modeled on
+// addEducationAndHealth's regex reparent pass.
+//
+// Idempotent — re-running skips the insert (commerce already exists)
+// and the regex pass only patches rows not already under commerce.
+//
+// Run dev:  npx convex run migrations:addCommerceSection
+// Run prod: npx convex run migrations:addCommerceSection --prod
+// =====================================================================
+
+const COMMERCE_SECTION = {
+  slug: "commerce",
+  name: "Commerce",
+  description:
+    "Retail openings, store launches, chamber of commerce events, pop-up shops, markets, plazas, and small-business happenings across Miami.",
+  accentColor: "oklch(0.595 0.13 200)", // teal-ish sibling of business blue
+  order: 26,
+  parentSlug: "business",
+}
+
+const COMMERCE_RE =
+  /\b(retail|store\s+opening|chamber\s+of\s+commerce|pop[\s-]?up\s+shop|grand\s+opening|ribbon[\s-]?cutting|small[\s-]?business|boutique\s+launch|new\s+store|\bmall\b|plaza\s+opening|market\s+(?:opening|launch))\b/i
+
+export const addCommerceSection = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const log: Array<string> = []
+    const all = await ctx.db.query("sections").collect()
+    const bySlug = new Map(all.map((s) => [s.slug, s]))
+    const business = bySlug.get("business")
+    if (!business) {
+      return { inserted: 0, reparented: 0, log: ["aborted: no business section"] }
+    }
+
+    let inserted = 0
+    let commerce = bySlug.get("commerce")
+    if (!commerce) {
+      const id = await ctx.db.insert("sections", {
+        slug: COMMERCE_SECTION.slug,
+        name: COMMERCE_SECTION.name,
+        description: COMMERCE_SECTION.description,
+        accentColor: COMMERCE_SECTION.accentColor,
+        order: COMMERCE_SECTION.order,
+        parentId: business._id,
+      })
+      commerce = (await ctx.db.get(id)) ?? undefined
+      inserted = 1
+      log.push("inserted commerce")
+    } else {
+      // Refresh metadata so a re-run picks up any seed-file edits and
+      // re-anchors the parent in case it ever drifted.
+      await ctx.db.patch(commerce._id, {
+        name: COMMERCE_SECTION.name,
+        description: COMMERCE_SECTION.description,
+        accentColor: COMMERCE_SECTION.accentColor,
+        order: COMMERCE_SECTION.order,
+        parentId: business._id,
+      })
+    }
+    if (!commerce) return { inserted, reparented: 0, log }
+
+    // Reparent matching events under business + food (food because
+    // many small-market / pop-up events file under food today).
+    let reparented = 0
+    const reparentFrom = [business, bySlug.get("food")].filter(
+      (s): s is NonNullable<typeof business> => Boolean(s),
+    )
+    for (const src of reparentFrom) {
+      const events = await ctx.db
+        .query("events")
+        .withIndex("by_section_starts", (q) => q.eq("sectionId", src._id))
+        .collect()
+      for (const e of events) {
+        if (e.sectionId === commerce._id) continue
+        if (!COMMERCE_RE.test(e.title)) continue
+        await ctx.db.patch(e._id, { sectionId: commerce._id })
+        reparented += 1
+      }
+      if (reparented > 0) log.push(`scanned ${src.slug}: ${events.length} rows`)
+    }
     if (reparented > 0) log.push(`reparented ${reparented} events`)
 
     return { inserted, reparented, log }
@@ -1879,5 +1953,748 @@ export const purgeMissectionedPolitics = internalMutation({
       deleted += 1
     }
     return { scanned: events.length, deleted }
+  },
+})
+
+// One-shot re-classification of every approved event using the new
+// content-driven classifier (`convex/lib/classify.ts`). Replaces the
+// old "section comes from source.sectionIds[0]" assumption with
+// venue / source-URL / keyword rules. Idempotent: events already on
+// the correct section get patched no-op.
+//
+// Run prod: npx convex run migrations:reclassifyAllEvents
+// Seed reasonable coverage floors for the section taxonomy. Run once
+// after deploying the coverage SLA cron. Leaf sections get small
+// numbers (3–5); catch-all city / local stays unbounded.
+export const seedCoverageFloors = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const FLOORS: Record<string, number> = {
+      // Arts & culture
+      music: 8,
+      film: 4,
+      theater: 4,
+      galleries: 4,
+      museums: 6,
+      books: 3,
+      // Food
+      food: 6,
+      "food-openings": 2,
+      // Sports — teams keep their own floors
+      sports: 4,
+      heat: 2,
+      marlins: 2,
+      dolphins: 2,
+      panthers: 2,
+      "inter-miami": 2,
+      "the-u": 2,
+      // Health
+      fitness: 4,
+      wellness: 3,
+      // Family / community
+      family: 3,
+      education: 3,
+      "university-of-miami": 3,
+      mdc: 2,
+      fiu: 2,
+      // Civic
+      politics: 2,
+      // Tech / business
+      tech: 2,
+      business: 2,
+      "real-estate": 1,
+      // Science / nature
+      science: 2,
+      nature: 2,
+      climate: 2,
+    }
+    const sections = await ctx.db.query("sections").collect()
+    let patched = 0
+    for (const s of sections) {
+      const floor = FLOORS[s.slug]
+      if (floor === undefined) continue
+      if (s.minEventsLast14d === floor) continue
+      await ctx.db.patch(s._id, { minEventsLast14d: floor })
+      patched += 1
+    }
+    return { sections: sections.length, patched }
+  },
+})
+
+// Promote every legacy `pending_review` event to `approved` with the
+// purge of the review queue. Total-automation mode means no event
+// ever needs human approval again; this clears the historical queue.
+export const promotePendingReview = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now()
+    let promoted = 0
+    const stuck = await ctx.db
+      .query("events")
+      .withIndex("by_status_starts", (q) => q.eq("status", "pending_review"))
+      .take(2000)
+    for (const e of stuck) {
+      await ctx.db.patch(e._id, {
+        status: "approved",
+        publishedAt: e.publishedAt ?? now,
+      })
+      promoted += 1
+    }
+    return { promoted }
+  },
+})
+
+// purgeArticleTables ran once successfully — the articles, storyArcs,
+// and article_authors tables are now dropped from the schema, so the
+// mutation can't reference them. Left as a stub returning zeros so
+// any lingering bookmark to the CLI command doesn't 404.
+export const purgeArticleTables = internalMutation({
+  args: {},
+  handler: async () => ({ articles: 0, storyArcs: 0 }),
+})
+
+// Mark long-running agentRuns as failed. The OOM-era runs (2026-05-20
+// → 23) wrote a `startRun` row but the action OOMed before reaching
+// `finishRun`, leaving the dashboard's "Last run / Next run" math
+// stuck on a row that never resolved. Bounded to runs >2h old so an
+// in-flight tick isn't accidentally torpedoed.
+export const failStuckRuns = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const STUCK_MS = 2 * 60 * 60 * 1000
+    const now = Date.now()
+    const runs = await ctx.db
+      .query("agentRuns")
+      .withIndex("by_started")
+      .order("desc")
+      .take(200)
+    let failed = 0
+    for (const r of runs) {
+      if (r.status !== "running") continue
+      if (now - r.startedAt < STUCK_MS) continue
+      await ctx.db.patch(r._id, {
+        status: "failed",
+        finishedAt: now,
+        errorMessage: "OOM / stuck — auto-marked failed by cleanup",
+      })
+      failed += 1
+    }
+    return { scanned: runs.length, failed }
+  },
+})
+
+export const reclassifyAllEvents = internalMutation({
+  args: { dryRun: v.optional(v.boolean()) },
+  handler: async (ctx, { dryRun }) => {
+    const sections = await ctx.db.query("sections").collect()
+    const idBySlug = new Map<string, (typeof sections)[number]["_id"]>()
+    for (const s of sections) idBySlug.set(s.slug, s._id)
+    const fallback = idBySlug.get("local") ?? sections[0]?._id
+    if (!fallback) throw new Error("no sections")
+    // Static import — Convex doesn't allow dynamic imports inside
+    // mutations.
+    const events = await ctx.db.query("events").collect()
+    let moved = 0
+    let unchanged = 0
+    const moves: Array<{ from: string; to: string; title: string }> = []
+    for (const e of events) {
+      // Pull the first derivedFromItem's source URL for context.
+      let sourceUrl: string | undefined
+      const itemId = e.derivedFromItems?.[0]
+      if (itemId) {
+        const item = await ctx.db.get(itemId)
+        if (item) {
+          const src = await ctx.db.get(item.sourceId)
+          sourceUrl = src?.url
+        }
+      }
+      const result = classifyEvent({
+        title: e.title,
+        snippet: e.dek,
+        body: e.body,
+        locationName: e.locationName,
+        locationAddress: e.locationAddress,
+        sourceUrl: sourceUrl ?? e.url,
+        itemTags: e.tags,
+      })
+      // Only move when the classifier has real signal (confidence >=
+      // 0.5). Fallback-to-local matches don't override an existing
+      // hand-set or LLM-enrichment-picked section.
+      if (result.confidence < 0.5) {
+        unchanged += 1
+        continue
+      }
+      const newId = idBySlug.get(result.sectionSlug) ?? fallback
+      if (newId === e.sectionId) {
+        unchanged += 1
+        continue
+      }
+      const fromSlug =
+        sections.find((s) => s._id === e.sectionId)?.slug ?? "?"
+      moves.push({
+        from: fromSlug,
+        to: result.sectionSlug,
+        title: e.title.slice(0, 60),
+      })
+      moved += 1
+      if (!dryRun) {
+        await ctx.db.patch(e._id, { sectionId: newId })
+      }
+    }
+    return {
+      scanned: events.length,
+      moved,
+      unchanged,
+      dryRun: !!dryRun,
+      sample: moves.slice(0, 20),
+    }
+  },
+})
+
+// Reassign UM academic events that were mis-filed under the Hurricanes
+// section (`the-u`). Anything filed there whose title/body lacks a
+// hard athletics keyword (game/vs/baseball/football/etc.) gets moved
+// to the academic `university-of-miami` section — the proper home for
+// dissertation defenses, school of music recitals, Frost concerts,
+// etc. Sport-tagged events stay put.
+export const repatriateNonAthleticHurricanes = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const all = await ctx.db.query("sections").collect()
+    const bySlug = new Map(all.map((s) => [s.slug, s]))
+    const hurricanes = bySlug.get("the-u")
+    const um = bySlug.get("university-of-miami")
+    if (!hurricanes || !um) {
+      return { error: "missing sections", scanned: 0, moved: 0, log: [] }
+    }
+    // Hard athletics signals. We're permissive on the front-side
+    // (anything that hints at sport stays) to avoid catching a
+    // legitimate Hurricanes football tailgate in the dragnet.
+    const ATHLETICS =
+      /\b(canes|hurricanes|football|baseball|basketball|volleyball|softball|soccer|tennis|track|cross[- ]country|swimming|diving|rowing|lacrosse|golf|game|gameday|tailgate|kickoff|vs\.?|matchup|tournament|championship|ncaa|acc|bowl|playoff|coach|athletic|sport|stadium|arena|opener|home\s+(?:game|opener)|away\s+(?:game)|recruit|signing\s+day|spring\s+practice|spring\s+game|hardrock|watsco|alex\s+rodriguez\s+park|cobb\s+stadium|knight\s+sports)\b/i
+    const SPORT_TAGS = new Set([
+      "sports",
+      "the-u",
+      "hurricanes",
+      "miami-hurricanes",
+      "college-sports",
+      "football",
+      "basketball",
+      "baseball",
+      "softball",
+      "volleyball",
+      "soccer",
+      "tennis",
+      "track-field",
+      "rowing",
+      "swimming",
+      "lacrosse",
+      "golf",
+      "athletics",
+    ])
+    const log: Array<string> = []
+    const events = await ctx.db
+      .query("events")
+      .withIndex("by_section_status_published", (q) =>
+        q.eq("sectionId", hurricanes._id).eq("status", "approved"),
+      )
+      .collect()
+    let moved = 0
+    for (const e of events) {
+      const tags = e.tags ?? []
+      const hasSportTag = tags.some((t) => SPORT_TAGS.has(t))
+      const haystack = [e.title, e.dek ?? "", e.description ?? "", e.body ?? ""]
+        .join(" ")
+      const looksAthletic = ATHLETICS.test(haystack)
+      if (hasSportTag || looksAthletic) continue
+      await ctx.db.patch(e._id, { sectionId: um._id })
+      log.push(`moved → UM: ${e.title}`)
+      moved += 1
+    }
+    return { scanned: events.length, moved, log }
+  },
+})
+
+// =====================================================================
+// Backfill `seriesKey` on every event row, then collapse pre-existing
+// recurring-exhibit duplicates into a single row each.
+//
+// Step 1 walks every event and stamps `seriesKey = normTitle|normVenue`
+// (when both are present). After this, future inserts on the same
+// series collapse via the new `by_series_key` lookup in
+// `insertExtracted`.
+//
+// Step 2 fixes the duplicates that were already in the table before
+// the dedup change: for every seriesKey with N>1 rows, keeps the
+// earliest-upcoming row, copies any unique citations + derivedFromItems
+// into it, advances its startsAt to the soonest among the group, and
+// hard-deletes the rest. Idempotent — re-running on a deduped table is
+// a no-op.
+//
+// Run dev:  npx convex run migrations:backfillSeriesKey
+// Run prod: npx convex run migrations:backfillSeriesKey --prod
+// =====================================================================
+
+export const backfillSeriesKey = internalMutation({
+  args: { dryRun: v.optional(v.boolean()) },
+  handler: async (ctx, { dryRun }) => {
+    const all = await ctx.db.query("events").collect()
+    let stamped = 0
+    const bySeries = new Map<string, Array<typeof all[number]>>()
+    for (const e of all) {
+      const key = eventSeriesKey({
+        title: e.title,
+        locationName: e.locationName,
+      })
+      if (!key) continue
+      if (!dryRun && e.seriesKey !== key) {
+        await ctx.db.patch(e._id, { seriesKey: key })
+        stamped += 1
+      }
+      const bucket = bySeries.get(key) ?? []
+      bucket.push(e)
+      bySeries.set(key, bucket)
+    }
+
+    const nowMs = Date.now()
+    let collapsed = 0
+    let deleted = 0
+    for (const [, rows] of bySeries) {
+      if (rows.length < 2) continue
+      // Keep the earliest still-upcoming row; everything older or
+      // duplicated rolls into it. If every row is in the past, keep
+      // the most recent past one and delete the rest.
+      const upcoming = rows
+        .filter((r) => r.startsAt >= nowMs - 24 * 3_600_000)
+        .sort((a, b) => a.startsAt - b.startsAt)
+      const keeper =
+        upcoming[0] ??
+        rows.slice().sort((a, b) => b.startsAt - a.startsAt)[0]
+      const losers = rows.filter((r) => r._id !== keeper._id)
+      if (losers.length === 0) continue
+      collapsed += 1
+      if (dryRun) {
+        deleted += losers.length
+        continue
+      }
+      // Merge citations + derivedFromItems from every loser into the
+      // keeper. Dedupe citations by URL, items by id.
+      const mergedCitations = [
+        ...(keeper.citations ?? []),
+        ...losers.flatMap((l) => l.citations ?? []),
+      ]
+      const seenUrls = new Set<string>()
+      const dedupedCitations = mergedCitations.filter((c) => {
+        if (seenUrls.has(c.url)) return false
+        seenUrls.add(c.url)
+        return true
+      })
+      const mergedItems = Array.from(
+        new Set(
+          [
+            ...(keeper.derivedFromItems ?? []),
+            ...losers.flatMap((l) => l.derivedFromItems ?? []),
+          ].map((i) => i as unknown as string),
+        ),
+      ) as unknown as Array<typeof keeper.derivedFromItems extends
+        | Array<infer U>
+        | undefined
+        ? U
+        : never>
+      await ctx.db.patch(keeper._id, {
+        citations: dedupedCitations,
+        derivedFromItems: mergedItems,
+      })
+      for (const l of losers) {
+        await ctx.db.delete(l._id)
+        deleted += 1
+      }
+    }
+    void normalizeTitle
+    void normalizeVenue
+    return { scanned: all.length, stamped, collapsed, deleted, dryRun: !!dryRun }
+  },
+})
+
+// =====================================================================
+// Targeted re-classification — only events currently in the `local`
+// fallback section. Re-runs `classifyEvent` and moves them when the
+// classifier returns a non-fallback section with confidence ≥ 0.5.
+// Use after editing KEYWORD_RULES so newly-matched events promote out
+// of the fallback bucket without disturbing rows that already have a
+// hand-set or LLM-enrichment-picked section.
+//
+// Run dev:  npx convex run migrations:reclassifyLocalFallback
+// Run prod: npx convex run migrations:reclassifyLocalFallback --prod
+// =====================================================================
+export const reclassifyLocalFallback = internalMutation({
+  args: { dryRun: v.optional(v.boolean()) },
+  handler: async (ctx, { dryRun }) => {
+    const sections = await ctx.db.query("sections").collect()
+    const localSection = sections.find((s) => s.slug === "local")
+    if (!localSection) return { moved: 0, unchanged: 0, scanned: 0 }
+    const idBySlug = new Map(sections.map((s) => [s.slug, s._id]))
+    const events = await ctx.db
+      .query("events")
+      .withIndex("by_section_starts", (q) =>
+        q.eq("sectionId", localSection._id),
+      )
+      .collect()
+    let moved = 0
+    let unchanged = 0
+    const moves: Array<{ from: string; to: string; title: string }> = []
+    for (const e of events) {
+      let sourceUrl: string | undefined
+      const itemId = e.derivedFromItems?.[0]
+      if (itemId) {
+        const item = await ctx.db.get(itemId)
+        if (item) {
+          const src = await ctx.db.get(item.sourceId)
+          sourceUrl = src?.url
+        }
+      }
+      const result = classifyEvent({
+        title: e.title,
+        snippet: e.dek,
+        body: e.body,
+        locationName: e.locationName,
+        locationAddress: e.locationAddress,
+        sourceUrl: sourceUrl ?? e.url,
+        itemTags: e.tags,
+      })
+      if (result.sectionSlug === "local" || result.confidence < 0.5) {
+        unchanged += 1
+        continue
+      }
+      const newId = idBySlug.get(result.sectionSlug)
+      if (!newId || newId === e.sectionId) {
+        unchanged += 1
+        continue
+      }
+      moves.push({
+        from: "local",
+        to: result.sectionSlug,
+        title: e.title.slice(0, 60),
+      })
+      moved += 1
+      if (!dryRun) {
+        await ctx.db.patch(e._id, { sectionId: newId })
+      }
+    }
+    return {
+      scanned: events.length,
+      moved,
+      unchanged,
+      dryRun: !!dryRun,
+      sample: moves.slice(0, 30),
+    }
+  },
+})
+
+// =====================================================================
+// Backfill — rewrite any all-caps event titles into editorial title
+// case using the same `maybeTitleCase` helper that runs in the
+// insert path. Re-running on already-normalized titles is a no-op
+// because `maybeTitleCase` short-circuits on mixed-case strings.
+//
+// Run dev:  npx convex run migrations:titleCaseAllCapsEvents '{"dryRun": true}'
+// Run live: npx convex run migrations:titleCaseAllCapsEvents
+// =====================================================================
+
+export const titleCaseAllCapsEvents = internalMutation({
+  args: { dryRun: v.optional(v.boolean()) },
+  handler: async (ctx, { dryRun }) => {
+    const events = await ctx.db.query("events").collect()
+    let scanned = 0
+    let patched = 0
+    const sample: Array<{ from: string; to: string }> = []
+    for (const e of events) {
+      scanned += 1
+      if (!isShouty(e.title)) continue
+      const next = maybeTitleCase(e.title)
+      if (next === e.title) continue
+      if (sample.length < 25) sample.push({ from: e.title, to: next })
+      patched += 1
+      if (!dryRun) await ctx.db.patch(e._id, { title: next })
+    }
+    return { scanned, patched, dryRun: !!dryRun, sample }
+  },
+})
+
+// =====================================================================
+// Bulk-move any events sitting in the `politics` section to `arts`.
+// Politics has been a classifier overflow bucket — venue/host rules
+// drop ambiguous events there even when they're music / nightlife /
+// fitness / food. User direction: drop politics as a default target
+// and let these land in Arts & Culture (no subsection needed).
+//
+// Run dev:  npx convex run migrations:movePoliticsToArts '{"dryRun":true}'
+// Run live: npx convex run migrations:movePoliticsToArts
+// =====================================================================
+export const movePoliticsToArts = internalMutation({
+  args: { dryRun: v.optional(v.boolean()) },
+  handler: async (ctx, { dryRun }) => {
+    const sections = await ctx.db.query("sections").collect()
+    const politics = sections.find((s) => s.slug === "politics")
+    if (!politics) return { error: "no politics section" as const, moved: 0 }
+    const arts =
+      sections.find((s) => s.slug === "arts") ??
+      sections.find((s) => s.slug === "arts-culture") ??
+      sections.find((s) => s.slug === "arts-and-culture")
+    if (!arts) {
+      return {
+        error: "no arts section" as const,
+        moved: 0,
+        slugs: sections.map((s) => s.slug),
+      }
+    }
+    const events = await ctx.db
+      .query("events")
+      .withIndex("by_section_status_published", (q) =>
+        q.eq("sectionId", politics._id).eq("status", "approved"),
+      )
+      .collect()
+    const sample: Array<string> = []
+    let moved = 0
+    for (const e of events) {
+      if (sample.length < 30) sample.push(e.title.slice(0, 70))
+      moved += 1
+      if (!dryRun) await ctx.db.patch(e._id, { sectionId: arts._id })
+    }
+    return {
+      scanned: events.length,
+      moved,
+      dryRun: !!dryRun,
+      sample,
+      from: politics.slug,
+      to: arts.slug,
+    }
+  },
+})
+
+// 2026-06 stripDeadArticleFields removed after drain — patched 3
+// events in prod (joyous-dalmatian-894) on 2026-06-04 before the
+// schema narrow that dropped `relatedArticleIds` + `storyArcId` from
+// the events table. Kept as a comment as breadcrumb; the function
+// can no longer typecheck against the narrowed schema.
+
+// =====================================================================
+// 2026-06 repair broken CivicEngage iCal events. Two bugs combined to
+// corrupt these rows:
+//   1. The iCal parser didn't unfold `\` + newline line continuations
+//      (RFC 5545 only documents space/tab continuation; CivicEngage
+//      uses backslash). DESCRIPTION values got truncated mid-URL.
+//   2. `firstSentence` treated the `.` in `https://www.` as a sentence
+//      boundary, derivnig deks of just `https://www.`.
+//   3. iCal `URL:` values are sometimes the relative path
+//      `/common/modules/iCalendar/...` — stored verbatim, links 404'd.
+//
+// All three are fixed at the adapter / helper layer for future runs.
+// This migration cleans up the rows already in the DB:
+//   - Blank dek / description / body when they're just the URL artifact.
+//   - For relative URL fields, blank them so the renderer falls back
+//     to the first citation URL (which holds the real event link).
+//
+// Idempotent. Bounded scans (200/batch).
+//
+// Run dev:  npx convex run migrations:repairBrokenIcalEvents
+// Run prod: npx convex run migrations:repairBrokenIcalEvents --prod
+// =====================================================================
+
+// Matches: bare URL like "https://www.foo.com/x?EID=", possibly with
+// a trailing `\` (the unfolding artifact), or the bare "https://www."
+// truncation that firstSentence produced.
+const BROKEN_TEXT = /^\s*https?:\/\/\S*\\?\s*$/i
+// Matches a stored event URL that has no host — e.g. starts with `/`
+// or is exactly the relative iCal feed path.
+const RELATIVE_URL = /^\s*\//
+
+function isBrokenText(s: string | undefined | null): boolean {
+  if (!s) return false
+  const trimmed = s.trim()
+  if (!trimmed) return false
+  return BROKEN_TEXT.test(trimmed)
+}
+
+export const repairBrokenIcalEventsBatch = internalMutation({
+  args: { cursor: v.optional(v.number()) },
+  handler: async (ctx, { cursor }) => {
+    const BATCH = 200
+    const batch = await ctx.db
+      .query("events")
+      .order("asc")
+      .filter((f) =>
+        cursor === undefined
+          ? true
+          : f.gt(f.field("_creationTime"), cursor),
+      )
+      .take(BATCH)
+    let patched = 0
+    let dekFixed = 0
+    let descFixed = 0
+    let bodyFixed = 0
+    let urlFixed = 0
+    for (const e of batch) {
+      const patch: Record<string, unknown> = {}
+      if (isBrokenText(e.dek)) {
+        patch.dek = undefined
+        dekFixed += 1
+      }
+      if (isBrokenText(e.description)) {
+        // Schema requires `description: v.string()`. Set to empty
+        // string rather than undefined so the row still validates;
+        // the renderer treats "" as no-description (falls back to
+        // body / hides the dek slot).
+        patch.description = ""
+        descFixed += 1
+      }
+      if (isBrokenText(e.body)) {
+        patch.body = undefined
+        bodyFixed += 1
+      }
+      if (e.url && RELATIVE_URL.test(e.url)) {
+        // Blank the url so the renderer falls back to the first
+        // citation URL. Better than leaving a host-less path that
+        // resolves to miami.community and 404s.
+        patch.url = undefined
+        urlFixed += 1
+      }
+      if (Object.keys(patch).length > 0) {
+        await ctx.db.patch(e._id, patch)
+        patched += 1
+      }
+    }
+    const nextCursor =
+      batch.length === BATCH
+        ? (batch[batch.length - 1]._creationTime as number)
+        : null
+    return {
+      scanned: batch.length,
+      patched,
+      dekFixed,
+      descFixed,
+      bodyFixed,
+      urlFixed,
+      nextCursor,
+    }
+  },
+})
+
+export const repairBrokenIcalEvents = internalAction({
+  args: {},
+  handler: async (
+    ctx,
+  ): Promise<{
+    batches: number
+    scanned: number
+    patched: number
+    dekFixed: number
+    descFixed: number
+    bodyFixed: number
+    urlFixed: number
+  }> => {
+    let batches = 0
+    let scanned = 0
+    let patched = 0
+    let dekFixed = 0
+    let descFixed = 0
+    let bodyFixed = 0
+    let urlFixed = 0
+    let cursor: number | null = null
+    const MAX_BATCHES = 200
+    for (let i = 0; i < MAX_BATCHES; i += 1) {
+      const result: {
+        scanned: number
+        patched: number
+        dekFixed: number
+        descFixed: number
+        bodyFixed: number
+        urlFixed: number
+        nextCursor: number | null
+      } = await ctx.runMutation(
+        internal.migrations.repairBrokenIcalEventsBatch,
+        { cursor: cursor ?? undefined },
+      )
+      scanned += result.scanned
+      patched += result.patched
+      dekFixed += result.dekFixed
+      descFixed += result.descFixed
+      bodyFixed += result.bodyFixed
+      urlFixed += result.urlFixed
+      batches += 1
+      cursor = result.nextCursor
+      if (cursor === null) break
+    }
+    return { batches, scanned, patched, dekFixed, descFixed, bodyFixed, urlFixed }
+  },
+})
+
+// =====================================================================
+// 2026-06 remove the High Schools sub-section. The K-12 sub-tree under
+// Education was too granular for the events coverage we actually see —
+// the dadeschools.net feed is a single county-wide calendar and the
+// other school sources don't carry a per-school feed, so high-school
+// events file naturally under the parent Education section. Mirrors
+// the earlier `trimSchoolSubsections` that dropped middle / elementary.
+//
+// Reparents existing high-schools events → education, drops the
+// section ID from any sources that reference it, then deletes the
+// section row. Idempotent — re-running is a no-op once the section
+// is gone.
+//
+// Run dev:  npx convex run migrations:removeHighSchoolsSubsection
+// Run prod: npx convex run migrations:removeHighSchoolsSubsection --prod
+// =====================================================================
+export const removeHighSchoolsSubsection = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const log: Array<string> = []
+    const all = await ctx.db.query("sections").collect()
+    const bySlug = new Map(all.map((s) => [s.slug, s]))
+    const dead = bySlug.get("high-schools")
+    if (!dead) {
+      log.push("high-schools section already absent — no-op")
+      return {
+        eventsReparented: 0,
+        sourcesUpdated: 0,
+        sectionsDeleted: 0,
+        log,
+      }
+    }
+    const parent = bySlug.get("education")
+    if (!parent) {
+      log.push("WARN: no `education` parent section; aborting before any change")
+      return {
+        eventsReparented: 0,
+        sourcesUpdated: 0,
+        sectionsDeleted: 0,
+        log,
+      }
+    }
+    const events = await ctx.db
+      .query("events")
+      .withIndex("by_section_starts", (q) => q.eq("sectionId", dead._id))
+      .collect()
+    for (const e of events) {
+      await ctx.db.patch(e._id, { sectionId: parent._id })
+    }
+    log.push(`reparented ${events.length} events → education`)
+    let sourcesUpdated = 0
+    const sources = await ctx.db.query("sources").collect()
+    for (const s of sources) {
+      if (!s.sectionIds?.includes(dead._id)) continue
+      const next = s.sectionIds.filter((id) => id !== dead._id)
+      await ctx.db.patch(s._id, { sectionIds: next })
+      sourcesUpdated += 1
+    }
+    if (sourcesUpdated > 0) log.push(`updated ${sourcesUpdated} sources`)
+    await ctx.db.delete(dead._id)
+    log.push("deleted high-schools section")
+    return {
+      eventsReparented: events.length,
+      sourcesUpdated,
+      sectionsDeleted: 1,
+      log,
+    }
   },
 })

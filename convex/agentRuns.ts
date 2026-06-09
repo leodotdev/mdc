@@ -50,7 +50,10 @@ export const recent = query({
 export const latestPerAgent = query({
   args: {},
   handler: async (ctx) => {
-    const FOUR_HOURS_MS = 4 * 60 * 60 * 1000
+    // Cron is 3x daily (06/12/18 ET) — pick the longest gap (overnight)
+    // so the "overdue" badge doesn't trip on the expected 8-12h windows.
+    const EXPECTED_INTERVAL_MS = 12 * 60 * 60 * 1000
+    const FOUR_HOURS_MS = EXPECTED_INTERVAL_MS
     const agents = await ctx.db.query("agents").collect()
     const rows = await Promise.all(
       agents.map(async (agent) => {
@@ -99,7 +102,10 @@ export const latestPerAgent = query({
 export const megaSummary = query({
   args: {},
   handler: async (ctx) => {
-    const FOUR_HOURS_MS = 4 * 60 * 60 * 1000
+    // Cron is 3x daily (06/12/18 ET) — pick the longest gap (overnight)
+    // so the "overdue" badge doesn't trip on the expected 8-12h windows.
+    const EXPECTED_INTERVAL_MS = 12 * 60 * 60 * 1000
+    const FOUR_HOURS_MS = EXPECTED_INTERVAL_MS
     const last = await ctx.db
       .query("agentRuns")
       .withIndex("by_started")

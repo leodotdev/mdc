@@ -1,42 +1,41 @@
-import type { Doc } from "../_generated/dataModel"
 
 // Importance scoring for "above the fold" placement on the homepage and at
 // the top of section pages. The score combines three signals already on
-// each article — source breadth, citation depth, and recency — into a
-// single number used to rank stories. Higher = more prominent.
+// each event — source breadth, citation depth, and recency — into a
+// single number used to rank events. Higher = more prominent.
 //
 // Editorial pinning was removed: front-page placement is now decided
 // entirely by importance, and the admin tables surface the same score
-// as a literal gauge so editors can see why a story is ranking where
+// as a literal gauge so editors can see why an event is ranking where
 // it is rather than overriding it with a flag.
 //
 // Tuning notes (raise/lower these here, not in callers):
 // - WEIGHT_BREADTH × derivedFromItems.length    — cross-coverage signal
 // - WEIGHT_DEPTH   × citations.length           — distinct cited URLs
-// - HALF_LIFE_HOURS controls the recency decay  — older stories fade
-// - FRESHNESS_FLOOR_HOURS: stories younger than this get full credit;
-//   older stories decay as usual. Keeps the lead slot from sticking
-//   to a high-breadth piece for a full day when fresher news lands.
+// - HALF_LIFE_HOURS controls the recency decay  — older events fade
+// - FRESHNESS_FLOOR_HOURS: events younger than this get full credit;
+//   older events decay as usual. Keeps the lead slot from sticking
+//   to a high-breadth piece for a full day when fresher events land.
 export const WEIGHT_BREADTH = 1.5
 export const WEIGHT_DEPTH = 1.0
-// 6h half-life: a 6h-old story has 50% recency, a 12h-old has 33%,
-// a 20h-old has 23%. Tightened from 24h so a fresh 1-source story
-// can outrank a 20h, 4-source story in the lead slot.
+// 6h half-life: a 6h-old event has 50% recency, a 12h-old has 33%,
+// a 20h-old has 23%. Tightened from 24h so a fresh 1-source event
+// can outrank a 20h, 4-source event in the lead slot.
 export const HALF_LIFE_HOURS = 6
 const FRESHNESS_FLOOR_HOURS = 1
 
 export function recencyFactor(ts: number, now: number): number {
   const ageHours = Math.max(0, (now - ts) / 3_600_000)
-  // Stories within the freshness floor get full credit so a 12-min-
+  // Events within the freshness floor get full credit so a 12-min-
   // old breaking item doesn't get penalized vs a 60-min-old one.
   if (ageHours <= FRESHNESS_FLOOR_HOURS) return 1
   return 1 / (1 + (ageHours - FRESHNESS_FLOOR_HOURS) / HALF_LIFE_HOURS)
 }
 
 // Structural shape importance scoring needs — works for both server-side
-// `Doc<"articles">` and client-side hydrated articles, so the admin
-// gauge can call this function directly on whatever shape it has.
-export type ScorableArticle = {
+// `Doc<"events">` and client-side hydrated events, so the admin gauge
+// can call this function directly on whatever shape it has.
+export type ImportanceScorable = {
   derivedFromItems: ReadonlyArray<unknown>
   citations: ReadonlyArray<unknown>
   tags?: ReadonlyArray<string>
@@ -46,11 +45,11 @@ export type ScorableArticle = {
 }
 
 // Tags that get a score multiplier applied — used to demote crime
-// stories from the lead slot unless their breadth/depth is genuinely
+// events from the lead slot unless their breadth/depth is genuinely
 // out-of-distribution. The editor can extend this list as more
 // patterns surface.
 //
-// Why bother: a single-source shooting story scoring 1.5 (one source,
+// Why bother: a single-source shooting event scoring 1.5 (one source,
 // no extra citations) was outranking a 4-source policy piece scoring
 // 9 because of recency. After 0.4× demotion, the shooting drops to
 // 0.6 — still visible on the page, just not the lead.
@@ -103,7 +102,7 @@ const MUTED_TAGS = new Set([
 ])
 const MUTED_TAG_MULTIPLIER = 0.4
 
-// Headline-keyword fallback. The LLM doesn't always tag stories
+// Headline-keyword fallback. The LLM doesn't always tag events
 // with the structured tags above — when a headline contains a strong
 // non-local OR crime signal, demote the same way. Word-boundary
 // regex so "shotgun" doesn't trigger on "shot", and "Heat" doesn't
@@ -127,24 +126,24 @@ function mutedTagFactor(
 }
 
 export function importanceScore(
-  article: ScorableArticle,
+  event: ImportanceScorable,
   now: number,
 ): number {
-  const ts = article.publishedAt ?? article.createdAt
-  const breadth = article.derivedFromItems.length
-  const depth = article.citations.length
+  const ts = event.publishedAt ?? event.createdAt
+  const breadth = event.derivedFromItems.length
+  const depth = event.citations.length
   const base = breadth * WEIGHT_BREADTH + depth * WEIGHT_DEPTH
   return (
     base *
     recencyFactor(ts, now) *
-    mutedTagFactor(article.tags, article.title)
+    mutedTagFactor(event.tags, event.title)
   )
 }
 
 // Stable comparator: higher score wins, then more recent wins.
 export function compareByImportance(
-  a: Doc<"articles"> | (ScorableArticle & { publishedAt?: number; createdAt: number }),
-  b: Doc<"articles"> | (ScorableArticle & { publishedAt?: number; createdAt: number }),
+  a: ImportanceScorable & { publishedAt?: number; createdAt: number },
+  b: ImportanceScorable & { publishedAt?: number; createdAt: number },
   now: number,
 ): number {
   const diff = importanceScore(b, now) - importanceScore(a, now)
@@ -154,8 +153,32 @@ export function compareByImportance(
   return tb - ta
 }
 
+// Shape required by `compareByPopularity` — the editorial-importance
+// fields plus the denormalized 30-day view count from the popularity
+// cron. `viewCount30d` is optional because legacy / brand-new rows
+// won't have it stamped yet; we treat undefined as 0.
+export type PopularityScorable = ImportanceScorable & {
+  viewCount30d?: number
+}
+
+// Sort by trailing-30-day view count, fall back to editorial
+// importance when neither row has views (the common case until the
+// counter has had a few cron ticks to populate). Same {publishedAt,
+// createdAt} carry-through as compareByImportance so the chain stays
+// total-ordered.
+export function compareByPopularity(
+  a: PopularityScorable & { publishedAt?: number; createdAt: number },
+  b: PopularityScorable & { publishedAt?: number; createdAt: number },
+  now: number,
+): number {
+  const va = a.viewCount30d ?? 0
+  const vb = b.viewCount30d ?? 0
+  if (va !== vb) return vb - va
+  return compareByImportance(a, b, now)
+}
+
 // =====================================================================
-// Event importance — different signals than articles. Events are
+// Event-prominence scoring for time-based ranking. Events are
 // time-based, so the strongest signal is "how soon" (proximity to
 // startsAt), with depth (citations) and visual richness (hero image)
 // as secondary boosts. Used to render the same gauge in admin tables.

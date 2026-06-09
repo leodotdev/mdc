@@ -7,7 +7,6 @@ import { formatEventTime, todayKey } from "@/lib/event-helpers"
 import { useTranslation } from "@/lib/i18n/context"
 import { localizedEvent } from "@/lib/localized-event"
 import { HeroImg } from "@/components/site/hero-img"
-import { useOpenArticleDrawer } from "@/lib/use-open-article-drawer"
 import { cn } from "@/lib/utils"
 
 // Vertical timeline view — events grouped by day, days only rendered
@@ -167,7 +166,6 @@ function formatDayHeader(dayKeyStr: string): {
 function ListEventCard({ event: rawEvent }: { event: EventWithSection }) {
   const { lang } = useTranslation()
   const event = localizedEvent(rawEvent, lang)
-  const openInDrawer = useOpenArticleDrawer()
   const accent = event.section?.accentColor ?? "var(--foreground)"
   const label = event.section?.name ?? "Event"
   const time = formatEventTime(event)
@@ -235,18 +233,7 @@ function ListEventCard({ event: rawEvent }: { event: EventWithSection }) {
       </a>
     )
   }
-  if (event.article) {
-    return (
-      <Link
-        to="/article/$slug"
-        params={{ slug: event.article.slug }}
-        onClick={(e) => openInDrawer(event.article!.slug, e)}
-        className="block"
-      >
-        {Body}
-      </Link>
-    )
-  }
+  // article fallback removed with the article-era purge.
   return Body
 }
 

@@ -64,6 +64,67 @@ const PRIVATE_PHRASES: ReadonlyArray<RegExp> = [
   // Generic Zoom / Teams — anything calling itself a "virtual X"
   // alone has no in-person hook.
   /\b(?:zoom\s+meeting|teams\s+meeting)\b/i,
+  // Standardized-test prep — every "X exam boot camp / prep / review"
+  // sits on a college calendar and is invariably for that college's
+  // students. FCLE in particular is mandatory for FL public-college
+  // students, never a public event.
+  /\b(FCLE|MCAT|LSAT|GMAT|GRE|TOEFL|FTCE|CLAST)\b/i,
+  /\b(test|exam)\s+(?:prep|preparation|boot\s*camp|review\s+session)\b/i,
+  /\b(boot\s*camp|prep\s+(?:course|session|workshop))\s+for\s+(?:current\s+)?students\b/i,
+  // Orientation / welcome-week / move-in — campus-internal by
+  // definition. Even when called "public" they're for the incoming
+  // class.
+  /\b(new\s+student\s+orientation|welcome\s+week|move[-\s]?in\s+day|first[-\s]?year\s+(?:experience|seminar)|transfer\s+student\s+orientation|orientation\s+(?:day|week|session))\b/i,
+  // Academic advising / registration — always student-only.
+  /\b(academic\s+advising|drop[-\s]?in\s+advising|advising\s+(?:appointment|session|hours)|major\s+exploration|degree\s+(?:audit|planning)|course\s+(?:planning|selection))\b/i,
+  // Student-life / club / greek-life events that don't invite
+  // outside attendance.
+  /\b(student\s+(?:org(?:anization)?|club)\s+(?:meeting|fair|fest|night)|greek\s+life|sorority\s+(?:recruitment|rush|meeting)|fraternity\s+(?:recruitment|rush|meeting)|RSO\s+(?:meeting|event))\b/i,
+  // Career-services campus-only — resume reviews, mock interviews,
+  // employer info sessions for that school's students.
+  /\b(mock\s+interview|resume\s+(?:review|critique|workshop)|career\s+(?:counseling|coaching|drop[-\s]?in)|employer\s+info\s+session|on[-\s]?campus\s+(?:interview|recruiting))\b/i,
+  // Alumni / donor / member-exclusive functions.
+  /\b(alumni[-\s]?only|donor[-\s]?(?:only|circle|reception)|member[-\s]?(?:only|exclusive)|patron[-\s]?only|trustee\s+(?:meeting|dinner|reception))\b/i,
+  // Honor society / scholar inductions — closed ceremonies for
+  // selected students.
+  /\b(honor\s+society|phi\s+(?:beta\s+kappa|kappa\s+phi|theta\s+kappa)|induction\s+ceremony|scholars\s+(?:reception|induction))\b/i,
+  // Internship / co-op specific — for that school's pipeline.
+  /\b(internship\s+(?:fair|info\s+session|workshop|program\s+orientation)|co[-\s]?op\s+(?:orientation|info\s+session))\b/i,
+  // Graduation / commencement-adjacent (rehearsals, regalia pickup —
+  // graduation itself is technically public but the auxiliary events
+  // around it are not).
+  /\b(commencement\s+rehearsal|graduation\s+rehearsal|regalia\s+(?:pickup|distribution)|cap\s+and\s+gown\s+distribution|grad\s+fair)\b/i,
+  // Library / lab tours for new students.
+  /\b(library\s+(?:orientation|tour)\s+for\s+(?:new|incoming)|lab\s+safety\s+training|IRB\s+training)\b/i,
+  // Academic-calendar milestones — never "events" a reader can
+  // attend; they're rows on the registrar's calendar. "Last day to
+  // add/drop", "Registration opens", "Finals week", etc.
+  /\blast\s+day\s+to\s+(?:add|drop|change|withdraw|register|petition|file|submit|apply)\b/i,
+  /\b(?:fall|spring|summer|winter)\s+(?:open\s+)?registration\s+(?:opens?|closes?|begins?|ends?)\b/i,
+  /\b(grading\s+option|grade\s+(?:appeals?|change)|incomplete\s+grades?|withdrawal\s+period)\b/i,
+  /\b(finals?\s+week|midterms?\s+week|reading\s+(?:day|period)|study\s+(?:day|period))\b/i,
+  /\b(census\s+date|drop\/add\s+(?:period|deadline)|tuition\s+due|fee\s+payment\s+deadline)\b/i,
+  // Handshake = student career portal. Any event referencing it is
+  // for enrolled students.
+  /\bhandshake\s+(?:refresher|workshop|training|orientation)\b/i,
+  // Career-services event vocabulary that the existing patterns miss.
+  /\bcareer\s+(?:tools|options|coach(?:ing)?\s+drop[-\s]?in|exploration|panel\s+for\s+students)\b/i,
+  /\bexploring\s+careers?\b/i,
+  /\bcover\s+letter\s+(?:workshop|review|critique)\b/i,
+  /\bresume\s+and\s+(?:cover\s+letter|interview)\s+workshop\b/i,
+  // Graduate-program internal: coffee chats, MBA / JD / LLM / MFA
+  // mixers, dissertation events, prospective-student events.
+  /\b(MBA|JD|LLM|MFA|MD|MS|MA|PhD|DPT|EdD|DBA)\s+(?:coffee\s+(?:chat|hour)|mixer|reception|info\s+session|virtual\s+visit|admit(?:ted)?\s+student|dissertation)\b/i,
+  /\bdissertation\s+(?:open\s+house|reception|proposal\s+defense)\b/i,
+  /\b(?:prospective|admitted|incoming)\s+students?\s+(?:reception|mixer|event|day)\b/i,
+  // Law-school internal events — "Beer on the Bricks", "Coffee on the
+  // Bricks", "Fridays on the Bricks" are UM Law's recurring student-
+  // only mixers at their courtyard. Catch the venue pattern.
+  /\b(?:beer|coffee|fridays?|wine)\s+on\s+the\s+bricks\b/i,
+  /\blaw\s+school\s+(?:tour|orientation|mixer|reception|barbecue)\b/i,
+  /\bjury\s+selection\s+training\b/i,
+  // Student-org "General Body Meeting" pattern.
+  /\b(?:general\s+body\s+meeting|GBM|chapter\s+meeting|exec\s+(?:board\s+)?meeting)\b/i,
 ]
 
 // Course-code pattern: 2-4 capital letters followed by 3-4 digits.
@@ -72,11 +133,17 @@ const PRIVATE_PHRASES: ReadonlyArray<RegExp> = [
 // random uppercase strings don't trigger.
 const COURSE_CODE = /\b[A-Z]{2,4}[\s-]?\d{3,4}\b/
 
-export function isPrivateAudience(opts: {
-  title: string
-  description?: string | null
-  body?: string | null
-}): boolean {
+export function isPrivateAudience(
+  opts: {
+    title: string
+    description?: string | null
+    body?: string | null
+  },
+  /** DB-backed extra audience blocks layered over the hardcoded
+   *  baseline. Snapshot via `internal.taxonomy.snapshot`; pass each
+   *  row's `pattern` string. Bad regexes are silently skipped. */
+  extraBlocks?: ReadonlyArray<string>,
+): boolean {
   const haystack = [opts.title, opts.description ?? "", opts.body ?? ""]
     .join(" ")
     .trim()
@@ -86,6 +153,17 @@ export function isPrivateAudience(opts: {
   if (PUBLIC_OVERRIDES.test(haystack)) return false
 
   for (const re of PRIVATE_PHRASES) {
+    if (re.test(haystack)) return true
+  }
+
+  // DB-backed editor overrides.
+  for (const pat of extraBlocks ?? []) {
+    let re: RegExp
+    try {
+      re = new RegExp(pat, "i")
+    } catch {
+      continue
+    }
     if (re.test(haystack)) return true
   }
 

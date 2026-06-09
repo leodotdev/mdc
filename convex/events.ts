@@ -5,18 +5,29 @@ import {
   action,
   internalAction,
   internalMutation,
+  internalQuery,
   mutation,
   query,
 } from "./_generated/server"
 import { cleanTags } from "./agents"
-import { attachParentAccent } from "./articles"
-import { compareByImportance } from "./lib/scoring"
+import { attachParentAccent } from "./lib/hydrationHelpers"
+import { compareByImportance, compareByPopularity } from "./lib/scoring"
 import { requireEditor } from "./lib/guard"
 import { estimatedCallCents } from "./lib/budget"
 import { cronsEnabled } from "./lib/cronGate"
 import { requireEditorInAction } from "./lib/guard"
-import { eventDedupeKey } from "./lib/eventDedupe"
-import { generateEventEnrichment, generateEventTranslation } from "./lib/llm"
+import {
+  eventDedupeKey,
+  eventSeriesKey,
+  similarityScore,
+} from "./lib/eventDedupe"
+import { maybeTitleCase } from "./lib/titleCase"
+import {
+  generateEventBatchTranslation,
+  generateEventEnrichment,
+  generateEventTranslation,
+} from "./lib/llm"
+import { scoreEventQuality } from "./lib/quality"
 import { findHeroCandidates } from "./lib/media"
 import { filterNeighborhoodSlugs, neighborhoodCoords } from "./lib/neighborhoods"
 import type { HeroCandidate, HeroFinderDiagnostics } from "./lib/media"
@@ -81,7 +92,6 @@ const eventInputValidator = v.object({
   price: v.optional(v.string()),
   sectionId: v.optional(v.id("sections")),
   tags: v.optional(v.array(v.string())),
-  relatedArticleIds: v.optional(v.array(v.id("articles"))),
   relatedEventIds: v.optional(v.array(v.id("events"))),
   citations: v.optional(v.array(citationValidator)),
 })
@@ -156,21 +166,13 @@ async function hydrate(ctx: QueryCtx, event: Doc<"events">) {
     ? await ctx.db.get(event.sectionId)
     : null
   const section = await attachParentAccent(ctx, rawSection)
-  // Surface the first related article publicly when it's published — events
-  // can link to multiple stories via relatedArticleIds[], but the public
-  // shape exposes one (the canonical "related story") for convenience.
-  // Older code using `event.article` keeps working.
-  const firstRelatedId = event.relatedArticleIds?.[0]
-  const article = firstRelatedId ? await ctx.db.get(firstRelatedId) : null
-  const publishedArticle =
-    article && article.status === "published"
-      ? { _id: article._id, slug: article.slug, title: article.title }
-      : null
   // Public surface guarantees a non-empty slug. Legacy rows that pre-
   // date the slug column fall back to the document id so cards still
   // route somewhere predictable.
   const slug = event.slug ?? (event._id as string)
-  return { ...event, slug, section, article: publishedArticle }
+  // `article` field is kept as `null` for back-compat with the public
+  // EventWithRelations shape consumers still expect.
+  return { ...event, slug, section, article: null as null }
 }
 
 // ───────── Public queries ─────────
@@ -223,7 +225,8 @@ export const inRange = query({
     sectionSlug: v.optional(v.string()),
   },
   handler: async (ctx, { rangeStart, rangeEnd, sectionSlug }) => {
-    const events = await ctx.db
+    // Direct hits — events whose canonical startsAt falls in window.
+    const direct = await ctx.db
       .query("events")
       .withIndex("by_status_starts", (q) =>
         q
@@ -233,7 +236,32 @@ export const inRange = query({
       )
       .order("asc")
       .take(SCAN_CAP)
-    let filtered = events
+    // Recurring-event union — events with a past startsAt but a
+    // future occurrence inside the window (populated by the nightly
+    // recurrence cron). Without this, a weekly yoga class from Jan
+    // never appears in May's range.
+    const recurringPool = await ctx.db
+      .query("events")
+      .withIndex("by_status_starts", (q) =>
+        q.eq("status", "approved").lt("startsAt", rangeStart),
+      )
+      .order("desc")
+      .take(500)
+    const recurringHits = recurringPool.filter(
+      (e) =>
+        e.recurrenceRule &&
+        (e.recurrenceInstances ?? []).some(
+          (t) => t >= rangeStart && t < rangeEnd,
+        ),
+    )
+    const seen = new Set<string>(direct.map((e) => e._id as string))
+    const merged = [...direct]
+    for (const e of recurringHits) {
+      if (seen.has(e._id as string)) continue
+      seen.add(e._id as string)
+      merged.push(e)
+    }
+    let filtered = merged
     if (sectionSlug) {
       const section = await ctx.db
         .query("sections")
@@ -260,10 +288,28 @@ export const inRange = query({
 // truncated even on a busy news day.
 const TOP_EVENTS_SCAN = 200
 
-// `ScorableArticle`-compatible adapter for events. The events table's
+// Strict-scoped section slugs — these turn off the tag-enrichment
+// path that normally lets a section pick up events filed under
+// adjacent sections. Sports team subsections (Hurricanes, Heat,
+// Marlins, etc.) need strict scoping because the "hurricanes" /
+// "miami" / "um" tag families are noisy and pull in non-athletics
+// content (a Frost School recital, a dissertation defense). Strict
+// scoping = only events with `sectionId === this section's id` show.
+async function isStrictScoped(
+  ctx: QueryCtx,
+  section: Doc<"sections">,
+): Promise<boolean> {
+  if (!section.parentId) return false
+  const parent = await ctx.db.get(section.parentId)
+  if (!parent) return false
+  return parent.slug === "sports"
+}
+
+// `ImportanceScorable`-compatible adapter. The events table's
 // `derivedFromItems` + `citations` are optional, but the scoring
 // helper expects arrays — default to empty so the comparator works
-// without throwing on legacy rows.
+// without throwing on legacy rows. Also carries `viewCount30d` so
+// the popularity comparator can read it from the same object.
 function asScorable(e: Doc<"events">): {
   derivedFromItems: ReadonlyArray<unknown>
   citations: ReadonlyArray<unknown>
@@ -271,6 +317,7 @@ function asScorable(e: Doc<"events">): {
   title?: string
   publishedAt?: number
   createdAt: number
+  viewCount30d?: number
 } {
   return {
     derivedFromItems: e.derivedFromItems ?? [],
@@ -279,6 +326,7 @@ function asScorable(e: Doc<"events">): {
     title: e.title,
     publishedAt: e.publishedAt,
     createdAt: e.createdAt,
+    viewCount30d: e.viewCount30d,
   }
 }
 
@@ -394,13 +442,15 @@ export const topInSection = query({
     // section's associatedTags (or just the slug as a baseline) and
     // union them in. Lets /section/books surface "jazz at Books &
     // Books" — primary section music, also tagged "books". Scan is
-    // bounded; we only consider recent published events.
+    // bounded; we only consider recent published events. Strict-scoped
+    // sections (sports team subsections) skip enrichment entirely.
+    const strict = await isStrictScoped(ctx, section)
     const associatedTags = new Set(
       section.associatedTags && section.associatedTags.length > 0
         ? section.associatedTags
         : [section.slug],
     )
-    if (associatedTags.size > 0) {
+    if (!strict && associatedTags.size > 0) {
       const tagScan = await ctx.db
         .query("events")
         .withIndex("by_status_published", (q) => q.eq("status", "approved"))
@@ -418,6 +468,159 @@ export const topInSection = query({
     merged.sort(rankEventsForHero(now))
     return await Promise.all(
       merged.slice(0, limit).map((e) => hydrate(ctx, e)),
+    )
+  },
+})
+
+// ───────── Popular rail queries ─────────
+// `popularToday`, `popularInSection`, `popularByNeighborhood` feed the
+// "Popular" right-rail block on the homepage, section pages, and
+// neighborhood pages respectively. All three sort by `viewCount30d`
+// (denormalized onto each event row by the nightly
+// `popularity:cronTick`) and fall back to editorial importance via
+// `compareByPopularity` when no row in the candidate set has views.
+// That fallback is the empty-state guard: brand-new sections / a
+// freshly-deployed site never show an empty rail.
+//
+// Time window: forward-only (`startsAt >= now`). Popularity of upcoming
+// events is what readers want from a calendar; the by-publishedAt
+// hero queries above stay unchanged.
+
+// Upcoming events across the site, ranked by 30-day view count with
+// editorial-importance fallback. Bounded by a `days` forward window
+// so the candidate scan stays small.
+export const popularToday = query({
+  args: { limit: v.number(), days: v.optional(v.number()) },
+  handler: async (ctx, { limit, days }) => {
+    const now = Date.now()
+    const windowEnd = now + (days ?? 30) * 24 * 3_600_000
+    const candidates = await ctx.db
+      .query("events")
+      .withIndex("by_status_starts", (q) =>
+        q.eq("status", "approved").gte("startsAt", now).lt("startsAt", windowEnd),
+      )
+      .take(SCAN_CAP)
+    const sorted = candidates.sort((a, b) =>
+      compareByPopularity(asScorable(a), asScorable(b), now),
+    )
+    return await Promise.all(
+      sorted.slice(0, limit).map((e) => hydrate(ctx, e)),
+    )
+  },
+})
+
+// Upcoming events scoped to a section + its sub-sections +
+// cross-listed sections + tag enrichment, ranked by popularity.
+// Mirrors `topInSection`'s scoping so the same Business → tech /
+// real-estate / commerce union applies, just with a different sort.
+export const popularInSection = query({
+  args: {
+    sectionSlug: v.string(),
+    limit: v.number(),
+    days: v.optional(v.number()),
+  },
+  handler: async (ctx, { sectionSlug, limit, days }) => {
+    const section = await ctx.db
+      .query("sections")
+      .withIndex("by_slug", (q) => q.eq("slug", sectionSlug))
+      .unique()
+    if (!section) return []
+    const directChildren = await ctx.db
+      .query("sections")
+      .withIndex("by_parent", (q) => q.eq("parentId", section._id))
+      .collect()
+    const allSections = await ctx.db.query("sections").collect()
+    const crossListed = allSections.filter((s) =>
+      s.crossListedIn?.includes(section._id),
+    )
+    const childIds = [...directChildren, ...crossListed].map((c) => c._id)
+    const scopedSectionIds = new Set<Id<"sections">>([
+      section._id,
+      ...childIds,
+    ])
+    const now = Date.now()
+    const windowEnd = now + (days ?? 30) * 24 * 3_600_000
+    // Forward-window scan per scoped section, then union.
+    const buckets = await Promise.all(
+      [...scopedSectionIds].map((sid) =>
+        ctx.db
+          .query("events")
+          .withIndex("by_section_starts", (q) =>
+            q.eq("sectionId", sid).eq("status", "approved").gte("startsAt", now),
+          )
+          .take(SCAN_CAP),
+      ),
+    )
+    const seen = new Set<string>()
+    const merged: Array<Doc<"events">> = []
+    for (const bucket of buckets) {
+      for (const e of bucket) {
+        if (seen.has(e._id as string)) continue
+        if (e.startsAt >= windowEnd) continue
+        seen.add(e._id as string)
+        merged.push(e)
+      }
+    }
+    // Same tag enrichment as topInSection so /section/books picks up
+    // "jazz at Books & Books" tagged with `books`. Strict-scoped
+    // sub-sections (Sports teams) skip enrichment.
+    const strict = await isStrictScoped(ctx, section)
+    const associatedTags = new Set(
+      section.associatedTags && section.associatedTags.length > 0
+        ? section.associatedTags
+        : [section.slug],
+    )
+    if (!strict && associatedTags.size > 0) {
+      const tagScan = await ctx.db
+        .query("events")
+        .withIndex("by_status_starts", (q) =>
+          q.eq("status", "approved").gte("startsAt", now).lt("startsAt", windowEnd),
+        )
+        .take(SCAN_CAP * 2)
+      for (const e of tagScan) {
+        if (seen.has(e._id as string)) continue
+        const tags = e.tags ?? []
+        if (!tags.some((t) => associatedTags.has(t))) continue
+        seen.add(e._id as string)
+        merged.push(e)
+      }
+    }
+    merged.sort((a, b) =>
+      compareByPopularity(asScorable(a), asScorable(b), now),
+    )
+    return await Promise.all(
+      merged.slice(0, limit).map((e) => hydrate(ctx, e)),
+    )
+  },
+})
+
+// Upcoming events tied to a neighborhood, ranked by popularity.
+// Same forward-window semantics as `byNeighborhood` (the
+// chronological variant) but the sort is popularity + importance
+// fallback instead of startsAt.
+export const popularByNeighborhood = query({
+  args: {
+    slug: v.string(),
+    limit: v.number(),
+    days: v.optional(v.number()),
+  },
+  handler: async (ctx, { slug, limit, days }) => {
+    const now = Date.now()
+    const windowEnd = now + (days ?? 30) * 24 * 3_600_000
+    const candidates = await ctx.db
+      .query("events")
+      .withIndex("by_status_starts", (q) =>
+        q.eq("status", "approved").gte("startsAt", now).lt("startsAt", windowEnd),
+      )
+      .take(SCAN_CAP)
+    const filtered = candidates.filter(
+      (e) => e.neighborhoods?.includes(slug),
+    )
+    const sorted = filtered.sort((a, b) =>
+      compareByPopularity(asScorable(a), asScorable(b), now),
+    )
+    return await Promise.all(
+      sorted.slice(0, limit).map((e) => hydrate(ctx, e)),
     )
   },
 })
@@ -481,13 +684,16 @@ export const listBySection = query({
         merged.push(e)
       }
     }
-    // Tag-driven enrichment.
+    // Tag-driven enrichment. Strict-scoped sections (sports team subs)
+    // skip enrichment so e.g. Hurricanes only ever shows athletics —
+    // never general UM events that happen to share a tag.
+    const strict = await isStrictScoped(ctx, section)
     const associatedTags = new Set(
       section.associatedTags && section.associatedTags.length > 0
         ? section.associatedTags
         : [section.slug],
     )
-    if (associatedTags.size > 0) {
+    if (!strict && associatedTags.size > 0) {
       const tagScan = await ctx.db
         .query("events")
         .withIndex("by_status_published", (q) => q.eq("status", "approved"))
@@ -561,7 +767,7 @@ export const inMonth = query({
     const rangeStart = new Date(year, month, 1).getTime() - 7 * 86_400_000
     const rangeEnd = new Date(year, month + 1, 1).getTime() + 7 * 86_400_000
     // Index hit — same shape as `inRange`, just a wider window.
-    const candidates = await ctx.db
+    const direct = await ctx.db
       .query("events")
       .withIndex("by_status_starts", (q) =>
         q
@@ -571,6 +777,29 @@ export const inMonth = query({
       )
       .order("asc")
       .take(500)
+    // Recurring-event union: events with past startsAt but a
+    // precomputed `recurrenceInstances` entry in the visible window.
+    const recurringPool = await ctx.db
+      .query("events")
+      .withIndex("by_status_starts", (q) =>
+        q.eq("status", "approved").lt("startsAt", rangeStart),
+      )
+      .order("desc")
+      .take(500)
+    const recurringHits = recurringPool.filter(
+      (e) =>
+        e.recurrenceRule &&
+        (e.recurrenceInstances ?? []).some(
+          (t) => t >= rangeStart && t < rangeEnd,
+        ),
+    )
+    const seenIds = new Set<string>(direct.map((e) => e._id as string))
+    const candidates = [...direct]
+    for (const e of recurringHits) {
+      if (seenIds.has(e._id as string)) continue
+      seenIds.add(e._id as string)
+      candidates.push(e)
+    }
     // Filter scope.
     let filtered = candidates
     if (sectionSlug) {
@@ -594,6 +823,7 @@ export const inMonth = query({
         ...directChildren.map((c) => c._id),
         ...crossListed.map((c) => c._id),
       ])
+      const strict = await isStrictScoped(ctx, section)
       const associatedTags = new Set(
         section.associatedTags && section.associatedTags.length > 0
           ? section.associatedTags
@@ -601,6 +831,7 @@ export const inMonth = query({
       )
       filtered = candidates.filter((e) => {
         if (e.sectionId && scopedIds.has(e.sectionId)) return true
+        if (strict) return false
         const eventTags = e.tags ?? []
         return eventTags.some((t) => associatedTags.has(t))
       })
@@ -660,6 +891,7 @@ export const placedOnMap = query({
         ...directChildren.map((c) => c._id),
         ...crossListed.map((c) => c._id),
       ])
+      const strict = await isStrictScoped(ctx, section)
       const associatedTags = new Set(
         section.associatedTags && section.associatedTags.length > 0
           ? section.associatedTags
@@ -667,6 +899,7 @@ export const placedOnMap = query({
       )
       filtered = filtered.filter((e) => {
         if (e.sectionId && scopedIds.has(e.sectionId)) return true
+        if (strict) return false
         const eventTags = e.tags ?? []
         return eventTags.some((t) => associatedTags.has(t))
       })
@@ -736,14 +969,46 @@ export const upcoming = query({
   handler: async (ctx, { limit, days }) => {
     const now = Date.now()
     const horizon = now + (days ?? 14) * 24 * 3_600_000
-    const events = await ctx.db
+    const cap = limit ?? 10
+    // Direct hits — startsAt in window.
+    const direct = await ctx.db
       .query("events")
       .withIndex("by_status_starts", (q) =>
         q.eq("status", "approved").gte("startsAt", now).lt("startsAt", horizon),
       )
       .order("asc")
-      .take(limit ?? 10)
-    return await Promise.all(events.map((e) => hydrate(ctx, e)))
+      .take(cap * 4)
+    // Recurring events whose startsAt is past but a precomputed
+    // instance lands inside the window. Without this, every weekly
+    // yoga / jazz night / market would vanish from `upcoming`.
+    const recurringPool = await ctx.db
+      .query("events")
+      .withIndex("by_status_starts", (q) =>
+        q.eq("status", "approved").lt("startsAt", now),
+      )
+      .order("desc")
+      .take(500)
+    type ScoredEvent = (typeof direct)[number] & { _sortKey: number }
+    const scored: Array<ScoredEvent> = []
+    const seen = new Set<string>()
+    for (const e of direct) {
+      seen.add(e._id as string)
+      scored.push({ ...e, _sortKey: e.startsAt })
+    }
+    for (const e of recurringPool) {
+      if (seen.has(e._id as string)) continue
+      if (!e.recurrenceRule) continue
+      const inst = (e.recurrenceInstances ?? []).find(
+        (t) => t >= now && t < horizon,
+      )
+      if (inst === undefined) continue
+      seen.add(e._id as string)
+      scored.push({ ...e, _sortKey: inst })
+    }
+    scored.sort((a, b) => a._sortKey - b._sortKey)
+    return await Promise.all(
+      scored.slice(0, cap).map((e) => hydrate(ctx, e)),
+    )
   },
 })
 
@@ -806,7 +1071,8 @@ export const upcomingBySectionSlug = query({
     if (!section) return []
     const now = Date.now()
     const horizon = now + (days ?? 30) * 24 * 3_600_000
-    const events = await ctx.db
+    const cap = limit ?? 8
+    const direct = await ctx.db
       .query("events")
       .withIndex("by_section_starts", (q) =>
         q
@@ -816,8 +1082,40 @@ export const upcomingBySectionSlug = query({
           .lt("startsAt", horizon),
       )
       .order("asc")
-      .take(limit ?? 8)
-    return await Promise.all(events.map((e) => hydrate(ctx, e)))
+      .take(cap * 4)
+    // Recurring section events: same shape as `upcoming`, scoped to
+    // this section.
+    const recurringPool = await ctx.db
+      .query("events")
+      .withIndex("by_section_starts", (q) =>
+        q
+          .eq("sectionId", section._id)
+          .eq("status", "approved")
+          .lt("startsAt", now),
+      )
+      .order("desc")
+      .take(200)
+    type ScoredEvent = (typeof direct)[number] & { _sortKey: number }
+    const scored: Array<ScoredEvent> = []
+    const seen = new Set<string>()
+    for (const e of direct) {
+      seen.add(e._id as string)
+      scored.push({ ...e, _sortKey: e.startsAt })
+    }
+    for (const e of recurringPool) {
+      if (seen.has(e._id as string)) continue
+      if (!e.recurrenceRule) continue
+      const inst = (e.recurrenceInstances ?? []).find(
+        (t) => t >= now && t < horizon,
+      )
+      if (inst === undefined) continue
+      seen.add(e._id as string)
+      scored.push({ ...e, _sortKey: inst })
+    }
+    scored.sort((a, b) => a._sortKey - b._sortKey)
+    return await Promise.all(
+      scored.slice(0, cap).map((e) => hydrate(ctx, e)),
+    )
   },
 })
 
@@ -877,6 +1175,25 @@ export const getBySlug = query({
   },
 })
 
+// Public view beacon — every drawer / detail-page open fires this from
+// the client. Inserts one row into the `eventViews` log; the nightly
+// `popularity:cronTick` rolls those rows into `events.viewCount30d`
+// so the Popular rail re-ranks. The client dedupes per session in
+// `useOpenEventDrawer`, so a refresh / re-open doesn't inflate the
+// count. We silently no-op on bad eventIds + non-approved rows so
+// drive-by callers can't pump dead rows into the leaderboard.
+export const recordView = mutation({
+  args: { eventId: v.id("events") },
+  handler: async (ctx, { eventId }) => {
+    const event = await ctx.db.get(eventId)
+    if (!event || event.status !== "approved") return
+    await ctx.db.insert("eventViews", {
+      eventId,
+      viewedAt: Date.now(),
+    })
+  },
+})
+
 // ───────── Translations (ES) ─────────
 
 /**
@@ -894,7 +1211,16 @@ export const needingTranslation = query({
       .withIndex("by_status_starts", (q) => q.eq("status", "approved"))
       .order("desc")
       .take(scanCap)
-    const stale: Array<{ _id: Id<"events">; title: string }> = []
+    const stale: Array<{
+      _id: Id<"events">
+      title: string
+      dek?: string
+      description?: string
+      heroCaption?: string
+      tags?: Array<string>
+      locationName?: string
+      sectionSlug?: string
+    }> = []
     for (const e of all) {
       const hash = eventSourceHash({
         title: e.title,
@@ -902,7 +1228,19 @@ export const needingTranslation = query({
       })
       const tr = e.translations?.es
       if (!tr || tr.sourceHash !== hash) {
-        stale.push({ _id: e._id, title: e.title })
+        const sectionSlug = e.sectionId
+          ? (await ctx.db.get(e.sectionId))?.slug
+          : undefined
+        stale.push({
+          _id: e._id,
+          title: e.title,
+          dek: e.dek,
+          description: e.description,
+          heroCaption: e.heroCaption,
+          tags: e.tags,
+          locationName: e.locationName,
+          sectionSlug,
+        })
       }
       if (stale.length >= cap) break
     }
@@ -1002,6 +1340,66 @@ export const translateEventAction = internalAction({
   },
 })
 
+// Cache lookup — returns the stored ES translation when a previous
+// event with the same EN sourceHash has already been translated.
+// Reused by `drainEventTranslationsBatched` to skip Haiku entirely
+// on cache hits.
+export const translationCacheLookup = internalQuery({
+  args: { sourceHashes: v.array(v.string()) },
+  handler: async (ctx, { sourceHashes }) => {
+    const out: Array<{
+      sourceHash: string
+      title: string
+      dek: string
+      heroCaption?: string
+    }> = []
+    for (const hash of sourceHashes) {
+      const row = await ctx.db
+        .query("translationCache")
+        .withIndex("by_hash", (q) => q.eq("sourceHash", hash))
+        .unique()
+      if (row) {
+        out.push({
+          sourceHash: hash,
+          title: row.title,
+          dek: row.dek,
+          heroCaption: row.heroCaption,
+        })
+      }
+    }
+    return out
+  },
+})
+
+// Cache write. Idempotent: re-running on a hit bumps `hits` instead
+// of inserting a duplicate.
+export const translationCachePut = internalMutation({
+  args: {
+    sourceHash: v.string(),
+    title: v.string(),
+    dek: v.string(),
+    heroCaption: v.optional(v.string()),
+  },
+  handler: async (ctx, { sourceHash, title, dek, heroCaption }) => {
+    const existing = await ctx.db
+      .query("translationCache")
+      .withIndex("by_hash", (q) => q.eq("sourceHash", sourceHash))
+      .unique()
+    if (existing) {
+      await ctx.db.patch(existing._id, { hits: existing.hits + 1 })
+      return
+    }
+    await ctx.db.insert("translationCache", {
+      sourceHash,
+      title,
+      dek,
+      heroCaption,
+      createdAt: Date.now(),
+      hits: 1,
+    })
+  },
+})
+
 /**
  * Cron-fired backlog drain for events. Same purpose as the article
  * counterpart: catches rows that slipped past the on-approve scheduler.
@@ -1042,26 +1440,152 @@ export const drainTranslationsNow = internalAction({
   }> => drainEventTranslations(ctx, maxEvents ?? 50),
 })
 
+// Drain the backlog of events needing ES translation. Two-stage:
+//   1. Cache lookup — events whose EN sourceHash matches a previously
+//      translated row get their ES copy written for free (no Haiku
+//      call). This is the dominant case for syndicated listings,
+//      Eventbrite cross-posts and ICS clones.
+//   2. Batched Haiku call — remaining cache misses are translated in
+//      groups of up to BATCH_SIZE so we pay one shared prompt cost per
+//      batch instead of one per event. Each batch is gated by
+//      `budget.reserve` (returns `lights-out` when LLM is disabled).
 async function drainEventTranslations(
   ctx: ActionCtx,
   cap: number,
 ): Promise<{ processed: number; translated: number; errors: number }> {
+  const BATCH_SIZE = 20
   const stale = await ctx.runQuery(api.events.needingTranslation, {
     limit: cap,
   })
-  let processed = 0
+  if (stale.length === 0) return { processed: 0, translated: 0, errors: 0 }
+
+  // Pre-compute each event's source text + hash. Skip rows that have
+  // no usable dek source — same guard as `translateEventAction`.
+  type Candidate = {
+    eventId: Id<"events">
+    title: string
+    dek: string
+    heroCaption?: string
+    sectionSlug?: string
+    tags: ReadonlyArray<string>
+    locationName?: string
+    sourceHash: string
+  }
+  const candidates: Array<Candidate> = []
+  for (const s of stale) {
+    const sourceDek = s.dek ?? s.description ?? ""
+    if (!sourceDek.trim()) continue
+    candidates.push({
+      eventId: s._id,
+      title: s.title,
+      dek: sourceDek,
+      heroCaption: s.heroCaption,
+      sectionSlug: s.sectionSlug,
+      tags: s.tags ?? [],
+      locationName: s.locationName,
+      sourceHash: eventSourceHash({ title: s.title, dek: sourceDek }),
+    })
+  }
+
+  let processed = candidates.length
   let translated = 0
   let errors = 0
-  for (const s of stale) {
-    processed += 1
+
+  // Stage 1 — cache hits.
+  const hashes = Array.from(new Set(candidates.map((c) => c.sourceHash)))
+  const cached = await ctx.runQuery(internal.events.translationCacheLookup, {
+    sourceHashes: hashes,
+  })
+  const cacheByHash = new Map(cached.map((c) => [c.sourceHash, c]))
+  const misses: Array<Candidate> = []
+  for (const c of candidates) {
+    const hit = cacheByHash.get(c.sourceHash)
+    if (hit) {
+      try {
+        await ctx.runMutation(internal.events.setTranslation, {
+          eventId: c.eventId,
+          lang: "es",
+          translation: {
+            title: hit.title,
+            dek: hit.dek,
+            description: "",
+            heroCaption: hit.heroCaption,
+          },
+          sourceHash: c.sourceHash,
+        })
+        // Bump the hit counter so we have a signal for future eviction.
+        await ctx.runMutation(internal.events.translationCachePut, {
+          sourceHash: c.sourceHash,
+          title: hit.title,
+          dek: hit.dek,
+          heroCaption: hit.heroCaption,
+        })
+        translated += 1
+      } catch {
+        errors += 1
+      }
+    } else {
+      misses.push(c)
+    }
+  }
+
+  if (misses.length === 0) {
+    return { processed, translated, errors }
+  }
+
+  // Stage 2 — batched Haiku calls for cache misses.
+  for (let i = 0; i < misses.length; i += BATCH_SIZE) {
+    const batch = misses.slice(i, i + BATCH_SIZE)
+    const reservation = await ctx.runMutation(internal.budget.reserve, {
+      // One shared prompt + N tool entries — ~1.5x a single-event call
+      // for a 20-event batch. Budget on the high end.
+      estimatedCents: Math.ceil(
+        estimatedCallCents("claude-haiku-4-5-20251001") * 1.5,
+      ),
+      label: "translateEventBatch",
+    })
+    if (!reservation.allowed) break
     try {
-      const r = await ctx.runAction(internal.events.translateEventAction, {
-        eventId: s._id,
-        lang: "es",
+      const results = await generateEventBatchTranslation({
+        model: "claude-haiku-4-5-20251001",
+        events: batch.map((b) => ({
+          key: b.sourceHash,
+          title: b.title,
+          dek: b.dek,
+          heroCaption: b.heroCaption,
+          sectionSlug: b.sectionSlug,
+          tags: b.tags,
+          locationName: b.locationName,
+        })),
       })
-      if (r.translated) translated += 1
+      for (const b of batch) {
+        const t = results.get(b.sourceHash)
+        if (!t) continue
+        try {
+          await ctx.runMutation(internal.events.setTranslation, {
+            eventId: b.eventId,
+            lang: "es",
+            translation: {
+              title: t.title,
+              dek: t.dek,
+              description: "",
+              heroCaption: t.heroCaption,
+            },
+            sourceHash: b.sourceHash,
+          })
+          await ctx.runMutation(internal.events.translationCachePut, {
+            sourceHash: b.sourceHash,
+            title: t.title,
+            dek: t.dek,
+            heroCaption: t.heroCaption,
+          })
+          translated += 1
+        } catch {
+          errors += 1
+        }
+      }
     } catch {
-      errors += 1
+      errors += batch.length
     }
   }
   return { processed, translated, errors }
@@ -1069,8 +1593,182 @@ async function drainEventTranslations(
 
 // ───────── Haiku event enrichment (tags + neighborhood + section) ─────────
 
-// Events with no tags AND status=approved — the enrichment backfill
-// drain target. The deterministic ingest pipeline inserts events with
+// reviewQueue + approveBatch removed — total automation, no human review.
+
+// ── Geocoding (Mapbox) ───────────────────────────────────────────────
+// Lookup cached coords for an address; returns null on miss. Used by
+// the geocodeEventAction below so the mutation half of the
+// query-write cycle stays cheap.
+export const geocodeCacheLookup = internalQuery({
+  args: { normalizedAddress: v.string() },
+  handler: async (ctx, { normalizedAddress }) => {
+    return await ctx.db
+      .query("geocodeCache")
+      .withIndex("by_normalized", (q) =>
+        q.eq("normalizedAddress", normalizedAddress),
+      )
+      .unique()
+  },
+})
+
+export const geocodeCacheUpsert = internalMutation({
+  args: {
+    normalizedAddress: v.string(),
+    lat: v.number(),
+    lng: v.number(),
+    placeName: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("geocodeCache")
+      .withIndex("by_normalized", (q) =>
+        q.eq("normalizedAddress", args.normalizedAddress),
+      )
+      .unique()
+    const now = Date.now()
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        lat: args.lat,
+        lng: args.lng,
+        placeName: args.placeName,
+        fetchedAt: now,
+      })
+    } else {
+      await ctx.db.insert("geocodeCache", { ...args, fetchedAt: now })
+    }
+  },
+})
+
+export const patchEventCoords = internalMutation({
+  args: { eventId: v.id("events"), lat: v.number(), lng: v.number() },
+  handler: async (ctx, { eventId, lat, lng }) => {
+    await ctx.db.patch(eventId, { lat, lng })
+  },
+})
+
+// Cache-first geocode pass. Reads `geocodeCache` for the event's
+// normalized address; on miss, calls Mapbox (bbox-scoped to
+// Miami-Dade), writes the cache, patches the event. No-ops when the
+// event already has lat/lng OR when MAPBOX_TOKEN isn't configured.
+export const geocodeEventAction = internalAction({
+  args: { eventId: v.id("events") },
+  handler: async (ctx, { eventId }): Promise<void> => {
+    const event = await ctx.runQuery(api.events.get, { id: eventId })
+    if (!event) return
+    if (typeof event.lat === "number" && typeof event.lng === "number") return
+    // Build the best query string we can from what the event carries.
+    // Address wins (most specific), then "Venue, Miami, FL", then the
+    // venue name alone. Anything shorter than ~4 chars is skipped to
+    // avoid burning Mapbox calls on noise.
+    const candidates: Array<string> = []
+    if (event.locationAddress && event.locationAddress.length >= 5) {
+      candidates.push(event.locationAddress)
+    }
+    if (event.locationName && event.locationName.length >= 3) {
+      candidates.push(`${event.locationName}, Miami, FL`)
+      candidates.push(event.locationName)
+    }
+    if (candidates.length === 0) return
+    const { geocodeViaMapbox, normalizeAddress } = await import("./lib/geocode")
+    for (const query of candidates) {
+      const normalized = normalizeAddress(query)
+      const cached = await ctx.runQuery(
+        internal.events.geocodeCacheLookup,
+        { normalizedAddress: normalized },
+      )
+      if (cached) {
+        await ctx.runMutation(internal.events.patchEventCoords, {
+          eventId,
+          lat: cached.lat,
+          lng: cached.lng,
+        })
+        return
+      }
+      const result = await geocodeViaMapbox(query)
+      if (!result) continue
+      await ctx.runMutation(internal.events.geocodeCacheUpsert, {
+        normalizedAddress: normalized,
+        lat: result.lat,
+        lng: result.lng,
+        placeName: result.placeName,
+      })
+      await ctx.runMutation(internal.events.patchEventCoords, {
+        eventId,
+        lat: result.lat,
+        lng: result.lng,
+      })
+      return
+    }
+  },
+})
+
+// One-shot backfill: enqueue geocodeEventAction for every existing
+// event missing lat/lng but with something a geocoder can use.
+// Bounded by `limit` so a single tick doesn't try to schedule
+// thousands of actions; safe to re-run.
+export const backfillEventGeocoding = internalAction({
+  args: { limit: v.optional(v.number()) },
+  handler: async (
+    ctx,
+    { limit },
+  ): Promise<{ scheduled: number; scanned: number }> => {
+    return await ctx.runMutation(
+      internal.events.backfillEventGeocodingMut,
+      { limit: limit ?? 100 },
+    )
+  },
+})
+
+// Diagnostic — what events do we still have without coords?
+export const ungeocodedEvents = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const events = await ctx.db
+      .query("events")
+      .withIndex("by_status_published", (q) => q.eq("status", "approved"))
+      .order("desc")
+      .take(1500)
+    return events
+      .filter((e) => typeof e.lat !== "number")
+      .map((e) => ({
+        title: e.title.slice(0, 80),
+        locationName: e.locationName ?? null,
+        locationAddress: e.locationAddress ?? null,
+      }))
+  },
+})
+
+export const backfillEventGeocodingMut = internalMutation({
+  args: { limit: v.number() },
+  handler: async (ctx, { limit }) => {
+    const events = await ctx.db
+      .query("events")
+      .withIndex("by_status_published", (q) => q.eq("status", "approved"))
+      .order("desc")
+      .take(1500)
+    let scheduled = 0
+    let scanned = 0
+    for (const e of events) {
+      if (scheduled >= limit) break
+      scanned += 1
+      if (typeof e.lat === "number" && typeof e.lng === "number") continue
+      const hasUsableLocation =
+        (e.locationAddress && e.locationAddress.length >= 5) ||
+        (e.locationName && e.locationName.length >= 3)
+      if (!hasUsableLocation) continue
+      // Stagger by 500ms so we don't burst the Mapbox endpoint when
+      // the cache is cold.
+      await ctx.scheduler.runAfter(
+        scheduled * 500,
+        internal.events.geocodeEventAction,
+        { eventId: e._id },
+      )
+      scheduled += 1
+    }
+    return { scheduled, scanned }
+  },
+})
+
 // empty tags; this query feeds the cron + the manual drain.
 export const needingEnrichment = query({
   args: { limit: v.optional(v.number()) },
@@ -1442,7 +2140,6 @@ export const update = mutation({
       price: v.optional(v.string()),
       sectionId: v.optional(v.id("sections")),
       tags: v.optional(v.array(v.string())),
-      relatedArticleIds: v.optional(v.array(v.id("articles"))),
       relatedEventIds: v.optional(v.array(v.id("events"))),
     }),
   },
@@ -1534,20 +2231,110 @@ export const insertExtracted = internalMutation({
     agentSlug: v.string(),
     agentRunId: v.id("agentRuns"),
     derivedFromItems: v.array(v.id("ingestedItems")),
+    /** Classifier confidence (0..1) forwarded from agents.ts.
+     *  Defaults to 0.5 when omitted — matches the "no signal"
+     *  midpoint so existing callers without classifier hookup get a
+     *  neutral baseline. */
+    classifierConfidence: v.optional(v.number()),
+    classifierReason: v.optional(v.string()),
   },
-  handler: async (ctx, { event, agentSlug, agentRunId, derivedFromItems }) => {
-    // Dedup: same normalized-title + same-day = same event. When a
-    // matching row already exists, fold the new source's citation +
-    // derivedFromItems into the existing row and return its id
-    // instead of inserting a duplicate.
+  handler: async (
+    ctx,
+    {
+      event,
+      agentSlug,
+      agentRunId,
+      derivedFromItems,
+      classifierConfidence,
+      classifierReason,
+    },
+  ) => {
+    // Normalize SHOUTING titles before dedup or insert. We only
+    // rewrite when the title's letter content is fully uppercase —
+    // intentionally-cased copy passes through untouched. Run before
+    // dedup keys so the normalized title also drives the series /
+    // dedupe matching, otherwise the same event in shouty vs proper
+    // case would dedupe as two different rows.
+    event = { ...event, title: maybeTitleCase(event.title) }
+
+    // Dedup, three-pass:
+    //   0. Series key: normalized-title + normalized-venue, no date.
+    //      Catches recurring exhibits running across many days that
+    //      pass 1 splits into N separate rows. On a hit we keep the
+    //      earliest-upcoming row and roll the new showing into it.
+    //   1. Primary key: normalized-title + same-day. Cheap, indexed.
+    //   2. Fallback: same-day candidates scored on URL canon + venue
+    //      + ±60min + title overlap. Catches near-duplicates whose
+    //      titles diverge ("Heat vs. Bucks" / "Miami Heat — game day").
+    // When any pass finds a match, the new source's citations +
+    // derivedFromItems get folded into the existing row.
+    const seriesKey = eventSeriesKey({
+      title: event.title,
+      locationName: event.locationName,
+    })
+    let existing: Doc<"events"> | null = null
+    let seriesMatch = false
+    if (seriesKey) {
+      const candidates = await ctx.db
+        .query("events")
+        .withIndex("by_series_key", (q) => q.eq("seriesKey", seriesKey))
+        .take(20)
+      const nowMs = Date.now()
+      // Prefer the earliest still-upcoming row in the series; that's the
+      // "next showing" the homepage card should point at.
+      const upcoming = candidates
+        .filter((c) => c.startsAt >= nowMs - 24 * 3_600_000)
+        .sort((a, b) => a.startsAt - b.startsAt)
+      if (upcoming.length > 0) {
+        existing = upcoming[0]
+        seriesMatch = true
+      }
+    }
     const dedupeKey = eventDedupeKey({
       title: event.title,
       startsAt: event.startsAt,
     })
-    const existing = await ctx.db
-      .query("events")
-      .withIndex("by_dedupe_key", (q) => q.eq("dedupeKey", dedupeKey))
-      .first()
+    if (!existing) {
+      existing = await ctx.db
+        .query("events")
+        .withIndex("by_dedupe_key", (q) => q.eq("dedupeKey", dedupeKey))
+        .first()
+    }
+    if (!existing) {
+      // Pass 2 — same-day candidate scan. Bound the window to ±18h
+      // so we don't load the whole table. Scans all statuses (not just
+      // approved) so a pending_review row from one source still folds
+      // an incoming approved row from another, matching Pass 0/1's
+      // status-agnostic behavior.
+      const dayStart = event.startsAt - 18 * 3_600_000
+      const dayEnd = event.startsAt + 18 * 3_600_000
+      const sameDay = await ctx.db
+        .query("events")
+        .withIndex("by_starts", (q) =>
+          q.gte("startsAt", dayStart).lt("startsAt", dayEnd),
+        )
+        .take(80)
+      for (const cand of sameDay) {
+        const score = similarityScore(
+          {
+            title: event.title,
+            startsAt: event.startsAt,
+            locationName: event.locationName,
+            url: event.url,
+          },
+          {
+            title: cand.title,
+            startsAt: cand.startsAt,
+            locationName: cand.locationName,
+            url: cand.url,
+          },
+        )
+        if (score >= 0.7) {
+          existing = cand
+          break
+        }
+      }
+    }
     if (existing) {
       const mergedCitations = [
         ...(existing.citations ?? []),
@@ -1566,10 +2353,24 @@ export const insertExtracted = internalMutation({
           ...derivedFromItems.map((i) => i as unknown as string),
         ]),
       ) as unknown as Array<Id<"ingestedItems">>
-      await ctx.db.patch(existing._id, {
+      const patch: Partial<Doc<"events">> = {
         citations: dedupedCitations,
         derivedFromItems: mergedItems,
-      })
+      }
+      // Series merge: if the existing row's next showing is later than
+      // the incoming one, advance the card to the earlier date so the
+      // homepage points at the soonest upcoming showing. End time
+      // tracks the new showing too. Backfill the seriesKey on the row
+      // if it never had one (older inserts before this field existed).
+      if (seriesMatch && event.startsAt < existing.startsAt) {
+        patch.startsAt = event.startsAt
+        patch.endsAt = event.endsAt
+        patch.allDay = event.allDay
+      }
+      if (seriesKey && existing.seriesKey !== seriesKey) {
+        patch.seriesKey = seriesKey
+      }
+      await ctx.db.patch(existing._id, patch)
       return existing._id
     }
 
@@ -1595,9 +2396,26 @@ export const insertExtracted = internalMutation({
       }
     }
 
-    // Self-approve — every desk-extracted event goes live immediately.
-    // Same trust-the-pipeline tradeoff as articles. Re-runs that
-    // extract the same event fold via the dedup pass.
+    // Total automation — every event auto-approves. Quality score
+    // still computed and stored so ranking + a future low-confidence
+    // filter can act on it, but no human review step.
+    const quality = scoreEventQuality({
+      title: event.title,
+      dek: event.dek,
+      description: event.description,
+      body: event.body,
+      startsAt: event.startsAt,
+      endsAt: event.endsAt,
+      allDay: event.allDay,
+      locationName: event.locationName,
+      locationAddress: event.locationAddress,
+      price: event.price,
+      url: event.url,
+      hasCoords: typeof lat === "number" && typeof lng === "number",
+      classifierConfidence: classifierConfidence ?? 0.5,
+    })
+    const status = "approved" as const
+    void quality.autoApprove
     const now = Date.now()
     const id = await ctx.db.insert("events", {
       ...event,
@@ -1613,17 +2431,23 @@ export const insertExtracted = internalMutation({
         event.dek,
         event.body,
       ),
-      status: "approved",
-      publishedAt: now,
+      status,
+      publishedAt: status === "approved" ? now : undefined,
       agentSlug,
       agentRunId,
       derivedFromItems,
       createdAt: now,
       dedupeKey,
+      seriesKey: seriesKey ?? undefined,
+      qualityScore: quality.score,
+      classifierReason,
     })
-    // Schedule both auto-translation (ES) and auto-enrichment (tags +
-    // neighborhood). Both are Haiku-budgeted; if the daily cap is hit
-    // they silently no-op and the bulk drain crons catch up next day.
+    // Schedule auto-translation (ES), auto-enrichment (tags +
+    // neighborhood), and geocoding. All three are budgeted; if the
+    // daily cap is hit they silently no-op and the bulk drain crons
+    // catch up next day. Geocoding only fires when the event has an
+    // address AND no lat/lng yet (insertExtracted may have already
+    // filled them in from the neighborhood centroid).
     await ctx.scheduler.runAfter(
       60_000,
       internal.events.translateEventAction,
@@ -1634,6 +2458,13 @@ export const insertExtracted = internalMutation({
       internal.events.enrichEventAction,
       { eventId: id },
     )
+    if (event.locationAddress && event.locationAddress.length >= 5) {
+      await ctx.scheduler.runAfter(
+        30_000,
+        internal.events.geocodeEventAction,
+        { eventId: id },
+      )
+    }
     return id
   },
 })

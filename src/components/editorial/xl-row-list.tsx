@@ -1,14 +1,10 @@
 import { Link } from "@tanstack/react-router"
 
 import { HeroCaption } from "./hero-caption"
-import { StoryItem } from "./story-item"
-import type { StoryCardItem } from "@/lib/article-types"
-import { isEventCard } from "@/lib/article-types"
+import { EventCard } from "./event-card"
+import type { EventWithRelations } from "@/lib/article-types"
 import { HeroImg } from "@/components/site/hero-img"
-import {
-  useOpenArticleDrawer,
-  useOpenEventDrawer,
-} from "@/lib/use-open-article-drawer"
+import { useOpenEventDrawer } from "@/lib/use-open-article-drawer"
 
 // Stacked "table" rows from the homepage's main column extracted as a
 // reusable block. Each row is text 5 cols (left) + image 7 cols (right);
@@ -16,33 +12,24 @@ import {
 // gives the page its newspaper grid cadence.
 //
 // Used by section / tag / author pages below the hero. Items without
-// images render text-only across all 12 cols of their row. Accepts
-// either article or event records (events-only pivot, Phase 2).
+// images render text-only across all 12 cols of their row.
 export function XlRowList({
-  articles,
+  events,
   showDek = true,
 }: {
-  articles: Array<StoryCardItem>
+  events: Array<EventWithRelations>
   showDek?: boolean
 }) {
-  const openArticleInDrawer = useOpenArticleDrawer()
   const openEventInDrawer = useOpenEventDrawer()
   return (
     <div className="flex flex-col">
-      {articles.map((a, i) => {
-        const isEvent = isEventCard(a)
+      {events.map((a, i) => {
         const slug = a.slug ?? ""
-        const linkProps = isEvent
-          ? ({
-              to: "/event/$slug" as const,
-              params: { slug },
-              onClick: (e: React.MouseEvent) => openEventInDrawer(slug, e),
-            } as const)
-          : ({
-              to: "/article/$slug" as const,
-              params: { slug },
-              onClick: (e: React.MouseEvent) => openArticleInDrawer(slug, e),
-            } as const)
+        const linkProps = {
+          to: "/event/$slug" as const,
+          params: { slug },
+          onClick: (e: React.MouseEvent) => openEventInDrawer(slug, e),
+        } as const
         return (
           <div
             key={a._id}
@@ -72,8 +59,8 @@ export function XlRowList({
                   ) : null}
                 </Link>
                 <div className="flex flex-col md:col-span-5 md:col-start-1 md:row-start-1">
-                  <StoryItem
-                    article={a}
+                  <EventCard
+                    event={a}
                     layout="text-only"
                     size="lead"
                     showDek={showDek}
@@ -82,8 +69,8 @@ export function XlRowList({
               </>
             ) : (
               <div className="md:col-span-12">
-                <StoryItem
-                  article={a}
+                <EventCard
+                  event={a}
                   layout="text-only"
                   size="lead"
                   showDek={showDek}

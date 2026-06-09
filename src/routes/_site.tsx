@@ -1,13 +1,11 @@
 import { Outlet, createFileRoute } from "@tanstack/react-router"
 
-import { ArticleDrawer } from "@/components/site/article-drawer"
-import { EventDrawer } from "@/components/site/event-drawer"
+import { EventModal } from "@/components/site/event-modal"
 import { Footer } from "@/components/site/footer"
 import { Masthead } from "@/components/site/masthead"
 import { SearchCommandProvider } from "@/components/site/search-command"
 
 type SiteSearch = {
-  article?: string
   event?: string
   /** View-mode override (Newspaper / List / Month / Map). Persisted
    *  via ViewModeProvider in localStorage; this param wins when
@@ -19,10 +17,6 @@ type SiteSearch = {
 
 export const Route = createFileRoute("/_site")({
   validateSearch: (search: Record<string, unknown>): SiteSearch => ({
-    article:
-      typeof search.article === "string" && search.article.length > 0
-        ? search.article
-        : undefined,
     event:
       typeof search.event === "string" && search.event.length > 0
         ? search.event
@@ -51,8 +45,7 @@ function SiteLayout() {
           <Outlet />
         </main>
         <Footer />
-        <ArticleDrawer />
-        <EventDrawer />
+        <EventModal />
       </div>
     </SearchCommandProvider>
   )

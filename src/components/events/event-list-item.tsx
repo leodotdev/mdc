@@ -3,10 +3,13 @@ import { ExternalLink, MapPin } from "lucide-react"
 
 import type { EventWithSection } from "@/lib/event-helpers"
 import { useTranslation } from "@/lib/i18n/context"
-import { formatEventTime } from "@/lib/event-helpers"
+import {
+  effectiveStartsAt,
+  formatEventShortDate,
+  formatEventTime,
+} from "@/lib/event-helpers"
 import { localizedEvent } from "@/lib/localized-event"
 import { HeroImg } from "@/components/site/hero-img"
-import { useOpenArticleDrawer } from "@/lib/use-open-article-drawer"
 
 // Compact event row used in list views (homepage right column, /events list,
 // neighborhood + section page rails). Section-tinted kicker, time + location meta line,
@@ -14,7 +17,6 @@ import { useOpenArticleDrawer } from "@/lib/use-open-article-drawer"
 export function EventListItem({ event: rawEvent }: { event: EventWithSection }) {
   const { lang } = useTranslation()
   const event = localizedEvent(rawEvent, lang)
-  const openInDrawer = useOpenArticleDrawer()
   const heroImage = event.heroImage
   const neighborhoodLabel = event.neighborhoods?.[0]
   const location = [event.locationName, neighborhoodLabel]
@@ -58,9 +60,19 @@ export function EventListItem({ event: rawEvent }: { event: EventWithSection }) 
           event.title
         )}
       </h3>
+      {/* Meta strip mirrors EventCard: date · time · venue ·
+          price. effectiveStartsAt shifts recurring rows to the next
+          upcoming instance so a weekly trivia night doesn't display
+          last Tuesday. */}
       <div className="meta flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs">
-        <time dateTime={new Date(event.startsAt).toISOString()}>
-          {formatEventTime(event)}
+        <time
+          dateTime={new Date(effectiveStartsAt(event)).toISOString()}
+          className="font-medium text-foreground"
+        >
+          {formatEventShortDate(effectiveStartsAt(event))}
+          {event.allDay
+            ? ""
+            : ` · ${formatEventTime({ ...event, startsAt: effectiveStartsAt(event) })}`}
         </time>
         {location ? (
           <span className="inline-flex items-center gap-1">
@@ -94,16 +106,7 @@ export function EventListItem({ event: rawEvent }: { event: EventWithSection }) 
           </a>
         ) : null
       })()}
-      {event.article ? (
-        <Link
-          to="/article/$slug"
-          params={{ slug: event.article.slug }}
-          onClick={(e) => openInDrawer(event.article!.slug, e)}
-          className="meta inline-flex items-center gap-1 text-xs text-foreground transition-colors hover:text-primary hover:underline"
-        >
-          Related article →
-        </Link>
-      ) : null}
+      {/* Related-article link removed with the article-era purge. */}
     </div>
   )
   return (

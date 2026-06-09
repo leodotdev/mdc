@@ -10,10 +10,9 @@ import { useEffect } from "react"
 import { api } from "../../../convex/_generated/api"
 import { neighborhoodName } from "../../../convex/lib/neighborhoods"
 import { compareByImportance } from "../../../convex/lib/scoring"
-import { TrendingStrip } from "@/components/editorial/trending-strip"
 import { PageHeader } from "@/components/editorial/page-header"
 import { SectionHeaderCell } from "@/components/editorial/section-header-cell"
-import { StoryItem } from "@/components/editorial/story-item"
+import { EventCard } from "@/components/editorial/event-card"
 import { CalendarMonth } from "@/components/editorial/calendar-month"
 import { EventsMap } from "@/components/editorial/events-map"
 import { EventListView } from "@/components/editorial/event-list-view"
@@ -49,7 +48,7 @@ export const Route = createFileRoute("/_site/neighborhood/$slug")({
         }),
       ),
       context.queryClient.ensureQueryData(
-        convexQuery(api.events.byNeighborhood, {
+        convexQuery(api.events.popularByNeighborhood, {
           slug: params.slug,
           limit: 5,
         }),
@@ -101,7 +100,7 @@ function NeighborhoodPage() {
         }
       : { title: a.title, heroCaption: a.heroCaption }
 
-  // Single source for stories — neighborhoods don't have a separate
+  // Single source for events — neighborhoods don't have a separate
   // importance-ranked query the way sections do, so we re-sort the
   // chronological list client-side using the same comparator the section
   // page's `topInSection` uses on the server.
@@ -112,7 +111,7 @@ function NeighborhoodPage() {
     }),
   )
   const { data: events } = useSuspenseQuery(
-    convexSuspenseQuery(api.events.byNeighborhood, {
+    convexSuspenseQuery(api.events.popularByNeighborhood, {
       slug,
       limit: 5,
     }),
@@ -123,7 +122,7 @@ function NeighborhoodPage() {
       <div className="flex flex-col gap-10">
         <PageHeader
           title={name}
-          dek={`Stories and events tied to ${name}.`}
+          dek={`Events tied to ${name}.`}
         />
         <div className="font-editorial mt-12 max-w-2xl text-lg text-muted-foreground">
           <p>Nothing tagged {name} yet.</p>
@@ -154,7 +153,7 @@ function NeighborhoodPage() {
     compareByImportance(asScorable(a), asScorable(b), now),
   )
 
-  // Dedupe across the page so the same story doesn't appear twice in
+  // Dedupe across the page so the same event doesn't appear twice in
   // different blocks. Mirrors the section/homepage `take` pattern exactly.
   const used = new Set<string>()
   const take = (
@@ -179,8 +178,6 @@ function NeighborhoodPage() {
 
   const morelead = take(allPool, 1)[0]
   const moreRail = take(allPool, 4)
-
-  const trending = ranked.slice(0, 4)
 
   const longTail = list
     .filter((a) => !used.has(a._id as string))
@@ -218,7 +215,7 @@ function NeighborhoodPage() {
     <div className="flex flex-col gap-10">
       <PageHeader
         title={name}
-        dek={`Stories and events tied to ${name}.`}
+        dek={`Events tied to ${name}.`}
       />
 
       {/* ════════════════════ TOP HERO TABLE ════════════════════ */}
@@ -248,8 +245,8 @@ function NeighborhoodPage() {
               ) : null}
               <div className="flex flex-col divide-y divide-foreground/15 md:col-span-5 md:col-start-1 md:row-start-1">
                 <div className="pb-5">
-                  <StoryItem
-                    article={lead}
+                  <EventCard
+                    event={lead}
                     layout="text-only"
                     size="lead"
                     showDek
@@ -258,8 +255,8 @@ function NeighborhoodPage() {
                 </div>
                 {leadStack[0] ? (
                   <div className="py-5">
-                    <StoryItem
-                      article={leadStack[0]}
+                    <EventCard
+                      event={leadStack[0]}
                       layout="text-only"
                       size="compact"
                       showKicker={false}
@@ -268,8 +265,8 @@ function NeighborhoodPage() {
                 ) : null}
                 {leadStack[1] ? (
                   <div className="pt-5">
-                    <StoryItem
-                      article={leadStack[1]}
+                    <EventCard
+                      event={leadStack[1]}
                       layout="text-only"
                       size="compact"
                       showKicker={false}
@@ -305,8 +302,8 @@ function NeighborhoodPage() {
                 </Link>
               ) : null}
               <div className="flex flex-col md:col-span-5 md:col-start-1 md:row-start-1">
-                <StoryItem
-                  article={a}
+                <EventCard
+                  event={a}
                   layout="text-only"
                   size="lead"
                   showDek
@@ -320,7 +317,7 @@ function NeighborhoodPage() {
         {/* Right rail — events scoped to this neighborhood. */}
         <aside className="lg:col-span-3 lg:border-l lg:border-foreground/15 lg:pl-6">
           <SectionHeaderCell
-            title={`${name} ${t("nav.events").toLowerCase()}`}
+            title={t("rail.popularIn").replace("{name}", name)}
             accent={NEIGHBORHOOD_ACCENT}
           />
           <div className="flex flex-col divide-y divide-foreground/15">
@@ -341,7 +338,7 @@ function NeighborhoodPage() {
 
       <BannerAd slot={`neighborhood-${slug}-mid`} className={BLOCK} />
 
-      {/* ════════════════════ More Top Stories ════════════════════ */}
+      {/* ════════════════════ More upcoming events ════════════════════ */}
       {morelead ? (
         <section className={BLOCK}>
           <SectionHeaderCell
@@ -372,8 +369,8 @@ function NeighborhoodPage() {
                   </Link>
                 ) : null}
                 <div className="flex flex-col md:col-span-5 md:col-start-1 md:row-start-1">
-                  <StoryItem
-                    article={morelead}
+                  <EventCard
+                    event={morelead}
                     layout="text-only"
                     size="lead"
                     showDek
@@ -394,8 +391,8 @@ function NeighborhoodPage() {
                         : "py-4"
                   }
                 >
-                  <StoryItem
-                    article={a}
+                  <EventCard
+                    event={a}
                     layout="text-only"
                     size="compact"
                     showKicker={false}
@@ -407,15 +404,6 @@ function NeighborhoodPage() {
         </section>
       ) : null}
 
-      {/* ════════════════════ Trending ════════════════════ */}
-      {trending.length > 0 ? (
-        <section className={BLOCK}>
-          <TrendingStrip
-            label={`${t("home.trending")} · ${name}`}
-            articles={trending}
-          />
-        </section>
-      ) : null}
 
       {/* ════════════════════ Long-tail grid ════════════════════
           No cell borders — just gap-separated image-top cards. */}
@@ -427,10 +415,10 @@ function NeighborhoodPage() {
             className="mb-6"
           />
           <div className="grid gap-x-6 gap-y-10 md:grid-cols-2 lg:grid-cols-3">
-            {longTail.map((article) => (
-              <StoryItem
-                key={article._id}
-                article={article}
+            {longTail.map((event) => (
+              <EventCard
+                key={event._id}
+                event={event}
                 layout="image-top"
                 size="compact"
                 imageAspect="16/9"

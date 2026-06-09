@@ -112,8 +112,8 @@ async function extractImagesFromPage(url: string): Promise<Array<string>> {
 
 // Wikimedia Commons fallback — no key required. Indexes a large pool
 // of public-domain / CC-licensed photos, especially strong for local
-// civic, political, landmark, and museum imagery — the kind of subject
-// matter newspaper-style stories tend to need.
+// civic, landmark, and museum imagery — the kind of subject matter
+// our event hero search tends to need.
 async function searchWikimediaMany(
   query: string,
   count: number,

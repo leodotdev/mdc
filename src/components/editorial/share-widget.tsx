@@ -11,12 +11,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 
-// Single Share dropdown — ghost trigger to sit flush in the story
-// layout's meta strip alongside the date (and `<AddToCalendar>` on
-// events). Items are rendered as platform intents that open in a new
-// tab; "Copy link" lives at the bottom of the menu and toasts a
-// confirmation. Currently-active URL is read lazily on click so the
-// trigger can render server-side without a `window` reference.
+// Single Share dropdown — ghost trigger to sit flush in the event
+// layout's meta strip alongside the date (and `<AddToCalendar>`).
+// Items are rendered as platform intents that open in a new tab;
+// "Copy link" lives at the bottom of the menu and toasts a confirmation.
+// Currently-active URL is read lazily on click so the trigger can
+// render server-side without a `window` reference.
 
 type Platform = {
   key: string

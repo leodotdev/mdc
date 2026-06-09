@@ -46,9 +46,7 @@ export function SubNav() {
 
   return (
     <nav aria-label={`${parent.name} sub-sections`} className="py-2">
-      {/* Same dim-on-sibling-hover behavior as the main nav: hovering an
-          inactive sub-section dims the rest, active item never dims. */}
-      <ul className="flex flex-wrap items-center justify-center gap-x-1 gap-y-1 [&:has([data-nav-state=inactive]:hover)_[data-nav-state=inactive]:not(:hover)]:opacity-70">
+      <ul className="flex flex-wrap items-center justify-center gap-x-1 gap-y-1">
         {children.map((s) => {
           const active = s._id === current._id
           return (

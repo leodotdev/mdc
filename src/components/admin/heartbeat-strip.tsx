@@ -106,7 +106,7 @@ export function HeartbeatStrip() {
             </p>
             <p className="font-sans text-base font-semibold tabular-nums leading-tight">
               {summary.itemsConsidered}→{summary.draftsCreated}
-              <span className="meta ml-1 text-sm font-normal">stories</span>
+              <span className="meta ml-1 text-sm font-normal">events</span>
             </p>
           </div>
         ) : null}

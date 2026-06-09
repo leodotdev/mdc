@@ -29,21 +29,16 @@ export type RawItem = {
   price?: string
 }
 
+export type AdapterType =
+  | "ics"
+  | "events-html"
+  | "sitemap-events"
+  | "miami-new-times"
+  | "llm-extract"
+  | "browser-extract"
+
 export type SourceForAdapter = {
-  type:
-    | "rss"
-    | "reddit"
-    | "youtube"
-    | "x"
-    | "bluesky"
-    | "web"
-    | "wikipedia-otd"
-    | "ics"
-    | "events-html"
-    | "sitemap-events"
-    | "miami-new-times"
-    | "llm-extract"
-    | "data"
+  type: AdapterType
   url: string
   config?: unknown
 }

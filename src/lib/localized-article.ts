@@ -1,40 +1,11 @@
-import type {
-  ArticleWithRelations,
-  EventWithRelations,
-} from "@/lib/article-types"
-import { isEventCard } from "@/lib/article-types"
+// Localized-card helpers. Post-article-purge there's only one shape
+// (event), so localizedCard is just a re-export of localizedEvent.
+// File kept under its old name so the dozens of consumers don't have
+// to all rename their imports in the same commit.
+
+import type { EventWithRelations } from "@/lib/article-types"
 import type { Lang } from "@/lib/i18n/strings"
 
-// Swap an article's user-facing copy (title / dek / body / heroCaption)
-// to the requested language's stored translation when available. Falls
-// back to the EN original whenever the ES variant is missing — so a
-// just-published story whose ES translation hasn't run yet still
-// renders, instead of disappearing on the lang switch.
-//
-// Usage:
-//   const { t } = useTranslation()
-//   const a = localizedArticle(article, lang)
-//   <h2>{a.title}</h2>
-export function localizedArticle<T extends ArticleWithRelations>(
-  article: T,
-  lang: Lang,
-): T {
-  if (lang === "en") return article
-  const tr = article.translations?.es
-  if (!tr) return article
-  return {
-    ...article,
-    title: tr.title,
-    dek: tr.dek,
-    body: tr.body,
-    heroCaption: tr.heroCaption ?? article.heroCaption,
-  }
-}
-
-// Event version — `dek` is now the only translated body field.
-// `description` is still on the translation shape for legacy rows
-// (it'll be removed in a future narrow); when present, it acts as a
-// fallback for events whose dek hasn't been backfilled yet.
 export function localizedEvent<T extends EventWithRelations>(
   event: T,
   lang: Lang,
@@ -53,13 +24,11 @@ export function localizedEvent<T extends EventWithRelations>(
   }
 }
 
-// Polymorphic helper for newspaper-style cards that may render either
-// an article OR an event. Detects kind via `isEventCard` and routes
-// to the right localizer.
-import type { StoryCardItem } from "@/lib/article-types"
-export function localizedCard<T extends StoryCardItem>(item: T, lang: Lang): T {
-  if (isEventCard(item)) {
-    return localizedEvent(item, lang) as T
-  }
-  return localizedArticle(item, lang) as T
+// Card alias — every card on the public site is an event now, so
+// localizedCard just forwards to localizedEvent.
+export function localizedCard<T extends EventWithRelations>(
+  item: T,
+  lang: Lang,
+): T {
+  return localizedEvent(item, lang) as T
 }

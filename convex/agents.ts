@@ -2,15 +2,17 @@ import { v } from "convex/values"
 import { api, internal } from "./_generated/api"
 import { action, internalAction } from "./_generated/server"
 import { fetchItems } from "./lib/adapters"
+import { extract } from "./lib/extract"
 import { estimatedCallCents } from "./lib/budget"
 import { cronsEnabled } from "./lib/cronGate"
 import { requireEditorInAction } from "./lib/guard"
 import { isPrivateAudience } from "./lib/audienceFilter"
+import { classifyEvent } from "./lib/classify"
 import { firstSentence } from "./lib/firstSentence"
 import { defaultFreeForSourceUrl } from "./lib/priceExtract"
 import type { Id } from "./_generated/dataModel"
 
-// Tags that add no signal (every story is local to Miami-Dade by definition).
+// Tags that add no signal (every event is local to Miami-Dade by definition).
 // Stripped from every draft before insert so they never reach the public site
 // even if the LLM ignores the prompt instruction.
 // Stored in canonical (post-`normalizeTag`) form so the lookup is a
@@ -36,7 +38,7 @@ export function normalizeTag(input: string): string {
 
 // Apply `normalizeTag` to every entry, drop empties + duplicates +
 // known-redundant terms (Miami-Dade etc. — covered by the section
-// metadata, no need to tag every story with them).
+// metadata, no need to tag every event with them).
 export function cleanTags(tags: ReadonlyArray<string>): Array<string> {
   const seen = new Set<string>()
   const out: Array<string> = []
@@ -101,10 +103,16 @@ const MEGA_DEFAULT_LOOKBACK_HOURS = 12
 // degrade — events still ingest with empty tags / no ES when the cap
 // hits; next day's backfill catches up.
 export const runEventIngestInternal = internalAction({
-  args: { lookbackHoursOverride: v.optional(v.number()) },
+  args: {
+    lookbackHoursOverride: v.optional(v.number()),
+    /** When true, skip the per-source fetch loop and only drain the
+     *  queue → events. Cron uses this after `refreshOneSource` runs
+     *  for each source (#fix-oom). */
+    skipSourceFetch: v.optional(v.boolean()),
+  },
   handler: async (
     ctx,
-    { lookbackHoursOverride },
+    { lookbackHoursOverride, skipSourceFetch },
   ): Promise<{
     runId: Id<"agentRuns"> | null
     itemsConsidered: number
@@ -135,17 +143,27 @@ export const runEventIngestInternal = internalAction({
     try {
       // 1. Refresh every enabled source. Same logic as the mega-desk —
       //    network IO only, no LLM, so we always tick every source.
+      //    Skipped when called via the cron drain path, since
+      //    refreshOneSource has already done the per-source fetches.
       const sources = await ctx.runQuery(internal.sourcesData.listInternal, {})
       const enabled = sources.filter((s) => s.enabled)
       const sourceById = new Map(enabled.map((s) => [s._id as string, s]))
-      await log(`Refreshing ${enabled.length} sources`)
-      for (const src of enabled) {
-        if (src.type === "data") continue
-        // llm-extract sources cost ~$0.005 per fetch — reserve from
-        // the daily LLM budget before invoking Haiku. When the cap is
-        // hit, skip the fetch for this tick; the row stays in place
-        // and the next tick (tomorrow's budget) will pick it back up.
-        if (src.type === "llm-extract") {
+      if (skipSourceFetch) {
+        await log(`Skipping source fetch (drain mode)`)
+      } else {
+        await log(`Refreshing ${enabled.length} sources`)
+      }
+      const fetchLoop = skipSourceFetch ? [] : enabled
+      for (const src of fetchLoop) {
+        // llm-extract / browser-extract sources cost ~$0.005 per fetch
+        // (Haiku) — reserve from the daily LLM budget before invoking
+        // the model. When the cap is hit, skip the fetch for this
+        // tick; the row stays in place and the next tick (tomorrow's
+        // budget) will pick it back up.
+        if (
+          src.type === "llm-extract" ||
+          src.type === "browser-extract"
+        ) {
           const reservation = await ctx.runMutation(
             internal.budget.reserve,
             {
@@ -195,14 +213,29 @@ export const runEventIngestInternal = internalAction({
       itemsConsidered = candidates.length
       await log(`Selected ${candidates.length} unconsumed items`)
 
-      // 3. Section fallback when the source declared no sectionIds.
+      // 3. Section assignment is now content-driven (see lib/classify.ts).
+      // Build a slug → id lookup so the classifier's slug result can be
+      // resolved without re-querying for each event.
       const allSections = await ctx.runQuery(api.sections.list, {})
+      const sectionIdBySlug = new Map<string, Id<"sections">>()
+      for (const s of allSections) {
+        sectionIdBySlug.set(s.slug, s._id)
+      }
       const fallbackSectionId =
-        allSections.find((s) => s.slug === "politics")?._id ??
+        sectionIdBySlug.get("local") ??
+        sectionIdBySlug.get("politics") ??
         allSections[0]?._id
       if (!fallbackSectionId) {
         throw new Error("No sections configured — cannot insert events")
       }
+      // DB-backed taxonomy overrides (one query per ingest pass).
+      // Editors curate venues / hosts / keywords / audience blocks from
+      // /admin/taxonomy without redeploying; classifyEvent and
+      // isPrivateAudience layer these over their hardcoded baselines.
+      const taxonomy = await ctx.runQuery(internal.taxonomy.snapshot, {})
+      const audienceBlockPatterns = taxonomy.audienceBlocks.map(
+        (a) => a.pattern,
+      )
 
       const consumedIds: Array<Id<"ingestedItems">> = []
       for (const c of candidates) {
@@ -223,18 +256,44 @@ export const runEventIngestInternal = internalAction({
         // are the main offenders; see lib/audienceFilter for the
         // phrase + course-code rules.
         if (
-          isPrivateAudience({
-            title: c.item.title,
-            description: c.item.snippet,
-            body: c.item.body,
-          })
+          isPrivateAudience(
+            {
+              title: c.item.title,
+              description: c.item.snippet,
+              body: c.item.body,
+            },
+            audienceBlockPatterns,
+          )
         ) {
           skipped += 1
           continue
         }
         const src = sourceById.get(c.item.sourceId as unknown as string)
+        // Content-driven classification (#1). The source's old
+        // sectionIds[] hint is intentionally ignored — sources are
+        // firehoses now, the event's own title/venue/source-URL
+        // decides where it lands. Unknown sections fall through to
+        // `local`. Confidence is forwarded so the post-insert LLM
+        // enrichment can re-classify low-confidence events.
+        const classification = classifyEvent(
+          {
+            title: c.item.title,
+            snippet: c.item.snippet,
+            body: c.item.body,
+            locationName: c.item.locationName,
+            locationAddress: c.item.locationAddress,
+            sourceUrl: src?.url ?? c.item.url,
+            sourceName: src?.name,
+          },
+          {
+            venues: taxonomy.venues,
+            hosts: taxonomy.hosts,
+            keywords: taxonomy.keywords,
+          },
+        )
         const sectionId =
-          (src?.sectionIds && src.sectionIds[0]) ?? fallbackSectionId
+          sectionIdBySlug.get(classification.sectionSlug) ??
+          fallbackSectionId
 
         try {
           await ctx.runMutation(internal.events.insertExtracted, {
@@ -263,7 +322,7 @@ export const runEventIngestInternal = internalAction({
               heroImage: c.item.mediaUrl,
               heroSource: c.item.mediaUrl ? "source" : "none",
               sectionId,
-              tags: [],
+              tags: Array.from(new Set(classification.tags)),
               neighborhoods: [],
               citations: [
                 {
@@ -278,6 +337,8 @@ export const runEventIngestInternal = internalAction({
             agentSlug: MEGA_DESK_SLUG,
             agentRunId: runId,
             derivedFromItems: [c.item._id],
+            classifierConfidence: classification.confidence,
+            classifierReason: classification.reason,
           })
           eventsCreated += 1
         } catch (e) {
@@ -379,26 +440,144 @@ function miamiHour(): number {
   )
 }
 
+// Per-source refresh. Each call is its own Convex action (64 MB
+// budget) so a single oversized page can't OOM the rest of the run.
+// Schedules drain on a 1.5s stagger so we don't burst outbound
+// requests.
+export const refreshOneSource = internalAction({
+  args: { sourceId: v.id("sources") },
+  handler: async (ctx, { sourceId }): Promise<void> => {
+    const src = await ctx.runQuery(api.sourcesData.getForAdapter, {
+      sourceId,
+    })
+    if (!src) return
+    // llm-extract / browser-extract sources cost ~$0.005 per fetch
+    // (Haiku) — reserve from the daily LLM budget before invoking
+    // the model. When the cap is hit, skip the fetch.
+    if (src.type === "llm-extract" || src.type === "browser-extract") {
+      const reservation = await ctx.runMutation(internal.budget.reserve, {
+        estimatedCents: estimatedCallCents("claude-haiku-4-5-20251001"),
+        label: "llmExtract",
+      })
+      if (!reservation.allowed) {
+        await ctx.runMutation(api.sourcesData.recordFetch, {
+          sourceId,
+          items: [],
+          status: "error",
+          error: `budget hit: ${reservation.centsSpent}¢ / ${reservation.capCents}¢`,
+        })
+        return
+      }
+    }
+    try {
+      // Unified extract pipeline. Conditional-GET with ETag /
+      // Last-Modified — a 304 short-circuits the parse+LLM work
+      // entirely, halving daily LLM spend on stable feeds.
+      // browser-extract sources flip forceBrowser so the Cloudflare
+      // headless renderer handles the fetch.
+      const result = await extract({
+        url: src.url,
+        config: src.config,
+        etag: src.lastEtag,
+        lastModified: src.lastModifiedHeader,
+        forceBrowser: src.type === "browser-extract",
+      })
+      await ctx.runMutation(api.sourcesData.recordFetch, {
+        sourceId,
+        items: result.notModified ? [] : [...result.items],
+        status: result.notModified
+          ? "not-modified"
+          : result.strategy === "blocked"
+            ? "error"
+            : "ok",
+        error: result.strategy === "blocked"
+          ? "anti-bot interstitial — promote to browser-extract"
+          : undefined,
+        etag: result.etag,
+        lastModifiedHeader: result.lastModified,
+        notModified: result.notModified,
+      })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      await ctx.runMutation(api.sourcesData.recordFetch, {
+        sourceId,
+        items: [],
+        status: "error",
+        error: msg,
+      })
+    }
+  },
+})
+
+// Drain unconsumed items → events. Same logic as the back half of
+// the legacy runEventIngestInternal but split out so refreshOneSource
+// can be the front half. Scheduled by cronRunMegaDesk after the
+// per-source fetches finish staggering.
+export const drainIngestNow = internalAction({
+  args: { lookbackHoursOverride: v.optional(v.number()) },
+  handler: async (
+    ctx,
+    { lookbackHoursOverride },
+  ): Promise<{
+    runId: Id<"agentRuns"> | null
+    itemsConsidered: number
+    eventsCreated: number
+    skipped: number
+    error?: string
+  }> => {
+    return await ctx.runAction(internal.agents.runEventIngestInternal, {
+      lookbackHoursOverride,
+      skipSourceFetch: true,
+    })
+  },
+})
+
 export const cronRunMegaDesk = internalAction({
   args: {},
   handler: async (ctx): Promise<{ summary: string }> => {
     if (!cronsEnabled()) {
       return { summary: "ingest: skipped — CRONS_ENABLED not set" }
     }
-    // Quiet hours don't really save money any more (the ingest pass is
-    // LLM-free) but keeping the window lets translation backlog drain
-    // overnight without competing for budget. Translation + enrichment
-    // crons are separate and still tick during this window.
     const hour = miamiHour()
     if (hour >= QUIET_HOURS_START && hour < QUIET_HOURS_END) {
       return {
         summary: `ingest: skipped — quiet hours (${hour}:00 ET, resumes at ${QUIET_HOURS_END}:00 ET)`,
       }
     }
-    const r = await ctx.runAction(internal.agents.runEventIngestInternal, {})
-    if (r.error) return { summary: `ingest: ERROR ${r.error}` }
+    // Schedule per-source fetches so each one gets its own 64 MB
+    // action budget — fixes the OOM that froze the cron after a
+    // hard-rock-style 5 MB HTML page got added. Then schedule the
+    // ingest drain after enough wall time for the fetches to finish.
+    // Feeder pseudo-sources (URLs starting with `feeder://`) are
+    // handled by `feeders.*Tick` actions, not by the per-source
+    // refresh loop, so skip them here.
+    const sources = await ctx.runQuery(internal.sourcesData.listInternal, {})
+    const enabled = sources.filter(
+      (s) => s.enabled && !s.url.startsWith("feeder://"),
+    )
+    // Kick off all the API feeders in parallel — each is its own
+    // action with its own memory budget. The drain after the fetch
+    // wave picks up whatever they queued.
+    await ctx.scheduler.runAfter(0, internal.feeders.seatgeekTick, {})
+    await ctx.scheduler.runAfter(0, internal.feeders.ticketmasterTick, {})
+    await ctx.scheduler.runAfter(0, internal.feeders.blueskyTick, {})
+    await ctx.scheduler.runAfter(0, internal.feeders.redditTick, {})
+    const STAGGER_MS = 1500
+    for (let i = 0; i < enabled.length; i += 1) {
+      await ctx.scheduler.runAfter(
+        i * STAGGER_MS,
+        internal.agents.refreshOneSource,
+        { sourceId: enabled[i]._id },
+      )
+    }
+    const drainDelayMs = enabled.length * STAGGER_MS + 10_000
+    await ctx.scheduler.runAfter(
+      drainDelayMs,
+      internal.agents.drainIngestNow,
+      {},
+    )
     return {
-      summary: `ingest: ${r.eventsCreated} events from ${r.itemsConsidered} items (${r.skipped} non-event-shaped)`,
+      summary: `scheduled ${enabled.length} source refreshes + ingest drain (in ~${Math.round(drainDelayMs / 1000)}s)`,
     }
   },
 })

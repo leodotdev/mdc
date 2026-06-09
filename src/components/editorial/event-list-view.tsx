@@ -3,6 +3,9 @@ import { Link } from "@tanstack/react-router"
 import type { EventWithRelations } from "@/lib/article-types"
 import { SectionBadge } from "@/components/editorial/section-badge"
 import { HeroImg } from "@/components/site/hero-img"
+import { effectiveStartsAt } from "@/lib/event-helpers"
+import { useTranslation } from "@/lib/i18n/context"
+import { localizedEvent } from "@/lib/localized-event"
 import { describeRRule } from "@/lib/rrule"
 import { useOpenEventDrawer } from "@/lib/use-open-article-drawer"
 import { cn } from "@/lib/utils"
@@ -22,14 +25,16 @@ type Props = {
 }
 
 export function EventListView({ events, emptyLabel }: Props) {
-  const sorted = [...events]
-    .filter((e) => {
-      // Hide events whose startsAt is more than 24h in the past — the
-      // user opened a forward-looking list, not an archive.
-      const past = Date.now() - 24 * 3_600_000
-      return e.startsAt >= past
-    })
-    .sort((a, b) => a.startsAt - b.startsAt)
+  // Recurring-event horizon: sort + group by the next *effective*
+  // occurrence (next future instance for recurring events; the raw
+  // startsAt for one-offs). Otherwise a weekly yoga series with an
+  // old DTSTART would land in the past and disappear from the list.
+  type Decorated = { event: EventWithRelations; ts: number }
+  const past = Date.now() - 24 * 3_600_000
+  const sorted: Array<Decorated> = events
+    .map((e) => ({ event: e, ts: effectiveStartsAt(e) }))
+    .filter((d) => d.ts >= past)
+    .sort((a, b) => a.ts - b.ts)
 
   if (sorted.length === 0) {
     return (
@@ -41,21 +46,21 @@ export function EventListView({ events, emptyLabel }: Props) {
   }
 
   // Group by day so the renderer can interleave dividers.
-  const groups = new Map<string, Array<EventWithRelations>>()
-  for (const e of sorted) {
-    const key = dayKey(e.startsAt)
+  const groups = new Map<string, Array<Decorated>>()
+  for (const d of sorted) {
+    const key = dayKey(d.ts)
     if (!groups.has(key)) groups.set(key, [])
-    groups.get(key)!.push(e)
+    groups.get(key)!.push(d)
   }
 
   return (
     <ol className="mx-auto flex max-w-3xl flex-col">
-      {Array.from(groups.entries()).map(([key, dayEvents]) => (
+      {Array.from(groups.entries()).map(([key, dayEntries]) => (
         <li key={key} className="flex flex-col">
-          <DayDivider key={`${key}-h`} ts={dayEvents[0].startsAt} />
+          <DayDivider key={`${key}-h`} ts={dayEntries[0].ts} />
           <ul className="flex flex-col divide-y divide-foreground/15">
-            {dayEvents.map((e) => (
-              <EventRow key={e._id} event={e} />
+            {dayEntries.map(({ event, ts }) => (
+              <EventRow key={event._id} event={event} effectiveTs={ts} />
             ))}
           </ul>
         </li>
@@ -95,7 +100,15 @@ function humanDay(ts: number): string {
   }).format(d)
 }
 
-function EventRow({ event }: { event: EventWithRelations }) {
+function EventRow({
+  event: rawEvent,
+  effectiveTs,
+}: {
+  event: EventWithRelations
+  effectiveTs: number
+}) {
+  const { lang } = useTranslation()
+  const event = localizedEvent(rawEvent, lang)
   const openInDrawer = useOpenEventDrawer()
   const slug = event.slug ?? ""
   const time = event.allDay
@@ -103,7 +116,7 @@ function EventRow({ event }: { event: EventWithRelations }) {
     : new Intl.DateTimeFormat("en-US", {
         hour: "numeric",
         minute: "2-digit",
-      }).format(event.startsAt)
+      }).format(effectiveTs)
   const recurrence = event.recurrenceRule
     ? describeRRule(event.recurrenceRule)
     : null

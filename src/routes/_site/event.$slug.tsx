@@ -9,6 +9,7 @@ import { BannerAd } from "@/components/site/banner-ad"
 import { convexSuspenseQuery } from "@/lib/convex-suspense"
 import { useTranslation } from "@/lib/i18n/context"
 import { localizedEvent } from "@/lib/localized-event"
+import { useRecordView } from "@/lib/use-record-view"
 
 export const Route = createFileRoute("/_site/event/$slug")({
   loader: async ({ context, params }) => {
@@ -51,6 +52,10 @@ function EventPage() {
     convexSuspenseQuery(api.events.getBySlug, { slug }),
   )
   const { lang } = useTranslation()
+  // View beacon — counts once per tab session per event so the Popular
+  // rail can rank by trailing-30-day open count. Hook always runs to
+  // keep hook order stable; it no-ops on the null id below.
+  useRecordView(rawEvent?._id)
   if (!rawEvent) return null
 
   // Patch tab title on lang change. The route's head() runs SSR-only with

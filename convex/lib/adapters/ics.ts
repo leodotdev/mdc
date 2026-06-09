@@ -31,10 +31,18 @@ export async function fetchIcs(
   if (!res.ok) throw new Error(`ICS ${source.url} → ${res.status}`)
   const text = await res.text()
 
-  // RFC 5545 line folding: a line continues when the next line starts
-  // with a single space or tab. Unfold first so per-property regexes
-  // match the whole value.
-  const unfolded = text.replace(/\r?\n[ \t]/g, "")
+  // Unfold continued lines. We have to handle two shapes in the wild:
+  //   1. RFC 5545 standard — a continuation line starts with a single
+  //      space or tab. We strip the newline + leading whitespace.
+  //   2. CivicEngage-style (Homestead, Aventura, South Miami, North
+  //      Miami, etc.) — a literal `\` at end of line followed by the
+  //      newline marks continuation. Strip `\` + newline.
+  // Order matters: do the backslash pass first so an unfolded
+  // continuation that happens to land on a tab-indented next line
+  // still gets joined by the standard pass on the same row.
+  const unfolded = text
+    .replace(/\\\r?\n/g, "")
+    .replace(/\r?\n[ \t]/g, "")
 
   const cfg = (source.config as IcsConfig | undefined) ?? {}
   const max = Math.min(cfg.max ?? 30, 100)
@@ -51,9 +59,21 @@ export async function fetchIcs(
     const summary = readProp(body, "SUMMARY")
     if (!uid || !summary) continue
 
-    const description = readProp(body, "DESCRIPTION")
+    const rawDescription = readProp(body, "DESCRIPTION")
     const location = readProp(body, "LOCATION")
-    const url = readProp(body, "URL")
+    // CivicEngage emits TWO odd patterns:
+    //   (a) `URL:` is the absolute event page → use it.
+    //   (b) `URL:/common/modules/iCalendar/...` is a relative iCal
+    //       feed path AND the description holds the absolute event
+    //       URL — prefer the description URL.
+    // pickEventUrl handles both, with a last-resort resolution of
+    // the relative path against the source URL so the "Source" link
+    // never ends up host-less.
+    const url = pickEventUrl(readProp(body, "URL"), rawDescription, source.url)
+    // Drop descriptions whose only content is a bare URL — that URL
+    // is now the event's `url`, and the dek shouldn't render a raw
+    // link as if it were prose.
+    const description = sanitizeDescription(rawDescription)
     const dtRaw = readPropLine(body, "DTSTART")
     const startMs = dtRaw ? parseIcsDate(dtRaw) : undefined
     const dtEndRaw = readPropLine(body, "DTEND")
@@ -140,6 +160,61 @@ function unescape(v: string): string {
 //   DTSTART;VALUE=DATE:YYYYMMDD                  (all-day)
 //   DTSTART:YYYYMMDDTHHMMSSZ                     (UTC)
 //   DTSTART;TZID=...:YYYYMMDDTHHMMSS             (zoned, treated as UTC)
+// Pick the most useful event URL out of the two fields CivicEngage
+// scrambles: the standard `URL:` (often a relative iCal-feed path)
+// and a `DESCRIPTION:` that holds the absolute event-page URL. Falls
+// back to resolving the relative URL against the source so we never
+// store a host-less path.
+function pickEventUrl(
+  rawUrl: string | undefined,
+  rawDescription: string | undefined,
+  sourceUrl: string,
+): string | undefined {
+  const directUrl = absoluteUrl(rawUrl)
+  if (directUrl) return directUrl
+  // The whole DESCRIPTION is sometimes the event page URL.
+  const descUrl = absoluteUrl(rawDescription)
+  if (descUrl) return descUrl
+  // Last resort — resolve the relative URL: against the source.
+  if (rawUrl) {
+    const trimmed = rawUrl.trim()
+    if (trimmed) {
+      try {
+        return new URL(trimmed, sourceUrl).toString()
+      } catch {
+        // fallthrough
+      }
+    }
+  }
+  return undefined
+}
+
+// Returns the input as a parsed absolute http(s) URL string, or
+// undefined when it isn't an absolute URL.
+function absoluteUrl(raw: string | undefined): string | undefined {
+  if (!raw) return undefined
+  const trimmed = raw.trim()
+  if (!/^https?:\/\/\S+$/i.test(trimmed)) return undefined
+  try {
+    return new URL(trimmed).toString()
+  } catch {
+    return undefined
+  }
+}
+
+// Drop descriptions whose only content is a bare URL (CivicEngage
+// feeds emit `DESCRIPTION: https://www.city.gov/calendar.aspx?EID=N`
+// as the entire field — the URL belongs in the source link, not the
+// dek). Returns undefined so the downstream dek-derivation skips
+// straight to the body composition.
+function sanitizeDescription(raw: string | undefined): string | undefined {
+  if (!raw) return undefined
+  const trimmed = raw.trim()
+  if (!trimmed) return undefined
+  if (/^https?:\/\/\S*$/i.test(trimmed)) return undefined
+  return trimmed
+}
+
 function parseIcsDate(line: string): number | undefined {
   const colon = line.indexOf(":")
   if (colon < 0) return undefined

@@ -23,7 +23,6 @@ export const STRINGS = {
       "{count} {label} for",
     "search.results.singular": "result",
     "search.results.plural": "results",
-    "searchPalette.articles": "Articles",
     "searchPalette.events": "Events",
     "searchPalette.sections": "Sections",
     "searchPalette.neighborhoods": "Neighborhoods",
@@ -61,10 +60,11 @@ export const STRINGS = {
 
     // Events
     "events.kicker": "Events",
+    "rail.popular": "Popular",
+    "rail.popularIn": "Popular in {name}",
     "events.subtitle":
       "Concerts, openings, festivals, neighborhood happenings — every approved event in Miami this month.",
     "events.fullSchedule": "The full schedule",
-    "events.stories": "Events",
     "events.empty.title": "No events scheduled for {month} yet.",
     "events.empty.bodyPrefix":
       "Editors add events from the admin tools. Check back soon, or jump to",
@@ -116,7 +116,6 @@ export const STRINGS = {
     "search.results.count": "{count} {label} para",
     "search.results.singular": "resultado",
     "search.results.plural": "resultados",
-    "searchPalette.articles": "Artículos",
     "searchPalette.events": "Eventos",
     "searchPalette.sections": "Secciones",
     "searchPalette.neighborhoods": "Barrios",
@@ -154,10 +153,11 @@ export const STRINGS = {
 
     // Events
     "events.kicker": "Eventos",
+    "rail.popular": "Populares",
+    "rail.popularIn": "Populares en {name}",
     "events.subtitle":
       "Conciertos, aperturas, festivales, eventos de barrio — todos los eventos aprobados en Miami este mes.",
     "events.fullSchedule": "Agenda completa",
-    "events.stories": "Eventos",
     "events.empty.title": "Aún no hay eventos para {month}.",
     "events.empty.bodyPrefix":
       "Los editores añaden eventos desde las herramientas de administración. Vuelve pronto o salta a",

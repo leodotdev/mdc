@@ -3,6 +3,8 @@ import { ChevronLeft, ChevronRight } from "lucide-react"
 import { useMemo } from "react"
 
 import type { EventWithRelations } from "@/lib/article-types"
+import { useTranslation } from "@/lib/i18n/context"
+import { localizedEvent } from "@/lib/localized-event"
 import { nextOccurrences } from "@/lib/rrule"
 import { useOpenEventDrawer } from "@/lib/use-open-article-drawer"
 import { cn } from "@/lib/utils"
@@ -47,28 +49,138 @@ export function CalendarMonth({ events, yearMonth }: Props) {
   const gridEnd = new Date(monthEnd)
   gridEnd.setDate(gridEnd.getDate() + (6 - gridEnd.getDay()))
 
-  // Bucket events by day key. Expand recurring events forward across
-  // the visible grid so each occurrence lands on its own day cell.
+  // Bucket events by day key. Three sources of occurrences:
+  //   1. The event's anchor startsAt.
+  //   2. RRULE-driven recurrences (next 40 future hits in-view).
+  //   3. Multi-day spans — if endsAt > startsAt by more than 18h, an
+  //      occurrence is placed on every intervening day so the event
+  //      renders as a continuous bar across the week (start → middle
+  //      → end variants below).
   const cells = useMemo(() => {
     const buckets = new Map<string, Array<EventOnDay>>()
     const gridStartMs = gridStart.getTime()
     const gridEndMs = gridEnd.getTime() + 86_400_000
+    const addSpan = (e: EventWithRelations, startTs: number) => {
+      const endTs = e.endsAt ?? 0
+      const isMultiDay = endTs - startTs > 18 * 3_600_000
+      if (!isMultiDay) {
+        addToBucket(buckets, e, startTs, gridStartMs, gridEndMs, "single")
+        return
+      }
+      const startDay = startOfDay(startTs)
+      const endDay = startOfDay(endTs)
+      let cursor = startDay
+      while (cursor <= endDay) {
+        const role: EventOnDay["role"] =
+          cursor === startDay
+            ? "spanStart"
+            : cursor === endDay
+              ? "spanEnd"
+              : "spanMid"
+        addToBucket(buckets, e, cursor, gridStartMs, gridEndMs, role)
+        cursor += 86_400_000
+      }
+    }
     for (const e of events) {
-      // Anchor occurrence — the event's actual startsAt.
-      addToBucket(buckets, e, e.startsAt, gridStartMs, gridEndMs)
-      // RRULE expansion — pull up to 40 future occurrences and place
-      // every one that lands in the visible grid.
+      addSpan(e, e.startsAt)
       if (e.recurrenceRule) {
         const occs = nextOccurrences(e.recurrenceRule, e.startsAt, 40)
         for (const ts of occs) {
-          if (ts === e.startsAt) continue // already added above
-          addToBucket(buckets, e, ts, gridStartMs, gridEndMs)
+          if (ts === e.startsAt) continue
+          addSpan(e, ts)
         }
       }
     }
-    // Sort each bucket by time of day.
+    // ── Lane assignment ────────────────────────────────────────────
+    // Apple / Google / Notion-style: every multi-day event keeps a
+    // fixed row slot ("lane") across its entire span. A new event
+    // claims the lowest lane that's free for *every* day it occupies.
+    // Once event A on lane 2 ends, lane 2 becomes vacant on later
+    // days — but events already laid out keep their lane, so the
+    // continuous spans never visually jump rows when an earlier
+    // neighbor expires. Empty lanes render as transparent spacer rows
+    // in the affected cells so heights stay aligned across the week.
+    //
+    // Algorithm:
+    //   1. Collect unique event instances with their day sets.
+    //   2. Sort by start day, then by span length descending so the
+    //      longest spans grab the lowest lanes first (matches Google
+    //      Calendar's stacking).
+    //   3. For each instance, scan lanes 0,1,2,... and pick the first
+    //      one that's free on every day in the instance's day set.
+    type Instance = {
+      key: string
+      startTs: number
+      length: number
+      days: Array<string>
+    }
+    const instances = new Map<string, Instance>()
+    for (const [day, items] of buckets) {
+      for (const it of items) {
+        // Instance key: event id + the bucket entry's start ts for
+        // spans (so we can also de-dupe per-occurrence rrule entries).
+        // For singles, ts itself is fine.
+        const instKey =
+          it.role === "single"
+            ? `${it.event._id}|${it.ts}`
+            : `${it.event._id}|${roleSpanKey(it)}`
+        const inst = instances.get(instKey) ?? {
+          key: instKey,
+          startTs: it.ts,
+          length: 0,
+          days: [],
+        }
+        inst.days.push(day)
+        if (it.ts < inst.startTs) inst.startTs = it.ts
+        instances.set(instKey, inst)
+        // attach the instance key so the renderer can look up row.
+        ;(it as EventOnDay & { instKey: string }).instKey = instKey
+      }
+    }
+    for (const inst of instances.values()) inst.length = inst.days.length
+
+    const sorted = Array.from(instances.values()).sort((a, b) => {
+      if (a.startTs !== b.startTs) return a.startTs - b.startTs
+      return b.length - a.length // longer spans win ties
+    })
+
+    const occupied = new Map<string, Set<number>>()
+    const laneByInstance = new Map<string, number>()
+    for (const inst of sorted) {
+      let lane = 0
+      while (true) {
+        let conflict = false
+        for (const d of inst.days) {
+          if (occupied.get(d)?.has(lane)) {
+            conflict = true
+            break
+          }
+        }
+        if (!conflict) break
+        lane += 1
+      }
+      laneByInstance.set(inst.key, lane)
+      for (const d of inst.days) {
+        if (!occupied.has(d)) occupied.set(d, new Set())
+        occupied.get(d)!.add(lane)
+      }
+    }
+
+    // Stamp lane onto each bucket item and sort buckets by lane so
+    // the renderer can emit them in row order. Missing lanes become
+    // transparent placeholders at render time.
     for (const arr of buckets.values()) {
-      arr.sort((a, b) => a.ts - b.ts)
+      for (const it of arr) {
+        const k = (it as EventOnDay & { instKey?: string }).instKey
+        ;(it as EventOnDay & { lane?: number }).lane = k
+          ? laneByInstance.get(k) ?? 0
+          : 0
+      }
+      arr.sort(
+        (a, b) =>
+          ((a as EventOnDay & { lane?: number }).lane ?? 0) -
+          ((b as EventOnDay & { lane?: number }).lane ?? 0),
+      )
     }
     return buckets
   }, [events, gridStart, gridEnd])
@@ -152,7 +264,7 @@ export function CalendarMonth({ events, yearMonth }: Props) {
       <div className="full-bleed !px-0">
       {/* Weekday header — sticky band that pins to the viewport top
           as the user scrolls through the calendar. */}
-      <div className="sticky top-0 z-20 grid grid-cols-7 border-y border-foreground/15 bg-background [&>*:not(:nth-child(7n))]:border-r [&>*]:border-foreground/15">
+      <div className="sticky top-0 z-20 grid grid-cols-7 border-y border-foreground/15 bg-white dark:bg-card [&>*:not(:nth-child(7n))]:border-r [&>*]:border-foreground/15">
         {WEEKDAYS.map((d, i) => (
           <div
             key={d}
@@ -174,8 +286,12 @@ export function CalendarMonth({ events, yearMonth }: Props) {
         <div key={`w-${wi}`} className="border-b border-foreground/15">
           {/* Day-number band — sticky just below the weekday header.
               `top-8` ≈ 2rem ≈ weekday header height (matches py-1.5
-              on small + py-2 on sm+). */}
-          <div className="sticky top-8 z-10 grid grid-cols-7 border-b border-foreground/10 bg-background [&>*:not(:nth-child(7n))]:border-r [&>*]:border-foreground/15">
+              on small + py-2 on sm+). No bottom border so the
+              colored bars of multi-day spans flow visually from the
+              day-number band straight into the event content area —
+              that thin line between number and bar otherwise reads as
+              a separator on top of every span. */}
+          <div className="sticky top-8 z-10 grid grid-cols-7 bg-white dark:bg-card [&>*:not(:nth-child(7n))]:border-r [&>*]:border-foreground/15">
             {week.map((day) => {
               const inMonth = day.getMonth() === month
               const isToday = dayKey(day.getTime()) === todayKey
@@ -224,6 +340,33 @@ export function CalendarMonth({ events, yearMonth }: Props) {
 type EventOnDay = {
   ts: number
   event: EventWithRelations
+  // single: a one-day event rendered as a normal kanban card.
+  // spanStart / spanMid / spanEnd: a slice of a multi-day event.
+  // Start gets full info + rounded-left bar; mid stays minimal +
+  // square corners; end gets rounded-right bar + "ends" indicator.
+  role: "single" | "spanStart" | "spanMid" | "spanEnd"
+  // Set during lane assignment. The slot number this event occupies
+  // in the day cell. Empty slots between non-contiguous lane numbers
+  // are rendered as transparent placeholders so spans on lane N
+  // stay vertically aligned across every day they cover.
+  lane?: number
+  // Stable key tying every same-instance bucket entry (spanStart on
+  // day 1 + spanMid on day 2 + spanEnd on day 3) to one lane.
+  instKey?: string
+}
+
+// Key that ties every day-bucket entry belonging to the same span
+// instance together. For multi-day spans we anchor on the START day
+// of the run — the spanStart entry's ts is the canonical start, and
+// spanMid/spanEnd entries fall on consecutive days. We reconstruct
+// the start ts from the bucket entry's role + ts so the dayKey for
+// the start lands the same for every cell in the run.
+function roleSpanKey(it: EventOnDay): string {
+  // Walk back to the event's startsAt-day so every entry in the same
+  // span resolves to the same anchor. For spans, `it.ts` is the
+  // start of that day already; the event's startsAt gives us the
+  // canonical run start.
+  return `${it.event.startsAt}`
 }
 
 function addToBucket(
@@ -232,11 +375,18 @@ function addToBucket(
   ts: number,
   gridStartMs: number,
   gridEndMs: number,
+  role: EventOnDay["role"],
 ) {
   if (ts < gridStartMs || ts > gridEndMs) return
   const key = dayKey(ts)
   if (!buckets.has(key)) buckets.set(key, [])
-  buckets.get(key)!.push({ ts, event })
+  buckets.get(key)!.push({ ts, event, role })
+}
+
+function startOfDay(ts: number): number {
+  const d = new Date(ts)
+  d.setHours(0, 0, 0, 0)
+  return d.getTime()
 }
 
 function dayKey(ts: number): string {
@@ -258,52 +408,160 @@ function DayCell({
   dim: boolean
 }) {
   const openInDrawer = useOpenEventDrawer()
-  // Kanban-style: every event in the day shows, vertically stacked.
-  // Each card is its own bordered block with the section accent as a
-  // left stripe. The day number / today badge live in the sticky
-  // header band above, so this cell is just events + padding.
+  const { lang } = useTranslation()
+  // Lane-aware rendering: events arrive sorted by `lane`. Where the
+  // sequence skips a lane (because that lane is held by a span in a
+  // neighboring cell), emit a transparent placeholder so events on
+  // higher lanes stay vertically aligned with their span continuation
+  // on adjacent days.
+  const rows: Array<React.ReactNode> = []
+  let cursor = 0
+  // Fixed row height keeps lane N at the same Y position on every
+  // day of the week. Without it, a 1-line span title and a 2-line
+  // span title in the same lane render at different heights, so
+  // adjacent days' lane-N entries no longer line up horizontally.
+  // 3.5rem fits a 3-row single event (time + 1-line title + venue)
+  // and gives 2-line span titles room to breathe.
+  for (const it of events) {
+    const lane = it.lane ?? 0
+    while (cursor < lane) {
+      rows.push(
+        <li
+          key={`pad-${cursor}`}
+          aria-hidden
+          className="invisible h-[5rem]"
+        />,
+      )
+      cursor += 1
+    }
+    rows.push(renderEventRow(it, lang, openInDrawer, dim))
+    cursor += 1
+  }
   return (
     <div
       className={cn(
-        "flex flex-col gap-1 bg-background p-1 min-h-[6rem] text-left sm:gap-1.5 sm:p-2 sm:min-h-[10rem] md:min-h-[13rem]",
-        dim && "bg-muted/30",
+        "flex flex-col gap-1 p-1 min-h-[6rem] text-left sm:gap-1.5 sm:p-2 sm:min-h-[10rem] md:min-h-[13rem] bg-white dark:bg-card",
+        // Every cell sits on the same white surface — what marks an
+        // out-of-month day is its faded day-number in the sticky
+        // band above and the `opacity-60` on any events inside it.
+        // A separate cell-bg tint on top of those signals reads as
+        // "unfinished surface" against the cream page background.
       )}
     >
-      <ul className="flex flex-col gap-1">
-        {events.map((it) => {
-          const slug = it.event.slug ?? ""
-          const accent = it.event.section?.accentColor ?? "var(--foreground)"
-          return (
-            <li key={`${it.event._id}-${it.ts}`}>
-              <Link
-                to="/event/$slug"
-                params={{ slug }}
-                onClick={(e) => openInDrawer(slug, e)}
-                className={cn(
-                  "block rounded-sm border border-foreground/10 bg-foreground/[0.02] px-1.5 py-1 transition-colors hover:bg-foreground/10",
-                  "border-l-[3px]",
-                  dim && "opacity-60",
-                )}
-                style={{ borderLeftColor: accent }}
-                title={it.event.title}
-              >
-                <div className="font-sans text-[0.65rem] tabular-nums text-muted-foreground">
-                  {formatTime(it.ts)}
-                </div>
-                <div className="font-heading mt-0.5 text-[0.78rem] leading-tight font-semibold text-foreground">
-                  {it.event.title}
-                </div>
-                {it.event.locationName ? (
-                  <div className="font-sans mt-0.5 line-clamp-1 text-[0.6rem] text-muted-foreground">
-                    {it.event.locationName}
-                  </div>
-                ) : null}
-              </Link>
-            </li>
-          )
-        })}
-      </ul>
+      <ul className="flex flex-col gap-1">{rows}</ul>
     </div>
+  )
+}
+
+function renderEventRow(
+  it: EventOnDay,
+  lang: "en" | "es",
+  openInDrawer: (slug: string, e: React.MouseEvent) => void,
+  dim: boolean,
+): React.ReactNode {
+  const localized = localizedEvent(it.event, lang)
+  const slug = localized.slug ?? ""
+  const accent = localized.section?.accentColor ?? "var(--foreground)"
+  const tintBg = `color-mix(in oklch, ${accent} 15%, white)`
+  // Per-day text fade for spans: each subsequent day blends the
+  // base dark text toward the bg color, so by ~day 7 the text reads
+  // the same as the bar — visually disappearing. Singles always use
+  // the darkest tint.
+  const dayIndex =
+    it.role === "single"
+      ? 0
+      : Math.max(0, Math.round((it.ts - it.event.startsAt) / 86_400_000))
+  const fadePct = Math.min(100, dayIndex * 15)
+  const baseFg = `color-mix(in oklch, ${accent} 25%, black)`
+  const tintFg =
+    fadePct === 0
+      ? baseFg
+      : `color-mix(in oklch, ${baseFg} ${100 - fadePct}%, ${tintBg} ${fadePct}%)`
+  if (it.role !== "single") {
+    const isStart = it.role === "spanStart"
+    const isEnd = it.role === "spanEnd"
+    return (
+      <li
+        key={`${localized._id}-${it.ts}-${it.role}`}
+        className="h-[5rem]"
+      >
+        <Link
+          to="/event/$slug"
+          params={{ slug }}
+          onClick={(e) => openInDrawer(slug, e)}
+          className={cn(
+            // CSS vars `--fg-faded` (per-day faded) and `--fg-base`
+            // (-950 max) drive the text color. Hover swaps from faded
+            // back to base so readers can see the title clearly even
+            // on the dimmest days of a long span.
+            "relative block px-2 py-1.5 text-[color:var(--fg-faded)] transition-colors hover:text-[color:var(--fg-base)]",
+            dim && "opacity-60",
+          )}
+          style={
+            {
+              "--fg-faded": tintFg,
+              "--fg-base": baseFg,
+            } as React.CSSProperties
+          }
+          title={localized.title}
+        >
+          <span
+            aria-hidden
+            className={cn(
+              "absolute inset-y-0 -z-0 pointer-events-none",
+              isStart &&
+                "left-0 -right-[calc(0.25rem+1px)] sm:-right-[calc(0.5rem+1px)] rounded-l-md",
+              isEnd &&
+                "right-0 -left-[calc(0.25rem+1px)] sm:-left-[calc(0.5rem+1px)] rounded-r-md",
+              !isStart && !isEnd &&
+                "-left-[calc(0.25rem+1px)] -right-[calc(0.25rem+1px)] sm:-left-[calc(0.5rem+1px)] sm:-right-[calc(0.5rem+1px)]",
+            )}
+            style={{ background: tintBg }}
+          />
+          <span className="relative block">
+            {isStart ? (
+              <div className="font-heading line-clamp-2 text-sm font-semibold leading-tight">
+                {localized.title}
+              </div>
+            ) : (
+              <div className="font-heading line-clamp-2 text-sm font-medium leading-tight opacity-80">
+                {localized.title}
+              </div>
+            )}
+          </span>
+        </Link>
+      </li>
+    )
+  }
+  return (
+    <li
+      key={`${localized._id}-${it.ts}`}
+      className="h-[5rem] overflow-hidden"
+    >
+      <Link
+        to="/event/$slug"
+        params={{ slug }}
+        onClick={(e) => openInDrawer(slug, e)}
+        className={cn(
+          "block rounded-md px-2 py-1.5 transition-opacity hover:opacity-80",
+          dim && "opacity-60",
+        )}
+        style={{ background: tintBg, color: tintFg }}
+        title={localized.title}
+      >
+        <div className="font-sans text-[0.65rem] tabular-nums opacity-70">
+          {formatTime(it.ts)}
+        </div>
+        <div className="font-heading mt-0.5 line-clamp-2 text-sm leading-tight font-semibold">
+          {localized.title}
+        </div>
+        {localized.locationName ? (
+          <div className="font-sans mt-0.5 line-clamp-1 text-[0.6rem] opacity-70">
+            {localized.locationName}
+          </div>
+        ) : null}
+      </Link>
+    </li>
   )
 }
 

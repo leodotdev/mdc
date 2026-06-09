@@ -8,7 +8,7 @@
 //   Every 1 hour = 24 ticks/day × 1 Opus call ≈ $1.50-$3.00/day, gated
 //   by the daily budget cap (raised to match). High cadence keeps the
 //   site feeling live — the average lag from "source publishes" to
-//   "story onsite" drops to ~30 min instead of ~2h. Budget gate skips
+//   "event onsite" drops to ~30 min instead of ~2h. Budget gate skips
 //   later runs gracefully if a busy news day spikes call cost.
 //
 // Cadence rationale (W4 — image watchdog): every 6h is enough to catch
@@ -25,15 +25,20 @@ import { internal } from "./_generated/api"
 
 const crons = cronJobs()
 
-// W2 — Mega-desk every hour. Frequent enough that the front page
-// reflects today's news; cheap enough at Sonnet pricing that 24
-// runs/day stays well under the daily budget cap. The previous 30-min
-// cadence + Opus combo burned ~$25/12h; this keeps daily spend in the
-// $1–3 range. Budget gate caps spend; ticks that hit the cap write a
-// "skipped" run row so /admin/runs makes the cap visible.
+// W2 — Mega-desk 3x daily (06:00 / 12:00 / 18:00 ET). Per-source
+// fetches are scheduled as individual actions inside the tick to
+// avoid the 64 MB OOM that happened when all 95 sources ran in one
+// process. Three windows per day matches editor expectations and
+// keeps Mapbox/Cloudflare/Haiku spend bounded. UTC offsets straddle
+// DST: 10/16/22 UTC = 06/12/18 ET during EDT (and 05/11/17 ET during
+// EST, which is fine — still spread across the day).
+// W2 — Mega-desk every 6 hours. 4 ticks/day evenly spaced means no
+// single source is ever >6h stale, even across the overnight ET gap.
+// The per-source refresh fan-out + drain pattern keeps each tick
+// bounded by ~3 min total wall time.
 crons.interval(
-  "run mega desk",
-  { hours: 1 },
+  "mega desk",
+  { hours: 6 },
   internal.agents.cronRunMegaDesk,
   {},
 )
@@ -77,38 +82,10 @@ crons.interval(
   {},
 )
 
-// W7 — Near-dup pass every 6 hours. Pure string + tag math, no LLM.
-crons.interval(
-  "dedup pass",
-  { hours: 6 },
-  internal.dedup.cronTick,
-  {},
-)
-
-// W8 — Post-publish merge sweep every hour. Finds article pairs that
-// share enough surface signal (citation URLs + title overlap), asks
-// Haiku to verify, and absorbs verified duplicates into the canonical
-// winner. Cross-section pairs are allowed — same incident filed under
-// different sections is exactly what we need to catch. Cite-only
-// merge: winner keeps title/dek/body, loser is archived with
-// `mergedIntoId` + slug redirect.
-crons.interval(
-  "merge sweep",
-  { hours: 1 },
-  internal.articles.mergeSweep,
-  {},
-)
-
-// Translation backfill — every 6h drains any published rows whose ES
-// translation is missing or stale. The on-publish scheduler handles the
-// hot path; this cron catches budget-capped, network-failed, or
-// app-restart-orphaned rows so nothing stays untranslated.
-crons.interval(
-  "translate articles backfill",
-  { hours: 6 },
-  internal.articles.bulkTranslateInternal,
-  { maxArticles: 10 },
-)
+// W7 (dedup pass), W8 (merge sweep), and the article translation
+// backfill were removed with the article-era purge. Event-side dedup
+// runs inline in `events.insertExtracted`; events have their own
+// translation backfill below.
 crons.interval(
   "translate events backfill",
   { hours: 6 },
@@ -126,6 +103,38 @@ crons.interval(
   { maxEvents: 10 },
 )
 
+// Coverage SLA — daily. Counts events per section in the last 14d,
+// patches eventsLast14d, and writes/resolves systemAlerts rows for
+// sections below their minEventsLast14d floor.
+crons.daily(
+  "coverage sla",
+  { hourUTC: 9, minuteUTC: 15 },
+  internal.coverage.cronTick,
+  {},
+)
+
+// Recurrence expansion — nightly. Computes the next 30 days of
+// occurrences for every recurring event and stores them on the row.
+// Cheap (pure date math), idempotent.
+crons.daily(
+  "recurrence expansion",
+  { hourUTC: 8, minuteUTC: 45 },
+  internal.recurrence.cronTick,
+  {},
+)
+
+// Source discovery — weekly Monday 06:00 UTC. Walks recent events,
+// collects unique citation/event-URL hostnames, surfaces any that
+// aren't already a source as a `sourceSuggestions` row. Cheap (no
+// LLM) and editor-gated — discovered rows still need approval in
+// /admin/sources before they're ingested.
+crons.weekly(
+  "source discovery",
+  { dayOfWeek: "monday", hourUTC: 6, minuteUTC: 0 },
+  internal.discovery.weeklyTick,
+  {},
+)
+
 // Right-rail widgets — daily Opus batch at 04:30 ET (08:30 UTC during
 // EDT). Single call, ~7-12¢, produces fun-fact / on-this-day / landmark
 // / animal-fact / quote entries for the homepage right rail.
@@ -133,6 +142,18 @@ crons.daily(
   "daily widget refresh",
   { hourUTC: 8, minuteUTC: 30 },
   internal.widgets.dailyRefresh,
+  {},
+)
+
+// Popularity rollup — daily at 03:30 ET (07:30 UTC during EDT).
+// Counts trailing-30d views per event from `eventViews`, patches the
+// denormalized `events.viewCount30d`, prunes the log. The Popular
+// rail reads the denormalized counter; this is what makes it sortable
+// in O(log n) instead of an N-event aggregation per request.
+crons.daily(
+  "popularity rollup",
+  { hourUTC: 7, minuteUTC: 30 },
+  internal.popularity.cronTick,
   {},
 )
 

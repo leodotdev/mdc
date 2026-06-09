@@ -7,7 +7,7 @@ import { useMemo } from "react"
 
 import { api } from "../../../convex/_generated/api"
 import type { Id } from "../../../convex/_generated/dataModel"
-import { TableLoadingRows } from "@/components/editorial/story-card-skeleton"
+import { TableLoadingRows } from "@/components/editorial/event-card-skeleton"
 import { Thumb } from "@/components/admin/thumb"
 import {
   AlertDialog,
@@ -36,9 +36,9 @@ import {
 } from "@/lib/event-helpers"
 import { runOnAll, useBulkSelection } from "@/lib/use-bulk-selection"
 
-// Published-events inbox. The legacy All / Stories / Videos tabs were
-// retired with the events-only pivot — only the Events table remains,
-// rendered directly without a filter row.
+// Published-events inbox. Legacy filter tabs were retired with the
+// events-only pivot — only the Events table remains, rendered directly
+// without a filter row.
 
 export const Route = createFileRoute("/_admin/admin/published")({
   component: PublishedPage,
